@@ -20,7 +20,9 @@ const {
   timestampMs
 } = require('./promaUsage');
 
-const HANAKO_ROOT = path.join(os.homedir(), '.hanako', 'agents', 'hanako', 'sessions');
+const HANAKO_SESSIONS_ROOT = path.join(os.homedir(), '.hanako', 'agents', 'hanako', 'sessions');
+const HANAKO_ACTIVITY_ROOT = path.join(os.homedir(), '.hanako', 'agents', 'hanako', 'activity');
+const HANAKO_ROOTS = [HANAKO_SESSIONS_ROOT, HANAKO_ACTIVITY_ROOT];
 
 function numberValue(value) {
   const n = Number(value || 0);
@@ -32,18 +34,33 @@ function sourceNamespace(root) {
 }
 
 function jsonlFiles(root) {
-  try {
-    return fs.readdirSync(root)
-      .filter((n) => n.endsWith('.jsonl'))
-      .map((n) => path.join(root, n));
-  } catch (_) {
-    return [];
-  }
+  // Sessions live both at the top level and under subdirectories
+  // (sessions/bridge/owner/, sessions/archived/, ...), so walk recursively.
+  const out = [];
+  const walk = (dir) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (_) {
+      return;
+    }
+    for (const entry of entries) {
+      const p = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(p);
+      else if (entry.isFile() && entry.name.endsWith('.jsonl')) out.push(p);
+    }
+  };
+  walk(root);
+  return out;
 }
 
 function collectHanakoRows(options = {}) {
-  const roots = Array.isArray(options.roots) ? options.roots : [HANAKO_ROOT];
+  // Sessions are spread across the sessions tree (including bridge/owner and
+  // archived subdirectories) and the daily activity files; the two sources
+  // share no message ids, but dedupe by id anyway as a safety net.
+  const roots = Array.isArray(options.roots) ? options.roots : HANAKO_ROOTS;
   const rows = [];
+  const seenMessageIds = new Set();
   for (const root of roots) {
     const sourceId = sourceNamespace(root);
     for (const filePath of jsonlFiles(root)) {
@@ -59,6 +76,11 @@ function collectHanakoRows(options = {}) {
           const obj = JSON.parse(line);
           const msg = obj.message;
           if (!msg || !msg.usage || typeof msg.usage !== 'object') continue;
+          const messageId = obj.id || (msg.id ? String(msg.id) : '');
+          if (messageId) {
+            if (seenMessageIds.has(messageId)) continue;
+            seenMessageIds.add(messageId);
+          }
           const u = msg.usage;
           const input = numberValue(u.input !== undefined ? u.input : u.input_tokens);
           const output = numberValue(u.output !== undefined ? u.output : u.output_tokens);
@@ -108,7 +130,9 @@ function buildHanakoHistoryGraph(options = {}) {
 }
 
 module.exports = {
-  HANAKO_ROOT,
+  HANAKO_SESSIONS_ROOT,
+  HANAKO_ACTIVITY_ROOT,
+  HANAKO_ROOTS,
   collectHanakoRows,
   buildHanakoPeriods,
   buildHanakoHistoryGraph
