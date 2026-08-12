@@ -81,8 +81,14 @@ function collectSessionRows(filePath, options = {}) {
       if (obj.type !== 'assistant') continue;
       const msg = obj.message;
       if (!msg || !msg.usage) continue;
-      const msgId = msg.id;
-      if (!msgId) continue;
+      // Proma writes two assistant shapes:
+      // 1. streamed chunk rows with a `message.id` (thinking/text/tool_use
+      //    splits, output_tokens is 0 and input_tokens is a context snapshot)
+      // 2. aggregated turn rows WITHOUT a `message.id` (full content, real
+      //    output_tokens). Skipping them zeroed output and undercounted input.
+      // Group by message.id when present (dedup chunks), otherwise fall back to
+      // the row uuid which is unique per turn in a session file.
+      const msgId = msg.id || obj.uuid || `row-${obj._createdAt || ''}`;
 
       const model = msg.model || obj._channelModelId || 'unknown';
       const u = msg.usage;
@@ -185,6 +191,7 @@ function windowStartMs(windows) {
  * @returns {{ entries: Array, totalInput: number, totalOutput: number, totalCacheRead: number, totalCacheWrite: number, totalMessages: number, totalCost: number }}
  */
 function buildTokscaleJson(windows = {}, options = {}) {
+  const clientName = options.client || 'proma';
   // Conversation transcripts can contain assistant-shaped messages that
   // overlap agent-session records. Keep parsing limited to the verified
   // agent-session format until conversation attribution is implemented.
@@ -225,11 +232,11 @@ function buildTokscaleJson(windows = {}, options = {}) {
 
   for (const m of bySessionModel.values()) {
     entries.push({
-      client: 'proma',
+      client: clientName,
       mergedClients: null,
       sessionId: m.sessionId,
       model: m.model,
-      provider: 'proma',
+      provider: clientName,
       input: m.input,
       output: m.output,
       cacheRead: m.cacheRead,
@@ -285,10 +292,11 @@ function buildPromaHistoryGraph(options = {}) {
       byDate.set(date, day);
     }
     const modelId = normalizedModelId(row.model) || 'unknown';
+    const clientName = options.client || 'proma';
     let client = day.clients.find((entry) => entry.modelId === modelId);
     if (!client) {
       client = {
-        client: 'proma',
+        client: clientName,
         modelId,
         tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 },
         cost: 0,
@@ -335,5 +343,6 @@ module.exports = {
   estimatedRowCost,
   buildTokscaleJson,
   buildPromaHistoryGraph,
-  buildPromaPeriods
+  buildPromaPeriods,
+  timestampMs
 };

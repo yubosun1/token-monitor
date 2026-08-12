@@ -226,3 +226,62 @@ test('Proma leaves an incomplete price out instead of partially estimating it', 
   });
   assert.equal(json.entries[0].cost, 0);
 });
+
+test('Proma counts aggregated rows without message.id (real output regression)', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'proma-usage-'));
+  const filePath = path.join(root, 'session.jsonl');
+  const createdAt = Date.parse('2026-07-09T12:00:00.000Z');
+
+  // Shape produced by current Proma: aggregated turn rows carry full
+  // input/output but NO message.id. They must not be skipped.
+  writeJsonl(filePath, [
+    {
+      type: 'assistant',
+      _createdAt: createdAt,
+      uuid: '11111111-1111-1111-1111-111111111111',
+      message: {
+        model: 'deepseek-v4-flash',
+        usage: { input_tokens: 16785, output_tokens: 605, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+      }
+    },
+    {
+      type: 'assistant',
+      _createdAt: createdAt + 1,
+      uuid: '22222222-2222-2222-2222-222222222222',
+      message: {
+        model: 'deepseek-v4-flash',
+        usage: { input_tokens: 331, output_tokens: 757, cache_read_input_tokens: 10, cache_creation_input_tokens: 0 }
+      }
+    }
+  ]);
+
+  const json = buildTokscaleJson({ allTimeSince: 0 }, { roots: [root], includeUndated: true });
+  assert.equal(json.entries.length, 1);
+  assert.equal(json.entries[0].input, 17116);
+  assert.equal(json.entries[0].output, 1362);
+  assert.equal(json.entries[0].cacheRead, 10);
+  assert.equal(json.entries[0].messageCount, 2);
+});
+
+test('Hanako adapter parses camelCase usage rows', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hanako-usage-'));
+  const filePath = path.join(root, '2026-08-01T00-00-00Z_session.jsonl');
+  fs.writeFileSync(filePath, `${JSON.stringify({
+    type: 'message',
+    timestamp: '2026-08-01T12:00:00.000Z',
+    message: {
+      role: 'assistant',
+      model: 'deepseek-v4-flash',
+      provider: 'deepseek',
+      usage: { input: 14702, output: 436, cacheRead: 512, cacheWrite: 0, totalTokens: 15650, cost: { total: 0 } }
+    }
+  })}\n`);
+
+  const { buildHanakoPeriods } = require('../../src/shared/hanakoUsage');
+  const periods = buildHanakoPeriods({ roots: [root], allTimeSince: 0 });
+  assert.equal(periods.allTime.totalInput, 14702);
+  assert.equal(periods.allTime.totalOutput, 436);
+  assert.equal(periods.allTime.totalCacheRead, 512);
+  assert.equal(periods.allTime.entries[0].client, 'hanako');
+  assert.equal(periods.allTime.entries[0].model, 'deepseek-v4-flash');
+});

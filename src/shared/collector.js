@@ -35,6 +35,7 @@ const cursorAuth = require('./cursorAuth');
 const { findSessionFiles, codexSessionFile } = require('./sessionFiles');
 const opencodeSession = require('./opencodeSession');
 const { buildPromaHistoryGraph, buildPromaPeriods, collectPromaRows } = require('./promaUsage');
+const { buildHanakoPeriods, buildHanakoHistoryGraph, collectHanakoRows } = require('./hanakoUsage');
 const { resolveReasonixStatsDir, REASONIX_SOURCE_CHECK_ID } = require('./reasonixPaths');
 const {
   createReasonixNativeSessionCache,
@@ -701,6 +702,10 @@ async function collectHistoryOnce(options) {
     rawGraphs.push(options.promaGraph);
     histories.push(normalizeHistory(parseGraphResult(options.promaGraph), { capDays, todayKey }));
   }
+  if (options.hanakoGraph) {
+    rawGraphs.push(options.hanakoGraph);
+    histories.push(normalizeHistory(parseGraphResult(options.hanakoGraph), { capDays, todayKey }));
+  }
   if (options.dailyHistoryArchiveEnabled) {
     try {
       const retainedGraph = retainDailyHistory(rawGraphs, {
@@ -764,16 +769,17 @@ async function collectUsageOnce(options) {
     options.homeDir || os.homedir(),
     { ...localSessionMetadataDeps, retryMisses, resolveProjects: projectsEnabled }
   );
-  // Proma remains a local compatibility adapter; Reasonix aggregate usage is
-  // supplied by the same Tokscale path as every other tracked client.
+  // Proma and Hanako remain local compatibility adapters; Reasonix aggregate
+  // usage is supplied by the same Tokscale path as every other tracked client.
   const tokscaleClients = normalizedClients
-    ? normalizedClients.split(',').filter((c) => c !== 'proma').join(',')
+    ? normalizedClients.split(',').filter((c) => c !== 'proma' && c !== 'hanako').join(',')
     : normalizedClients;
   const includesProma = normalizedClients.split(',').includes('proma');
+  const includesHanako = normalizedClients.split(',').includes('hanako');
   const trackedClientSet = new Set(normalizedClients.split(',').filter(Boolean));
   const targetClients = [...new Set(normalizeClientsCsv(options.targetClients).split(',').filter((client) => trackedClientSet.has(client)))];
   const targetRequested = targetClients.length > 0;
-  const targetTokscaleClients = targetClients.filter((client) => client !== 'proma').join(',');
+  const targetTokscaleClients = targetClients.filter((client) => client !== 'proma' && client !== 'hanako').join(',');
   let today = emptyPeriod();
   let month = emptyPeriod();
   let allTime = emptyPeriod();
@@ -788,6 +794,9 @@ async function collectUsageOnce(options) {
   let promaPeriods = null;
   let promaRows = null;
   let promaPricing = null;
+  let hanakoPeriods = null;
+  let hanakoRows = null;
+  let hanakoPricing = null;
   if (normalizedClients) {
     const syncClients = targetRequested ? targetTokscaleClients : tokscaleClients;
     await maybeSyncCursor(syncClients, options.logger, {
@@ -817,6 +826,24 @@ async function collectUsageOnce(options) {
         if (typeof options.logger === 'function') options.logger(`proma parse failed: ${err.message}`);
       }
     }
+    if (includesHanako && (!targetRequested || targetClients.includes('hanako'))) {
+      try {
+        hanakoRows = collectHanakoRows();
+        hanakoPricing = await resolvePromaPricing(hanakoRows, {
+          lookupModelPricing: options.lookupModelPricing,
+          commandTimeoutMs: options.pricingTimeoutMs ?? Math.min(commandTimeoutMs || PROMA_PRICING_LOOKUP_TIMEOUT_MS, PROMA_PRICING_LOOKUP_TIMEOUT_MS),
+          pricingRevision: options.pricingRevision
+        });
+        const hanakoJson = buildHanakoPeriods({ now: collectedAt, allTimeSince, rows: hanakoRows, pricingByModel: hanakoPricing });
+        hanakoPeriods = {
+          today: extractUsageFromTokscale(hanakoJson.today),
+          month: extractUsageFromTokscale(hanakoJson.month),
+          allTime: extractUsageFromTokscale(hanakoJson.allTime)
+        };
+      } catch (err) {
+        if (typeof options.logger === 'function') options.logger(`hanako parse failed: ${err.message}`);
+      }
+    }
     if (anchorUsed) {
       // Anchored tick (watch-triggered): every tokscale period scan costs the
       // same full load + filter, so scan only --today and update the broader
@@ -842,6 +869,7 @@ async function collectUsageOnce(options) {
         }
       }
       if (promaPeriods) freshPartitions.proma = promaPeriods.today;
+      if (hanakoPeriods) freshPartitions.hanako = hanakoPeriods.today;
       todayPartitions = useTargetedPartitions
         ? replaceTodayPartitions(anchor.todayPartitions, freshPartitions, targetClients)
         : completeTodayPartitions(freshPartitions, normalizedClients);
@@ -885,6 +913,12 @@ async function collectUsageOnce(options) {
       month = mergePeriods(month, promaPeriods.month);
       allTime = mergePeriods(allTime, promaPeriods.allTime);
       todayPartitions = { ...(todayPartitions || {}), proma: promaPeriods.today };
+    }
+    if (hanakoPeriods && !anchorUsed) {
+      today = mergePeriods(today, hanakoPeriods.today);
+      month = mergePeriods(month, hanakoPeriods.month);
+      allTime = mergePeriods(allTime, hanakoPeriods.allTime);
+      todayPartitions = { ...(todayPartitions || {}), hanako: hanakoPeriods.today };
     }
     todayPartitions = completeTodayPartitions(todayPartitions, normalizedClients);
     // Partition metadata is internal but must remain as complete as the public
@@ -1059,6 +1093,7 @@ async function collectUsageOnce(options) {
     const history = await collectHistoryOnce({
       clients: tokscaleClients,
       promaGraph: includesProma ? buildPromaHistoryGraph({ rows: promaRows || collectPromaRows(), pricingByModel: promaPricing || {} }) : null,
+      hanakoGraph: includesHanako ? buildHanakoHistoryGraph({ rows: hanakoRows || collectHanakoRows(), pricingByModel: hanakoPricing || {} }) : null,
       historyEnabled: options.historyEnabled,
       commandTimeoutMs: options.historyTimeoutMs,
       capDays: options.historyCapDays,

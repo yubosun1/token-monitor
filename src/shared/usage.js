@@ -179,6 +179,7 @@ function normalizeClientName(value) {
   if (raw.includes('kiro')) return 'kiro';
   if (raw.includes('codebuddy')) return 'codebuddy';
   if (raw.includes('workbuddy')) return 'workbuddy';
+  if (raw.includes('hanako')) return 'hanako';
   if (raw.includes('proma')) return 'proma';
   if (raw.includes('reasonix')) return 'reasonix';
   if (raw.includes('opencode')) return 'opencode';
