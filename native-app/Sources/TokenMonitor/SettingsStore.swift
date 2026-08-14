@@ -89,6 +89,7 @@ final class SettingsStore {
             "currencyRates": [String: Any](),
             "startAtLogin": true,
             "windowToggleShortcut": "CommandOrControl+E",
+            "serviceStatusRefreshMs": 60000,
             "windowBounds": NSNull(),
             "zoomFactor": 1,
             "trayContent": "icon",
