@@ -497,7 +497,10 @@ body.is-windows.floating-bubble-collapsed-right .floating-bubble-tab {
   overflow: hidden auto;
   scrollbar-width: none;
   transform: translateY(0);
-  transition: max-height 140ms ease, opacity 120ms ease, padding 140ms ease, transform 140ms ease;
+  /* WKWebView freezes max-height transitions at the starting value (panel
+     stays at 0 and the content never scrolls); collapse is instant, the
+     remaining properties still animate. */
+  transition: opacity 120ms ease, padding 140ms ease, transform 140ms ease;
 }
 .settings-panel::-webkit-scrollbar { width: 0; height: 0; }
 .settings-panel.hidden {
