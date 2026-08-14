@@ -63,6 +63,16 @@ TOKEN_MONITOR_DIAG=1 ./dist/Token\ Monitor.app/Contents/MacOS/TokenMonitor > nat
 6. 提交规范：conventional commits，别加 AI 署名尾注。
 7. 调试技巧：DSH 会话是"边写边读"的流式 zstd，解压失败会自动跳过该文件，别当 bug；`[dsh]` 日志行会报告 files/usageEvents/rows 计数。
 
+## 六、FIX-PLAN.md 修复计划（已完成，2026-08-15）
+
+- 卡顿：Timer 只触发、tick 全在 collector 串行队列；Bridge pusher 回主线程调 evaluateJavaScript；Adapters 按 (path, mtime, size) 缓存 dsh 解压/解析与 proma/hanako 解析（解压缓存上限 128MB）；stats 帧内容签名比对（today/month/allTime 的 totalTokens/costUsd/clientCosts + clientStatus），未变跳过 stats:push。
+- 设置滚动：styles.css 的 .settings-panel transition 去掉 max-height（WKWebView 冻结 max-height 过渡），瞬时收起。
+- 全局快捷键：ShortcutController（Carbon RegisterEventHotKey，无辅助功能权限），解析 windowToggleShortcut（空值回退 Command+E），settings:update 变化时重注册；删掉原本地 ⌘E monitor。
+- 失焦自动关闭：GlassWindowController 观察 didResignKey/didResignActive，trayMode 且距 showWindow >250ms 时 orderOut；拖拽循环期间抑制。
+- 活动视图：Status/ServiceStatus.swift 移植 serviceStatus.js 四 provider（statuspage.io，60s 缓存/10s 错误缓存/5s 超时），serviceStatus:get 走后台队列异步回包；SettingsStore 默认 serviceStatusRefreshMs=60000。
+- 趋势视图：buildStats 补 historyPreview（daily 30/monthly 12/summary），趋势图与首页 heatmap 一并修复。
+- 验收：TOKEN_MONITOR_DIAG 跑通，[renderer]=0；探针输出 trendsBars=7、4 provider 状态正常；会话详情无回归。
+
 ## 五、已知限制（对用户如实说明）
 
 - 外观固定默认主题；无自动更新；用量历史全新开始（凭证与订阅沿用旧文件）。
