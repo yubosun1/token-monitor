@@ -30,10 +30,11 @@ TOKEN_MONITOR_DIAG=1 ./dist/Token\ Monitor.app/Contents/MacOS/TokenMonitor > nat
 - 验证：托盘图标出现；点击打开悬浮窗；⌘E 切换；"设置→通用→开机启动" 开关实际写入了系统设置（SMAppService 注册，见"系统设置→通用→登录项"）。
 - 注意：沙箱内测试时 settings.json 写不进去（`[settings] persist failed` 属沙箱假象，用户正常环境无此问题）。
 
-### 2. 会话详情（session:getDetail）—— 目前是空 stub
-- 现状：`Bridge.swift` 的 `session:getDetail` 返回空 rows，弹窗没内容。渲染层 `src/electron/renderer/sessionDetail.js` 期望 `{rows:[{startTime,value,...}]}` 一类结构（先读它确定形状）。
-- 实现建议：先给 proma/hanako/dsh 用适配器已有的消息行（`Adapters` 的 UsageRow 带时间戳）拼出详情；tokscale 四客户端需要逐客户端解析会话文件（原实现已删，可用 `git show 43f7fe5:src/shared/sessionDetail.js` 找回参考，约 365 行：claude/codex 转写解析 + opencode 会话读取），按需移植。
-- 若暂不做：把弹窗入口对无数据情况做优雅降级（显示"暂无详情"）。
+### 2. 会话详情（session:getDetail）—— 已实现（2026-08-15）
+- 实现：native-app/Sources/TokenMonitor/SessionDetail.swift（旧 sessionDetail.js/sessionFiles.js/opencodeSession.js 的移植）。wire 形状不变：{found, client, sessionId, period, exchanges:[{promptPreview,startedAt,endedAt,turnCount,tools,tokens,tokensAvailable,costEstimate,turns:[...]}], totals}。
+- 覆盖：claude（~/.claude/projects|transcripts JSONL）、codex（rollout 路径 + 兜底全扫）、opencode（opencode.db，走 /usr/bin/sqlite3 -json，与 OpencodeLimits 同套路）、proma（~/.proma/agent-sessions）、hanako（sessions+activity 双根）、dsh（zstd 流式解压单文件）。workbuddy 无详情（旧版也没有，渲染层门控不含它）。
+- 桥接：session:getDetail 在 Bridge 里改走后台队列异步回包（大会话解析不卡主线程，等价旧 worker）。渲染层 app.js 的点击门控加了 proma/hanako/dsh（一行）。
+- 验证：独立 swiftc 夹具对真实数据比对 tokscale 数字逐位一致（claude 15493206、codex 9008204）；[diag] sessionDetail 探针（+240s）端到端点开弹窗。
 
 ### 3. 项目分组视图（projectsEnabled）—— 目前默认关闭
 - 原版从会话文件的 cwd 派生项目归属；tokscale 条目本身不含路径。要启用需移植项目归属逻辑（参考 `git show 43f7fe5:src/shared/collector.js` 的 applySessionTimestamps/metadata 与 `git show 43f7fe5:src/shared/projectKey.js`）。用户主要用主视图，此项可选。
@@ -65,5 +66,5 @@ TOKEN_MONITOR_DIAG=1 ./dist/Token\ Monitor.app/Contents/MacOS/TokenMonitor > nat
 ## 五、已知限制（对用户如实说明）
 
 - 外观固定默认主题；无自动更新；用量历史全新开始（凭证与订阅沿用旧文件）。
-- 项目分组视图未移植（关闭中）；会话详情暂空。
+- 项目分组视图未移植（关闭中）；workbuddy 会话无详情（其余六客户端已支持，见第三节 2）。
 - 应用为本地 ad-hoc 签名，只在用户本机使用。
