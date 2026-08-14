@@ -10103,7 +10103,7 @@ els.breakdown.addEventListener('click', (event) => {
   if (!rowEl) return;
   const key = rowEl.dataset.key || '';            // "session:<client>:<sessionId>"
   const client = rowEl.dataset.client || '';
-  if (client !== 'claude' && client !== 'codex' && client !== 'opencode' && client !== 'reasonix') return;
+  if (client !== 'claude' && client !== 'codex' && client !== 'opencode' && client !== 'proma' && client !== 'hanako' && client !== 'dsh' && client !== 'reasonix') return;
   if (client === 'reasonix' && rowEl.dataset.detailUnavailable === 'true') return;
   const match = key.match(/^session:([^:]+):(.+)$/);
   if (!match) return;

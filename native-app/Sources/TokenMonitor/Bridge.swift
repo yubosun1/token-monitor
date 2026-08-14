@@ -133,7 +133,13 @@ final class BridgeCore {
             return ["providers": [Any](), "fetchedAt": NSNull(), "refreshMs": 60000]
 
         case "session:getDetail", "getSessionDetail":
-            return ["rows": [Any](), "sessionId": NSNull(), "client": NSNull()]
+            let args = args.first as? [String: Any] ?? [:]
+            return SessionDetailCore.read(
+                client: args["client"] as? String ?? "",
+                sessionId: args["sessionId"] as? String ?? "",
+                period: args["period"] as? String ?? "total",
+                sessionCost: UsageCore.doubleValue(args["sessionCost"])
+            )
 
         case "pricing:lookup":
             return NSNull()
@@ -417,6 +423,20 @@ final class Bridge: NSObject, WKScriptMessageHandler {
         }
 
         if let id = body["id"] as? Int {
+            if method == "session:getDetail" || method == "getSessionDetail" {
+                // Transcript parsing can take a moment for large sessions; run
+                // it off the main thread and resolve asynchronously (the old
+                // Electron app used a worker for the same reason).
+                guard let webView = self.webView else { return }
+                DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                    let result = self?.core.handleInvoke(method, args: args) ?? NSNull()
+                    let json = jsonString(result)
+                    DispatchQueue.main.async {
+                        webView.evaluateJavaScript("window.__tmResolve(\(id), \(json))", completionHandler: nil)
+                    }
+                }
+                return
+            }
             let result = core.handleInvoke(method, args: args)
             let json = jsonString(result)
             webView?.evaluateJavaScript("window.__tmResolve(\(id), \(json))", completionHandler: nil)
