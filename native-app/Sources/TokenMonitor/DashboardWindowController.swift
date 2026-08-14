@@ -137,10 +137,13 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
     func startBoundsTracking() {
         guard let window else { return }
         let center = NotificationCenter.default
+        let diagBounds = ProcessInfo.processInfo.environment["TOKEN_MONITOR_DIAG"] != nil
         settingsObserver = center.addObserver(forName: NSWindow.didResizeNotification, object: window, queue: .main) { [weak self] _ in
+            if diagBounds { NSLog("[diag] bounds resize frame=%@", NSStringFromRect(window.frame)) }
             self?.saveBounds()
         }
         center.addObserver(forName: NSWindow.didMoveNotification, object: window, queue: .main) { [weak self] _ in
+            if diagBounds { NSLog("[diag] bounds move frame=%@", NSStringFromRect(window.frame)) }
             self?.saveBounds()
         }
     }
@@ -152,6 +155,10 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
     /// pointerdown over the titlebar and we drive the move here.
     func beginDrag() {
         guard let window else { return }
+        // The native drag loop re-enters the main run loop; suppress the
+        // resign-key auto-hide while it owns the mouse.
+        isDragging = true
+        defer { isDragging = false }
         let initialOrigin = window.frame.origin
         let initialMouse = NSEvent.mouseLocation
         while true {
@@ -168,6 +175,44 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
                 y: initialOrigin.y + (current.y - initialMouse.y)
             ))
         }
+    }
+
+    // MARK: - Auto-hide on deactivate
+
+    /// Timestamp of the last showWindow, used to suppress the auto-hide right
+    /// after the window appears (same 250ms guard the Electron version used).
+    private var lastShownAt = Date.distantPast
+    /// True while the titlebar drag loop runs.
+    private var isDragging = false
+    private var autoHideObservers: [NSObjectProtocol] = []
+
+    /// Hide the popover when the app loses key/active status and trayMode is
+    /// on (Electron: mainWindow blur → hidePopover). Only the main widget
+    /// window opts in.
+    func enableAutoHideOnResign() {
+        guard let window, autoHideObservers.isEmpty else { return }
+        let center = NotificationCenter.default
+        autoHideObservers.append(center.addObserver(
+            forName: NSWindow.didResignKeyNotification, object: window, queue: .main
+        ) { [weak self] _ in self?.autoHideIfNeeded() })
+        autoHideObservers.append(center.addObserver(
+            forName: NSApplication.didResignActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.autoHideIfNeeded() })
+    }
+
+    override func showWindow(_ sender: Any?) {
+        lastShownAt = Date()
+        super.showWindow(sender)
+    }
+
+    private func autoHideIfNeeded() {
+        guard !isDragging else { return }
+        guard let window, window.isVisible else { return }
+        let settings = BridgeCore.shared.settings.snapshot()
+        let trayMode = settings["trayMode"] as? Bool ?? true
+        guard trayMode else { return }
+        guard Date().timeIntervalSince(lastShownAt) > 0.25 else { return }
+        window.orderOut(nil)
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -312,6 +357,22 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
                     const firstTurn = document.querySelector('.detail-turn-title');
                     out.detailFirstTurn = firstTurn ? firstTurn.textContent.trim() : null;
                   }
+                  // Trends view: consumes state.stats.historyPreview.
+                  const trendsTab = document.querySelector('#viewSwitcherMenu [data-view="trends"]');
+                  if (trendsTab) trendsTab.click();
+                  await new Promise(r => setTimeout(r, 600));
+                  out.trendsEmpty = !!document.querySelector('.trends-empty');
+                  out.trendsBars = document.querySelectorAll('.spark-bar').length;
+                  out.trendsStats = [...document.querySelectorAll('.trends-stat')].map(s => s.textContent.trim().replace(/\\s+/g, ' ')).slice(0, 4);
+                  // Status view: fetches the four statuspage.io providers.
+                  const statusTab = document.querySelector('#viewSwitcherMenu [data-view="status"]');
+                  if (statusTab) statusTab.click();
+                  await new Promise(r => setTimeout(r, 6000));
+                  out.statusRows = [...document.querySelectorAll('.service-status-row')].map(r => ({
+                    label: r.querySelector('strong')?.textContent || '',
+                    pill: r.querySelector('.service-status-pill')?.textContent || '',
+                    checked: r.querySelector('.service-status-checked')?.textContent || null
+                  }));
                   window.webkit.messageHandlers.bridge.postMessage({ method: 'window:diagResult', args: [JSON.stringify(out)] });
                 })()
                 """
@@ -329,6 +390,9 @@ final class DashboardWindowController: GlassWindowController {
         loadPage("index")
         restoreBounds()
         startBoundsTracking()
+        // The widget popover hides when the app loses focus (trayMode);
+        // the dashboard window stays put.
+        enableAutoHideOnResign()
     }
 }
 

@@ -4,11 +4,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var mainWindowController: DashboardWindowController?
     private var dashboardWindowController: DashboardViewWindowController?
-    private var shortcutMonitor: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildStatusItem()
-        registerToggleShortcut()
+        // Global toggle hotkey (Carbon; works while the LSUIElement app is in
+        // the background, like the Electron globalShortcut it replaces).
+        ShortcutController.shared.onToggle = { [weak self] in self?.toggleMainWindow() }
+        ShortcutController.shared.start(settings: BridgeCore.shared.settings.snapshot())
         Collector.shared.start()
         LimitsRuntime.shared.start()
         // Tray-only by default (matches the user's Electron configuration):
@@ -23,9 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        if let monitor = shortcutMonitor {
-            NSEvent.removeMonitor(monitor)
-        }
+        ShortcutController.shared.stop()
     }
 
     // MARK: - Status item
@@ -124,16 +124,4 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // MARK: - Toggle shortcut (default ⌘E)
-
-    private func registerToggleShortcut() {
-        shortcutMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            if event.modifierFlags.contains(.command), !event.modifierFlags.contains(.option),
-               event.keyCode == 14 { // E
-                self?.toggleMainWindow()
-                return nil
-            }
-            return event
-        }
-    }
 }
