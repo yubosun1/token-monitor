@@ -4772,6 +4772,9 @@ const __tmMissingElement = (() => {
     insertAdjacentElement: noop, insertAdjacentHTML: noop, toggleAttribute: noop,
     querySelector: () => null, querySelectorAll: () => [], closest: () => null,
     classList: { add: noop, remove: noop, toggle: noop, replace: noop, contains: () => false },
+    matches: () => false, contains: () => false,
+    hidePopover: noop, showPopover: noop, togglePopover: noop,
+    getBoundingClientRect: () => ({ x: 0, y: 0, width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0 }),
     getContext: () => null
   };
   return el;
