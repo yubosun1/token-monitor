@@ -14,7 +14,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Tray-only by default (matches the user's Electron configuration):
         // the window appears on tray click or ⌘E, not at launch.
         let trayMode = BridgeCore.shared.settings.snapshot()["trayMode"] as? Bool ?? true
-        if !trayMode {
+        // Dev aid: diag runs exercise the window (page probe, interaction
+        // probe) even when trayMode keeps the app tray-only by default.
+        let diag = ProcessInfo.processInfo.environment["TOKEN_MONITOR_DIAG"] != nil
+        if !trayMode || diag {
             showMainWindow(center: true)
         }
     }

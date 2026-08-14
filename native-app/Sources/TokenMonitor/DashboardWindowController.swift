@@ -257,9 +257,65 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
                   if (toolTab) toolTab.click();
                   await new Promise(r => setTimeout(r, 300));
                   window.webkit.messageHandlers.bridge.postMessage({ method: 'window:diagResult', args: [JSON.stringify(out)] });
+                  // Session detail round trip: the first tokscale full scan can
+                  // take minutes, so this probe runs later (see below).
                 })()
                 """
                 webView.evaluateJavaScript(interactionProbe, completionHandler: nil)
+            }
+            // Dev aid: exercise the session-detail popup once the first full
+            // tokscale scan has populated the session rows (it can take
+            // minutes on a large history).
+            DispatchQueue.main.asyncAfter(deadline: .now() + 240) { [weak self] in
+                guard let self, let webView = self.webView else { return }
+                let sessionDetailProbe = """
+                (async () => {
+                  const out = {};
+                  // The view-switcher menu only renders after the first stats
+                  // push, so wait for real data before switching views.
+                  for (let i = 0; i < 180; i++) {
+                    const text = document.getElementById('totalTokens')?.textContent || '';
+                    if (text && text !== '0') break;
+                    await new Promise(r => setTimeout(r, 1000));
+                  }
+                  const disclosure = document.querySelector('.view-switcher-disclosure');
+                  if (disclosure) disclosure.click();
+                  await new Promise(r => setTimeout(r, 300));
+                  out.menuViews = [...document.querySelectorAll('.view-switcher-menu-item')].map(i => i.dataset.view);
+                  // The settings panel also renders rows with data-view
+                  // attributes; scope the query to the switcher menu.
+                  const sessionTab = document.querySelector('#viewSwitcherMenu [data-view="session"]');
+                  out.sessionTabFound = !!sessionTab;
+                  out.totalTokensText = document.getElementById('totalTokens')?.textContent || null;
+                  if (sessionTab) sessionTab.click();
+                  await new Promise(r => setTimeout(r, 300));
+                  out.viewAfterClick = document.querySelector('.view-switcher-menu-item.is-current')?.dataset.view || null;
+                  await new Promise(r => setTimeout(r, 700));
+                  out.viewAfterWait = document.querySelector('.view-switcher-menu-item.is-current')?.dataset.view || null;
+                  const detailClients = ['claude', 'codex', 'opencode', 'proma', 'hanako', 'dsh'];
+                  const sessionRow = [...document.querySelectorAll('.row[data-client]')]
+                    .find(r => detailClients.includes(r.dataset.client));
+                  if (!sessionRow) {
+                    out.detailRow = null;
+                    out.totalRows = document.querySelectorAll('.row').length;
+                    out.currentView = document.querySelector('.view-switcher-menu-item.is-current')?.dataset.view || null;
+                  } else {
+                    out.detailRow = { client: sessionRow.dataset.client, key: sessionRow.dataset.key };
+                    sessionRow.click();
+                    await new Promise(r => setTimeout(r, 2000));
+                    out.detailExchanges = document.querySelectorAll('.detail-exchange').length;
+                    out.detailNote = document.querySelector('.detail-note')?.textContent || null;
+                    const title = document.querySelector('.detail-ex-title');
+                    out.detailTitle = title ? title.textContent.trim().slice(0, 60) : null;
+                    const sub = document.querySelector('.detail-ex-sub');
+                    out.detailSub = sub ? sub.textContent.trim().slice(0, 80) : null;
+                    const firstTurn = document.querySelector('.detail-turn-title');
+                    out.detailFirstTurn = firstTurn ? firstTurn.textContent.trim() : null;
+                  }
+                  window.webkit.messageHandlers.bridge.postMessage({ method: 'window:diagResult', args: [JSON.stringify(out)] });
+                })()
+                """
+                webView.evaluateJavaScript(sessionDetailProbe, completionHandler: nil)
             }
         }
     }
