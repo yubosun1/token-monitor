@@ -1,0 +1,5 @@
+tokscale
+Copyright (c) Tokscale contributors
+Licensed under the MIT License.
+Bundled unchanged from @tokscale/cli-darwin-arm64 4.13.0; used as the data
+engine for Claude Code / Codex / OpenCode / WorkBuddy session scanning.

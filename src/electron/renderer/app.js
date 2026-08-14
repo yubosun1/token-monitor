@@ -1,6 +1,6 @@
 'use strict';
 
-const clientLabels = { claude: 'Claude Code', codex: 'Codex', hermes: 'Hermes Agent', gemini: 'Gemini', cursor: 'Cursor', opencode: 'OpenCode', openclaw: 'OpenClaw', antigravity: 'Antigravity', cline: 'Cline', kimi: 'Kimi', qwen: 'Qwen', grok: 'Grok Build', copilot: 'GitHub Copilot', pi: 'Pi', zed: 'Zed', kilocode: 'Kilo Code', micode: 'MiMo Code', zcode: 'ZCode', kiro: 'Kiro', codebuddy: 'CodeBuddy', workbuddy: 'WorkBuddy', proma: 'Proma', hanako: 'Hanako', reasonix: 'Reasonix' };
+const clientLabels = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', workbuddy: 'WorkBuddy', proma: 'Proma', hanako: 'Hanako', dsh: 'DeepSeek Harness' };
 const reasonixSessionGuard = window.TokenMonitorReasonixSessionGuard;
 const { clientColors, fallbackModelColors, modelVendorFor, modelColor } = window.TokenMonitorUsageCharts;
 const motionPreferenceApi = window.TokenMonitorMotionPreference;
@@ -12,8 +12,8 @@ const tokenRateApi = window.TokenMonitorTokenRate;
 const { tokenRatePerSecond, tokenBurnPerMinute } = tokenRateApi;
 const reducedMotionMedia = window.matchMedia?.('(prefers-reduced-motion: reduce)');
 const clientsWithIcon = new Set([
-  'claude', 'codex', 'gemini', 'cursor', 'opencode', 'openclaw', 'hermes', 'antigravity', 'cline', 'kimi', 'qwen', 'grok', 'copilot', 'pi', 'zed', 'kilocode', 'micode', 'zcode', 'kiro', 'codebuddy', 'workbuddy', 'proma', 'hanako', 'reasonix',
-  'xai', 'openrouter', 'deepseek', 'meta', 'mistral', 'qwen', 'moonshot', 'zai', 'zaiteam', 'cohere', 'xiaomi', 'mimo', 'minimax', 'doubao', 'volcengine', 'qoder', 'ollama', 'thirdparty', 'hunyuan'
+  'claude', 'codex', 'opencode', 'workbuddy', 'proma', 'hanako', 'dsh',
+  'deepseek'
 ]);
 
 function osIconFor(platform) {
@@ -51,89 +51,24 @@ const KNOWN_CLIENTS = [
   { id: 'claude', label: 'Claude Code' },
   { id: 'codex', label: 'Codex' },
   { id: 'opencode', label: 'OpenCode' },
-  { id: 'hermes', label: 'Hermes Agent' },
-  { id: 'openclaw', label: 'OpenClaw' },
-  { id: 'cursor', label: 'Cursor' },
-  { id: 'antigravity', label: 'Antigravity' },
-  { id: 'cline', label: 'Cline' },
-  { id: 'kimi', label: 'Kimi' },
-  { id: 'qwen', label: 'Qwen' },
-  { id: 'grok', label: 'Grok Build' },
-  { id: 'copilot', label: 'GitHub Copilot' },
-  { id: 'pi', label: 'Pi' },
-  { id: 'zed', label: 'Zed' },
-  { id: 'kilocode', label: 'Kilo Code' },
-  { id: 'micode', label: 'MiMo Code' },
-  { id: 'zcode', label: 'ZCode' },
-  { id: 'kiro', label: 'Kiro' },
-  { id: 'codebuddy', label: 'CodeBuddy' },
   { id: 'workbuddy', label: 'WorkBuddy' },
   { id: 'proma', label: 'Proma' },
   { id: 'hanako', label: 'Hanako' },
-  { id: 'reasonix', label: 'Reasonix' }
+  { id: 'dsh', label: 'DeepSeek Harness' }
 ];
 const LIMIT_PROVIDERS = [
-  { id: 'claude', label: 'Claude', settingsLabel: 'Claude Code' },
-  { id: 'codex', label: 'Codex' },
-  { id: 'opencode', label: 'OpenCode' },
-  { id: 'cursor', label: 'Cursor' },
-  { id: 'antigravity', label: 'Antigravity' },
-  { id: 'kimi', label: 'Kimi' },
-  { id: 'grok', label: 'Grok' },
-  { id: 'copilot', label: 'GitHub Copilot' },
-  { id: 'mimo', label: 'MiMo' },
-  { id: 'zai', label: 'GLM' },
-  { id: 'zaiteam', label: 'GLM Team' },
-  { id: 'kiro', label: 'Kiro' },
   { id: 'deepseek', label: 'DeepSeek' },
-  { id: 'openrouter', label: 'OpenRouter' },
-  { id: 'minimax', label: 'Minimax' },
-  { id: 'volcengine', label: 'Volcengine' },
-  { id: 'qoder', label: 'Qoder' },
-  { id: 'ollama', label: 'Ollama' },
-  { id: 'thirdparty', label: 'Third-party APIs' }
+  { id: 'opencode', label: 'OpenCode' }
 ];
 const LIMIT_PROVIDER_ACCOUNT_GROUP_IDS = {
-  claude: 'claudeAccountGroup',
-  codex: 'codexAccountGroup',
   opencode: 'opencodeCookieGroup',
-  cursor: 'cursorAccountGroup',
-  kimi: 'kimiAccountGroup',
-  copilot: 'copilotAccountGroup',
-  mimo: 'mimoAccountGroup',
-  zai: 'zaiAccountGroup',
-  zaiteam: 'zaiteamAccountGroup',
-  deepseek: 'deepseekAccountGroup',
-  openrouter: 'openrouterAccountGroup',
-  minimax: 'minimaxAccountGroup',
-  volcengine: 'volcengineAccountGroup',
-  qoder: 'qoderAccountGroup',
-  ollama: 'ollamaAccountGroup',
-  thirdparty: 'thirdpartyAccountGroup'
+  deepseek: 'deepseekAccountGroup'
 };
 const LIMIT_PROVIDER_ACCOUNT_STATUS_IDS = {
-  claude: 'claudeAccountStatus',
-  codex: 'codexAccountStatus',
   opencode: 'opencodeCookieStatus',
-  cursor: 'cursorAccountStatus',
-  kimi: 'kimiAccountStatus',
-  copilot: 'copilotApiTokenStatus',
-  mimo: 'mimoAccountStatus',
-  zai: 'zaiAccountStatus',
-  zaiteam: 'zaiteamAccountStatus',
-  deepseek: 'deepseekApiKeyStatus',
-  openrouter: 'openrouterStatus',
-  minimax: 'minimaxApiKeyStatus',
-  volcengine: 'volcengineAccountStatus',
-  qoder: 'qoderAccountStatus',
-  ollama: 'ollamaAccountStatus',
-  thirdparty: 'thirdpartyStatus'
+  deepseek: 'deepseekApiKeyStatus'
 };
-const LIMIT_PROVIDER_CONNECTION_DETAIL_KEYS = {
-  antigravity: 'settings.limits.connection.antigravity',
-  grok: 'settings.limits.connection.grok',
-  kiro: 'settings.limits.connection.kiro'
-};
+const LIMIT_PROVIDER_CONNECTION_DETAIL_KEYS = {};
 const TRAY_ICON_VARIANTS = [
   { id: 'claude-brand', label: 'Claude', after: 'claude' },
   { id: 'chatgpt', label: 'ChatGPT', after: 'codex' }
@@ -324,11 +259,11 @@ let preferenceDrag = null;
 let viewSwitcherLongPressTimer = null;
 let viewSwitcherLongPressTriggered = false;
 let viewSwitcherHoverCloseTimer = null;
-const els = {
+const elsMap = {
   shell: document.querySelector('.shell'), status: document.getElementById('status'), liveDot: document.getElementById('liveDot'), tokenRateReveal: document.getElementById('tokenRateReveal'), totalTokens: document.getElementById('totalTokens'), totalTokensCompact: document.getElementById('totalTokensCompact'), cost: document.getElementById('cost'), homePanel: document.getElementById('homePanel'), breakdown: document.getElementById('breakdown'), serviceStatusPanel: document.getElementById('serviceStatusPanel'), limitsPanel: document.getElementById('limitsPanel'), trendsPanel: document.getElementById('trendsPanel'), viewSwitcher: document.getElementById('viewSwitcher'), pinButton: document.getElementById('pinButton'), utilityActions: document.getElementById('utilityActions'), settingsButton: document.getElementById('settingsButton'), settingsPanel: document.getElementById('settingsPanel'), languageInput: document.getElementById('languageInput'), currencyInput: document.getElementById('currencyInput'), currencyRateRow: document.getElementById('currencyRateRow'), currencyRateModeAuto: document.getElementById('currencyRateModeAuto'), currencyRateModeManual: document.getElementById('currencyRateModeManual'), currencyRateManualField: document.getElementById('currencyRateManualField'), currencyRateOverrideInput: document.getElementById('currencyRateOverrideInput'), currencyRateStatus: document.getElementById('currencyRateStatus'), hubUrlInput: document.getElementById('hubUrlInput'), secretInput: document.getElementById('secretInput'), deviceIdInput: document.getElementById('deviceIdInput'), limitProviderCheckboxes: document.getElementById('limitProviderCheckboxes'), limitsRefreshInput: document.getElementById('limitsRefreshInput'), showLimitSourceInput: document.getElementById('showLimitSourceInput'), maskLimitAccountEmailsInput: document.getElementById('maskLimitAccountEmailsInput'), showLimitUsedInputs: Array.from(document.querySelectorAll('input[name="showLimitUsed"]')), liveDotInput: document.getElementById('liveDotInput'), toolIconsInput: document.getElementById('toolIconsInput'), floatingBubbleInput: document.getElementById('floatingBubbleInput'), floatingBubbleTriggerInputs: Array.from(document.querySelectorAll('input[name="floatingBubbleTrigger"]')), floatingBubbleTriggerRow: document.getElementById('floatingBubbleTriggerRow'), floatingBubbleContentInput: document.getElementById('floatingBubbleContentInput'), floatingBubbleContentRow: document.getElementById('floatingBubbleContentRow'), floatingBubbleComposer: document.getElementById('floatingBubbleComposer'), floatingBubbleContent: document.getElementById('floatingBubbleContent'), discordRpcInput: document.getElementById('discordRpcInput'), windowBehaviorInput: document.getElementById('windowBehaviorInput'), showTrayIconInput: document.getElementById('showTrayIconInput'), showTrayProviderBadgeInput: document.getElementById('showTrayProviderBadgeInput'), trayModeInput: document.getElementById('trayModeInput'), trayContentInput: document.getElementById('trayContentInput'), trayComposer: document.getElementById('trayComposer'), windowToggleShortcutValue: document.getElementById('windowToggleShortcutValue'), windowToggleShortcutClearButton: document.getElementById('windowToggleShortcutClearButton'), windowToggleShortcutNote: document.getElementById('windowToggleShortcutNote'), glassInput: document.getElementById('glassInput'), blurInput: document.getElementById('blurInput'), zoomInput: document.getElementById('zoomInput'), resetGlassButton: document.getElementById('resetGlassButton'), resetDepthButton: document.getElementById('resetDepthButton'), resetZoomButton: document.getElementById('resetZoomButton'), saveSettingsButton: document.getElementById('saveSettingsButton'), clientDisplayList: document.getElementById('clientDisplayList'), wslScanInput: document.getElementById('wslScanInput'), wslScanRow: document.getElementById('wslScanRow'), wslPanel: document.getElementById('wslPanel'), openConfigButton: document.getElementById('openConfigButton'), exportAutoInput: document.getElementById('exportAutoInput'), exportAutoDetails: document.getElementById('exportAutoDetails'), exportAutoStatus: document.getElementById('exportAutoStatus'), exportDirLabel: document.getElementById('exportDirLabel'), exportPickDirButton: document.getElementById('exportPickDirButton'), exportIntervalInput: document.getElementById('exportIntervalInput'), exportNowButton: document.getElementById('exportNowButton'), refreshButton: document.getElementById('refreshButton'), minButton: document.getElementById('minButton'), closeButton: document.getElementById('closeButton'), floatingBubbleTab: document.getElementById('floatingBubbleTab'),
   subscriptionList: document.getElementById('subscriptionList'), subscriptionAddForm: document.getElementById('subscriptionAddForm'), subscriptionAddToggle: document.getElementById('subscriptionAddToggle'), subscriptionAddDetails: document.getElementById('subscriptionAddDetails'), subscriptionProviderInput: document.getElementById('subscriptionProviderInput'), subscriptionAccountInput: document.getElementById('subscriptionAccountInput'), subscriptionPlanNameInput: document.getElementById('subscriptionPlanNameInput'), subscriptionAmountInput: document.getElementById('subscriptionAmountInput'), subscriptionCurrencyInput: document.getElementById('subscriptionCurrencyInput'), subscriptionIntervalCountInput: document.getElementById('subscriptionIntervalCountInput'), subscriptionIntervalInput: document.getElementById('subscriptionIntervalInput'), subscriptionStartDateInput: document.getElementById('subscriptionStartDateInput'), subscriptionAutoRenewInput: document.getElementById('subscriptionAutoRenewInput'), subscriptionNextRenewalInput: document.getElementById('subscriptionNextRenewalInput'), subscriptionNote: document.getElementById('subscriptionNote'), subscriptionOrphanNotice: document.getElementById('subscriptionOrphanNotice'), subscriptionOrphanText: document.getElementById('subscriptionOrphanText'), subscriptionOrphanAdopt: document.getElementById('subscriptionOrphanAdopt'), subscriptionOrphanDiscard: document.getElementById('subscriptionOrphanDiscard'), subscriptionSyncError: document.getElementById('subscriptionSyncError'), subscriptionNextRenewalLabel: document.getElementById('subscriptionNextRenewalLabel'), subscriptionNextRenewalNote: document.getElementById('subscriptionNextRenewalNote'), subscriptionSubmit: document.getElementById('subscriptionSubmit'), subscriptionCancelEdit: document.getElementById('subscriptionCancelEdit'), subscriptionTotalRow: document.getElementById('subscriptionTotalRow'), subscriptionErrorMessage: document.getElementById('subscriptionErrorMessage'), subscriptionPlanFields: document.getElementById('subscriptionPlanFields'), subscriptionTopUpFields: document.getElementById('subscriptionTopUpFields'), subscriptionTopUpList: document.getElementById('subscriptionTopUpList'), subscriptionTopUpDateInput: document.getElementById('subscriptionTopUpDateInput'), subscriptionTopUpAmountInput: document.getElementById('subscriptionTopUpAmountInput'), subscriptionTopUpAddButton: document.getElementById('subscriptionTopUpAddButton'), subscriptionAmountRow: document.getElementById('subscriptionAmountRow'), subscriptionTopUpHeadingRow: document.getElementById('subscriptionTopUpHeadingRow'), subscriptionKindInputs: [...document.querySelectorAll('input[name="subscriptionKind"]')]
 };
-Object.assign(els, {
+Object.assign(elsMap, {
   appTitleMark: document.querySelector('.app-title-mark'),
   viewBackRow: document.getElementById('viewBackRow'),
   backHomeButton: document.getElementById('backHomeButton'),
@@ -4822,6 +4757,35 @@ const LIMIT_ACCOUNT_TITLES = {
   openrouter: (provider, index) => namedApiAccountTitle(provider, index, 'openrouter'),
   thirdparty: (provider, index) => namedApiAccountTitle(provider, index, 'thirdparty')
 };
+
+// Removed-feature settings sections are gone from the DOM in the native app;
+// instead of null-checking hundreds of lookups, a Proxy supplies inert dummy
+// elements for any id that no longer exists, so dead wiring stays harmless.
+const __tmMissingElement = (() => {
+  const noop = () => {};
+  const el = {
+    value: '', textContent: '', innerHTML: '', checked: false, disabled: false,
+    style: {}, dataset: {}, scrollTop: 0, scrollHeight: 0, offsetHeight: 0,
+    addEventListener: noop, removeEventListener: noop, appendChild: noop,
+    append: noop, remove: noop, replaceChildren: noop, focus: noop, blur: noop,
+    click: noop, setAttribute: noop, removeAttribute: noop, insertBefore: noop,
+    insertAdjacentElement: noop, insertAdjacentHTML: noop, toggleAttribute: noop,
+    querySelector: () => null, querySelectorAll: () => [], closest: () => null,
+    classList: { add: noop, remove: noop, toggle: noop, replace: noop, contains: () => false },
+    getContext: () => null
+  };
+  return el;
+})();
+const els = new Proxy(elsMap, {
+  get(target, prop) {
+    if (typeof prop === 'string') {
+      const value = target[prop];
+      if (value === null || value === undefined) return __tmMissingElement;
+      return value;
+    }
+    return target[prop];
+  }
+});
 
 function limitAccountTitle(id, provider, index, providerEntries = [provider]) {
   const resolve = LIMIT_ACCOUNT_TITLES[String(id || '').trim().toLowerCase()];
@@ -9394,7 +9358,10 @@ function connectLimitProviderCheckboxName(checkbox, nameNode, providerId) {
 
 function moveLimitProviderLiveNode(parent, node, before = null) {
   if (!parent || !node || node.parentElement === parent) return;
-  parent.moveBefore(node, before);
+  // Native app runs on WKWebView, which lacks Chromium's moveBefore();
+  // insertBefore is equivalent here (live-node moves only, focus is
+  // re-applied by the caller's preserveFocus handling).
+  parent.insertBefore(node, before);
 }
 
 function renderLimitProviderCheckboxes() {
@@ -9552,8 +9519,9 @@ function renderLimitProviderCheckboxesNow() {
     // list is dragged.
     if (optionsContainer) row.append(optionsContainer);
     els.limitProviderCheckboxes.appendChild(row);
-    // `moveBefore()` preserves focus and edit state while reparenting. Its
-    // destination must already be connected, so the row is mounted first.
+    // `insertBefore` (WKWebView-compatible replacement for Chromium's
+    // moveBefore) reparents the live node. The destination must already be
+    // connected, so the row is mounted first.
     moveLimitProviderLiveNode(actions, accountStatus, disclosureIcon);
     moveLimitProviderLiveNode(optionsInner, accountGroup);
   }
@@ -14663,6 +14631,5 @@ function initSettingsAnimationWrappers() {
 
 initSettingsAnimationWrappers();
 setupSettingsSections();
-setupCursorAccountUI();
 setupCustomPricingUI();
 init();
