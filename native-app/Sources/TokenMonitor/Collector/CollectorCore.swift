@@ -29,8 +29,11 @@ final class Collector {
     func start() {
         guard timer == nil else { return }
         let interval = refreshInterval()
+        // The timer only triggers: every tick runs on the serial collector
+        // queue (the initial full tick and refreshNow() use the same queue),
+        // so scanning, parsing and the stats push never block the main thread.
         let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
-            self?.tick(full: false)
+            self?.queue.async { [weak self] in self?.tick(full: false) }
         }
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
@@ -136,10 +139,17 @@ final class Collector {
 
         cachedPeriods = (today, month, allTime)
         cachedClients = clients
+        // Content-signature comparison: when nothing about the periods or
+        // client statuses changed, update the cache but skip the push so the
+        // renderer is not forced through a full re-render every 15s. Limits
+        // refreshes re-push through reemitStats() and are not affected.
         stateLock.lock()
+        let previous = statsCache
         statsCache = stats
         stateLock.unlock()
-        core.push("stats:push", stats)
+        if previous == nil || contentSignature(stats) != contentSignature(previous!) {
+            core.push("stats:push", stats)
+        }
 
         if ProcessInfo.processInfo.environment["TOKEN_MONITOR_DIAG"] != nil {
             let t = today["totalTokens"] as? Int ?? 0
@@ -288,8 +298,38 @@ final class Collector {
         ]
         if let history {
             stats["history"] = history
+            // Port of history.js historyPreview(): the trends view and the
+            // home heatmap both consume state.stats.historyPreview.
+            stats["historyPreview"] = historyPreview(from: history)
         }
         return stats
+    }
+
+    /// Port of src/shared/history.js historyPreview(history, {dailyDays: 30,
+    /// monthlyMonths: 12}): keep the last 30 daily entries and 12 monthly
+    /// entries with the four chart keys, plus the summary untouched.
+    private func historyPreview(from history: [String: Any]) -> [String: Any] {
+        let daily = (history["daily"] as? [[String: Any]] ?? []).suffix(30).map { day -> [String: Any] in
+            return [
+                "date": day["date"] ?? "",
+                "tokens": UsageCore.doubleValue(day["tokens"]),
+                "cost": UsageCore.doubleValue(day["cost"]),
+                "activeTimeMs": UsageCore.doubleValue(day["activeTimeMs"])
+            ]
+        }
+        let monthly = (history["monthly"] as? [[String: Any]] ?? []).suffix(12).map { month -> [String: Any] in
+            return [
+                "month": month["month"] ?? "",
+                "tokens": UsageCore.doubleValue(month["tokens"]),
+                "cost": UsageCore.doubleValue(month["cost"]),
+                "activeTimeMs": UsageCore.doubleValue(month["activeTimeMs"])
+            ]
+        }
+        return [
+            "daily": Array(daily),
+            "monthly": Array(monthly),
+            "summary": history["summary"] ?? [String: Any]()
+        ]
     }
 
     private func periodWindows(_ now: Date) -> [String: Any] {
@@ -317,6 +357,31 @@ final class Collector {
                 "endsAt": ISO8601DateFormatter().string(from: nextMonth)
             ]
         ]
+    }
+
+    /// Stable content signature of a stats frame for the push gate: the three
+    /// periods' token/cost totals, per-client costs and client statuses.
+    /// Volatile keys (updatedAt/receivedAt/collectedAt) are intentionally
+    /// excluded so an unchanged frame does not force a renderer re-render.
+    private func contentSignature(_ stats: [String: Any]) -> String {
+        var parts: [String] = []
+        let periods = stats["periods"] as? [String: Any] ?? [:]
+        for name in ["today", "month", "allTime"] {
+            guard let period = periods[name] as? [String: Any] else { continue }
+            parts.append("\(name)=\(UsageCore.intValue(period["totalTokens"])):\(String(format: "%.4f", UsageCore.doubleValue(period["costUsd"])))")
+            if let costs = period["clientCosts"] as? [String: Any] {
+                for (client, cost) in costs.sorted(by: { $0.key < $1.key }) {
+                    parts.append("\(name).cc.\(client)=\(String(format: "%.4f", UsageCore.doubleValue(cost)))")
+                }
+            }
+        }
+        if let device = (stats["devices"] as? [[String: Any]])?.first,
+           let statuses = device["clientStatus"] as? [String: Any] {
+            for (client, status) in statuses.sorted(by: { $0.key < $1.key }) {
+                parts.append("cs.\(client)=\(status)")
+            }
+        }
+        return parts.joined(separator: "|")
     }
 
     private func deriveClientStatus(clients: [String], allTimePeriod: [String: Any]) -> [String: String] {

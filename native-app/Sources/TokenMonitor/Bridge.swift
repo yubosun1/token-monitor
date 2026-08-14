@@ -109,6 +109,11 @@ final class BridgeCore {
                 applyStartAtLogin(startAtLogin)
             }
             let merged = settings.update(patch)
+            // The global toggle shortcut is a Carbon hotkey registration;
+            // re-register whenever the recorded combination changes.
+            if patch["windowToggleShortcut"] != nil {
+                ShortcutController.shared.apply(settings: merged)
+            }
             push("settings:push", merged)
             return merged
 
@@ -130,7 +135,11 @@ final class BridgeCore {
             return ["connected": true, "mode": "local"]
 
         case "serviceStatus:get", "getServiceStatus":
-            return ["providers": [Any](), "fetchedAt": NSNull(), "refreshMs": 60000]
+            let options = args.first as? [String: Any] ?? [:]
+            return ServiceStatusRuntime.shared.status(
+                force: options["force"] as? Bool ?? false,
+                providerIds: options["providerIds"] as? [String]
+            )
 
         case "session:getDetail", "getSessionDetail":
             let args = args.first as? [String: Any] ?? [:]
@@ -406,7 +415,11 @@ final class Bridge: NSObject, WKScriptMessageHandler {
         unregisterPusher = core.registerPusher { [weak self] event, payload in
             guard let self, let webView = self.webView else { return }
             let json = jsonString(payload)
-            webView.evaluateJavaScript("window.__tmPush(\(Self.jsQuote(event)), \(json))", completionHandler: nil)
+            // Pushers run on collector/limits background queues; WKWebView
+            // only tolerates evaluateJavaScript on the main thread.
+            DispatchQueue.main.async {
+                webView.evaluateJavaScript("window.__tmPush(\(Self.jsQuote(event)), \(json))", completionHandler: nil)
+            }
         }
     }
 
@@ -423,10 +436,11 @@ final class Bridge: NSObject, WKScriptMessageHandler {
         }
 
         if let id = body["id"] as? Int {
-            if method == "session:getDetail" || method == "getSessionDetail" {
-                // Transcript parsing can take a moment for large sessions; run
-                // it off the main thread and resolve asynchronously (the old
-                // Electron app used a worker for the same reason).
+            if method == "session:getDetail" || method == "getSessionDetail"
+                || method == "serviceStatus:get" || method == "getServiceStatus" {
+                // Heavy or network-bound invokes run off the main thread and
+                // resolve asynchronously (the old Electron app used a worker
+                // for session detail and a background fetch for status).
                 guard let webView = self.webView else { return }
                 DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                     let result = self?.core.handleInvoke(method, args: args) ?? NSNull()
