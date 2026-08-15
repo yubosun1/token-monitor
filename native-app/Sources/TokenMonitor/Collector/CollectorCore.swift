@@ -10,6 +10,14 @@ enum RefreshReason: String {
     case settingsChange
 }
 
+/// What a refresh must accomplish (PLAN.md Phase 4). Ordering by rawValue is
+/// the coalescing strength: a stronger request covers a weaker pending one.
+enum RefreshKind: Int {
+    case cheap = 1     // adapters + merge only (fingerprint-gated)
+    case full = 2      // + tokscale/history (fingerprint-gated reuse)
+    case fullForced = 3 // diagnostic: bypass fingerprint reuse entirely
+}
+
 /// Usage collector: tokscale (claude/codex/opencode/workbuddy) + the local
 /// proma/hanako/dsh adapters, assembled into the exact aggregate stats shape
 /// the Electron version's renderer consumes. Timer-driven: local adapters
@@ -24,6 +32,8 @@ final class Collector {
 
     private var timer: Timer?
     private var collecting = false
+    private var pendingRefresh: (kind: RefreshKind, reason: RefreshReason)?
+    private var settingsObserver: NSObjectProtocol?
     private var statsCache: [String: Any]?
     private var lastFullTickAt = Date.distantPast
     private var cachedTokscale: [String: [String: Any]]?
@@ -32,6 +42,28 @@ final class Collector {
     private var cachedPricing: [String: TokscalePricing] = [:]
     private var cachedPeriods: (today: [String: Any], month: [String: Any], allTime: [String: Any])?
     private var cachedClients: [String] = []
+
+    // Phase 3 per-client snapshots (collector-queue confined): fingerprint +
+    // rows + precomputed period/history contributions + the pricing signature
+    // they were computed with. An unchanged fingerprint AND pricing
+    // signature means the cached contributions are still valid.
+    private struct ClientSnapshot {
+        var fingerprint: String
+        var rows: [UsageCore.UsageRow]
+        var pricingSignature: String
+        var periods: [String: [String: Any]]
+        var history: [Adapters.HistoryContribution]
+    }
+    private var clientSnapshots: [String: ClientSnapshot] = [:]
+
+    // Phase 3 tokscale-side reuse: when the data files are unchanged, the
+    // last successful periods/history are reused without any subprocess.
+    private var tokscaleFingerprint: String?
+    private var cachedTokscaleDays: [HistoryCore.Day] = []
+    private var cachedTokscaleActiveTime: Double?
+
+    // Merged adapter periods, rebuilt only when an adapter client changes.
+    private var mergedAdapterPeriods: [String: [String: Any]]?
 
     private let tokscaleClientIds = Set(["claude", "codex", "opencode", "workbuddy"])
 
@@ -43,18 +75,23 @@ final class Collector {
         return refreshIdCounter
     }
 
-    func start() {
-        guard timer == nil else { return }
-        let interval = refreshInterval()
-        // The timer only triggers: every tick runs on the serial collector
-        // queue (the initial full tick and refreshNow() use the same queue),
-        // so scanning, parsing and the stats push never block the main thread.
-        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
-            self?.queue.async { [weak self] in self?.tick(full: false, reason: .timer) }
+    private func kindName(_ kind: RefreshKind) -> String {
+        switch kind {
+        case .cheap: return "cheap"
+        case .full: return "full"
+        case .fullForced: return "fullForced"
         }
-        RunLoop.main.add(timer, forMode: .common)
-        self.timer = timer
-        queue.async { [weak self] in self?.tick(full: true, reason: .startup) }
+    }
+
+    func start() {
+        rebuildTimer()
+        observeSettings()
+        // Startup path (PLAN.md Phase 4 item 4): a cheap tick publishes
+        // current adapter data immediately, and the expensive full
+        // tokscale/history work follows as the next coalesced request — the
+        // first push no longer waits for the full scan.
+        requestRefresh(.cheap, reason: .startup)
+        requestRefresh(.full, reason: .startup)
     }
 
     private func refreshInterval() -> TimeInterval {
@@ -67,8 +104,95 @@ final class Collector {
         return max(refreshInterval(), ms / 1000.0)
     }
 
+    /// Main-thread timer creation; rebuilds whenever refreshMs changes.
+    private func rebuildTimer() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        timer?.invalidate()
+        let interval = refreshInterval()
+        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
+            self?.requestRefresh(.cheap, reason: .timer)
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+    }
+
+    /// Settings-change handling (PLAN.md Phase 4): rebuild the timer for
+    /// refreshMs and coalesce a settings-change refresh for keys that affect
+    /// collection. Pricing-affecting keys invalidate the cached pricing and
+    /// snapshots so the next full tick recomputes costs and rescans tokscale.
+    private func observeSettings() {
+        guard settingsObserver == nil else { return }
+        settingsObserver = NotificationCenter.default.addObserver(
+            forName: SettingsStore.changedNotification,
+            object: nil,
+            queue: nil
+        ) { [weak self] note in
+            guard let self, let keys = note.userInfo?["keys"] as? [String] else { return }
+            if keys.contains("refreshMs") {
+                DispatchQueue.main.async { [weak self] in self?.rebuildTimer() }
+            }
+            var invalidatePricing = false
+            var forceFull = false
+            for key in keys {
+                switch key {
+                case "refreshMs", "collectionIntervalMs":
+                    break // intervals are re-read per tick / by rebuildTimer
+                case "customModelPricing":
+                    invalidatePricing = true
+                    forceFull = true
+                case "clients", "allTimeSince":
+                    forceFull = true
+                default:
+                    break
+                }
+            }
+            guard invalidatePricing || forceFull else { return }
+            self.queue.async { [weak self] in
+                guard let self else { return }
+                if invalidatePricing {
+                    self.cachedPricing.removeAll()
+                    self.clientSnapshots.removeAll()
+                    self.tokscaleFingerprint = nil
+                    self.mergedAdapterPeriods = nil
+                }
+                if forceFull {
+                    self.enqueue(.full, reason: .settingsChange)
+                }
+            }
+        }
+    }
+
     func refreshNow() {
-        queue.async { [weak self] in self?.tick(full: true, reason: .manual) }
+        requestRefresh(.full, reason: .manual)
+    }
+
+    // MARK: - Coalescing pump (PLAN.md Phase 4)
+
+    func requestRefresh(_ kind: RefreshKind, reason: RefreshReason) {
+        queue.async { [weak self] in self?.enqueue(kind, reason: reason) }
+    }
+
+    /// Queue-confined: keep at most one pending refresh; a stronger request
+    /// replaces a weaker one so manual/timer/settings collisions never queue
+    /// multiple full scans.
+    private func enqueue(_ kind: RefreshKind, reason: RefreshReason) {
+        if var pending = pendingRefresh {
+            if kind.rawValue > pending.kind.rawValue {
+                pendingRefresh = (kind, reason)
+            }
+            return
+        }
+        pendingRefresh = (kind, reason)
+        pump()
+    }
+
+    private func pump() {
+        while !collecting, let (kind, reason) = pendingRefresh {
+            pendingRefresh = nil
+            collecting = true
+            tick(kind: kind, reason: reason)
+            collecting = false
+        }
     }
 
     func latestStats() -> [String: Any]? {
@@ -83,14 +207,10 @@ final class Collector {
 
     // MARK: - Ticks
 
-    private func tick(full: Bool, reason: RefreshReason) {
-        guard !collecting else { return }
-        collecting = true
-        defer { collecting = false }
-
+    private func tick(kind: RefreshKind, reason: RefreshReason) {
         let id = nextRefreshId()
         PerfDiag.cpuMark(String(format: "tick-begin id=%d", id))
-        PerfDiag.log(String(format: "refresh id=%d reason=%@ full=%@", id, reason.rawValue, full ? "yes" : "no"))
+        PerfDiag.log(String(format: "refresh id=%d reason=%@ kind=%@", id, reason.rawValue, kindName(kind)))
 
         let settings = core.settings.snapshot()
         let clients = enabledClients(settings)
@@ -98,38 +218,116 @@ final class Collector {
 
         syncCustomPricing(settings["customModelPricing"])
 
-        let fullTick = full || Date().timeIntervalSince(lastFullTickAt) >= fullInterval()
+        // fullForced and the diagnostic env var bypass fingerprint reuse.
+        let forced = kind == .fullForced
+            || ProcessInfo.processInfo.environment["TOKEN_MONITOR_FORCE_RESCAN"] != nil
+        // cheap ticks escalate to a full scan once collectionIntervalMs has
+        // elapsed since the last full tick — except the very first startup
+        // tick, which must stay cheap so the first push is not delayed by
+        // the tokscale/history work (PLAN.md Phase 4 item 4).
+        let fullTick: Bool
+        switch kind {
+        case .full, .fullForced:
+            fullTick = true
+        case .cheap:
+            fullTick = statsCache != nil && Date().timeIntervalSince(lastFullTickAt) >= fullInterval()
+        }
+        // First startup tick: resolve pricing from the disk cache only and
+        // never spawn (cold lookups were measured at ~5s each); the follow-up
+        // full tick resolves whatever the disk cache missed.
+        let resolvePricing = !(reason == .startup && statsCache == nil)
+        TokscaleRunner.shared.allowSubprocessLookup = resolvePricing
+        defer { TokscaleRunner.shared.allowSubprocessLookup = true }
         let collectedAt = Date()
 
-        // Local adapters: cheap, refresh every tick. Each adapter is timed
-        // separately so a slow source is identifiable in the diag log.
+        // Adapter clients: fingerprint first (Phase 3). Only clients whose
+        // source files changed are re-read and recomputed; unchanged clients
+        // keep their cached rows and period/history contributions.
+        var adapterChanged = false
         var adapterRows: [String: [UsageCore.UsageRow]] = [:]
         for client in ["proma", "hanako", "dsh"] where clients.contains(client) {
-            let span = PerfDiag.span("adapter-" + client)
-            switch client {
-            case "proma": adapterRows["proma"] = Adapters.collectPromaRows()
-            case "hanako": adapterRows["hanako"] = Adapters.collectHanakoRows()
-            case "dsh": adapterRows["dsh"] = Adapters.collectDshRows()
-            default: break
+            let span = PerfDiag.span("source-" + client)
+            let fp = SourceScanner.fingerprint(client: client, roots: SourceScanner.adapterRoots(client))
+            if let snap = clientSnapshots[client],
+               snap.fingerprint == fp.signature,
+               pricingSignature(for: snap.rows) == snap.pricingSignature {
+                adapterRows[client] = snap.rows
+                span.end()
+                continue
             }
+            let rows = collectAdapterRows(client)
+            for (model, p) in Adapters.pricingMap(forRows: rows) where cachedPricing[model] == nil {
+                cachedPricing[model] = p
+            }
+            let pricing = cachedPricing
+            let periods = adapterPeriodsFor(client: client, rows: rows, pricing: pricing, now: collectedAt, allTimeSince: allTimeSinceMs(settings))
+            let history = Adapters.historyContributions(rows: rows, client: client, pricingByModel: pricing)
+            clientSnapshots[client] = ClientSnapshot(
+                fingerprint: fp.signature,
+                rows: rows,
+                pricingSignature: pricingSignature(for: rows),
+                periods: periods,
+                history: history
+            )
+            adapterChanged = true
+            adapterRows[client] = rows
+            PerfDiag.log(String(format: "source %@: changed (%d files), recomputed", client, fp.files.count))
             span.end()
         }
         cachedAdapterRows = adapterRows
 
-        var pricing = cachedPricing
-        for (_, rows) in adapterRows {
-            for (model, p) in Adapters.pricingMap(forRows: rows) where pricing[model] == nil {
-                pricing[model] = p
+        // Merge the adapter contributions only when one of them changed.
+        if adapterChanged {
+            let span = PerfDiag.span("aggregate-adapter-periods")
+            var contributions: [[String: [String: Any]]] = []
+            for client in ["proma", "hanako", "dsh"] where clients.contains(client) {
+                if let snap = clientSnapshots[client] {
+                    contributions.append(snap.periods)
+                }
             }
+            var merged: [String: [String: Any]] = [:]
+            merged["today"] = UsageCore.mergePeriods(contributions.map { $0["today"] ?? UsageCore.emptyPeriod() })
+            merged["month"] = UsageCore.mergePeriods(contributions.map { $0["month"] ?? UsageCore.emptyPeriod() })
+            merged["allTime"] = UsageCore.mergePeriods(contributions.map { $0["allTime"] ?? UsageCore.emptyPeriod() })
+            mergedAdapterPeriods = merged
+            span.end()
         }
-        cachedPricing = pricing
 
         // tokscale clients: full scan at most every collectionIntervalMs.
+        // When the source files are unchanged, reuse the previous snapshot
+        // without starting any subprocess (Phase 3). TOKEN_MONITOR_FORCE_RESCAN
+        // (diagnostic level only, not on the normal refresh path) forces a
+        // real rescan.
         let tokscaleClients = clients.filter { tokscaleClientIds.contains($0) }
+        var tokscaleChanged = false
         if fullTick {
-            let span = PerfDiag.span("tokscale-periods")
-            if let periods = scanTokscalePeriods(clients: tokscaleClients, settings: settings, now: collectedAt) {
-                cachedTokscale = periods
+            let span = PerfDiag.span("source-tokscale")
+            let roots = tokscaleClients.flatMap { SourceScanner.tokscaleRoots($0) }
+            let fp = SourceScanner.fingerprint(client: "tokscale", roots: roots)
+            if !forced, fp.signature == tokscaleFingerprint, cachedTokscale != nil {
+                PerfDiag.log("source tokscale: fingerprint unchanged, reusing snapshot (no subprocess)")
+            } else {
+                let periodSpan = PerfDiag.span("tokscale-periods")
+                var periodScanSucceeded = false
+                if let periods = scanTokscalePeriods(clients: tokscaleClients, settings: settings, now: collectedAt) {
+                    cachedTokscale = periods
+                    tokscaleChanged = true
+                    periodScanSucceeded = true
+                }
+                periodSpan.end()
+                let graphSpan = PerfDiag.span("tokscale-graph")
+                if let (days, activeTime) = scanTokscaleGraph(clients: tokscaleClients) {
+                    cachedTokscaleDays = days
+                    cachedTokscaleActiveTime = activeTime
+                    tokscaleChanged = true
+                }
+                graphSpan.end()
+                // Record the fingerprint only after a successful period scan:
+                // a failed scan keeps the old fingerprint so the next tick
+                // retries instead of reusing stale data forever.
+                if periodScanSucceeded || tokscaleClients.isEmpty {
+                    tokscaleFingerprint = fp.signature
+                }
                 lastFullTickAt = Date()
             }
             span.end()
@@ -137,23 +335,50 @@ final class Collector {
 
         let tokscalePeriods = cachedTokscale ?? ["today": UsageCore.emptyPeriod(), "month": UsageCore.emptyPeriod(), "allTime": UsageCore.emptyPeriod()]
 
-        let aggregateSpan = PerfDiag.span("aggregate-periods")
-        let adapterPeriods = adapterPeriodsFor(clients: clients, rowsByClient: adapterRows, pricing: pricing, now: collectedAt, allTimeSince: allTimeSinceMs(settings))
+        // Final merge only when an input changed; a no-change tick reuses the
+        // previously merged periods outright (the ~1s merge was the largest
+        // steady-state cost).
+        let mergeSpan = PerfDiag.span("merge-periods")
+        let today: [String: Any]
+        let month: [String: Any]
+        let allTime: [String: Any]
+        if adapterChanged || tokscaleChanged || cachedPeriods == nil {
+            let adapterToday = mergedAdapterPeriods?["today"] ?? UsageCore.emptyPeriod()
+            let adapterMonth = mergedAdapterPeriods?["month"] ?? UsageCore.emptyPeriod()
+            let adapterAllTime = mergedAdapterPeriods?["allTime"] ?? UsageCore.emptyPeriod()
+            today = UsageCore.mergePeriods([tokscalePeriods["today"] ?? UsageCore.emptyPeriod(), adapterToday])
+            month = UsageCore.mergePeriods([tokscalePeriods["month"] ?? UsageCore.emptyPeriod(), adapterMonth])
+            allTime = UsageCore.mergePeriods([tokscalePeriods["allTime"] ?? UsageCore.emptyPeriod(), adapterAllTime])
+            cachedPeriods = (today, month, allTime)
+        } else {
+            let cached = cachedPeriods!
+            today = cached.today
+            month = cached.month
+            allTime = cached.allTime
+        }
+        mergeSpan.end()
 
-        let today = UsageCore.mergePeriods([tokscalePeriods["today"] ?? UsageCore.emptyPeriod()] + adapterPeriods.map { $0["today"] ?? UsageCore.emptyPeriod() })
-        let month = UsageCore.mergePeriods([tokscalePeriods["month"] ?? UsageCore.emptyPeriod()] + adapterPeriods.map { $0["month"] ?? UsageCore.emptyPeriod() })
-        let allTime = UsageCore.mergePeriods([tokscalePeriods["allTime"] ?? UsageCore.emptyPeriod()] + adapterPeriods.map { $0["allTime"] ?? UsageCore.emptyPeriod() })
-        aggregateSpan.end()
-
-        // History: graph scan on full ticks, adapter contributions every tick.
-        if fullTick {
+        // History: rebuilt from cached contributions (no subprocess) whenever
+        // an input changed; the dashboard event only fires on full ticks.
+        let historyChanged = adapterChanged || tokscaleChanged
+        if fullTick || historyChanged {
             let span = PerfDiag.span("history")
-            let built = buildHistory(clients: clients, tokscaleClients: tokscaleClients, adapterRows: adapterRows, pricing: pricing, now: collectedAt)
+            var days = cachedTokscaleDays
+            var contributions: [Adapters.HistoryContribution] = []
+            for client in ["proma", "hanako", "dsh"] where clients.contains(client) {
+                if let snap = clientSnapshots[client] {
+                    contributions += snap.history
+                }
+            }
+            HistoryCore.mergeAdapterContributions(contributions, into: &days)
+            let built = HistoryCore.normalizeHistory(days: days, todayKey: nil, totalActiveTimeMsOverride: cachedTokscaleActiveTime)
             stateLock.lock()
             cachedHistory = built
             stateLock.unlock()
             span.end()
-            core.push("dashboard:historyChanged", NSNull())
+            if fullTick {
+                core.push("dashboard:historyChanged", NSNull())
+            }
         }
         let history = cachedHistory
 
@@ -169,7 +394,6 @@ final class Collector {
         )
         statsSpan.end()
 
-        cachedPeriods = (today, month, allTime)
         cachedClients = clients
         // Content-signature comparison: when nothing about the periods or
         // client statuses changed, update the cache but skip the push so the
@@ -267,46 +491,63 @@ final class Collector {
         }
     }
 
-    private func adapterPeriodsFor(clients: [String], rowsByClient: [String: [UsageCore.UsageRow]], pricing: [String: TokscalePricing], now: Date, allTimeSince: Double) -> [[String: [String: Any]]] {
-        var periods: [[String: [String: Any]]] = []
-        for client in clients where rowsByClient[client] != nil {
-            let rows = rowsByClient[client] ?? []
-            let todayStart = Adapters.localDayStart(now)
-            let monthStart = Adapters.localMonthStart(now)
-            var entryRows: [String: [UsageCore.UsageRow]] = [:]
-            entryRows["today"] = Adapters.periodRows(rows: rows, sinceMs: todayStart, client: client, includeUndated: false)
-            entryRows["month"] = Adapters.periodRows(rows: rows, sinceMs: monthStart, client: client, includeUndated: false)
-            entryRows["allTime"] = Adapters.periodRows(rows: rows, sinceMs: allTimeSince, client: client, includeUndated: true)
-
-            var clientPeriods: [String: [String: Any]] = [:]
-            for (period, rows) in entryRows {
-                // Attach costs from the shared pricing map.
-                var priced = rows
-                for i in 0..<priced.count {
-                    priced[i].cost = Adapters.estimatedRowCost(row: priced[i], pricingByModel: pricing) ?? 0
-                }
-                clientPeriods[period] = UsageCore.extractPeriod(entries: priced)
-            }
-            periods.append(clientPeriods)
+    private func collectAdapterRows(_ client: String) -> [UsageCore.UsageRow] {
+        switch client {
+        case "proma": return Adapters.collectPromaRows()
+        case "hanako": return Adapters.collectHanakoRows()
+        case "dsh": return Adapters.collectDshRows()
+        default: return []
         }
-        return periods
     }
 
-    private func buildHistory(clients: [String], tokscaleClients: [String], adapterRows: [String: [UsageCore.UsageRow]], pricing: [String: TokscalePricing], now: Date) -> [String: Any] {
-        var days: [HistoryCore.Day] = []
-        var totalActiveTimeOverride: Double? = nil
-        if !tokscaleClients.isEmpty {
-            if let graph = try? TokscaleRunner.shared.graph(clients: tokscaleClients) {
-                days = HistoryCore.parseTokscaleGraph(graph)
-                totalActiveTimeOverride = graph.timeMetrics?.totalActiveTimeMs
+    /// Single-client period contributions (today/month/allTime) with costs
+    /// attached from the shared pricing map — cached per client in Phase 3.
+    private func adapterPeriodsFor(client: String, rows: [UsageCore.UsageRow], pricing: [String: TokscalePricing], now: Date, allTimeSince: Double) -> [String: [String: Any]] {
+        let todayStart = Adapters.localDayStart(now)
+        let monthStart = Adapters.localMonthStart(now)
+        var entryRows: [String: [UsageCore.UsageRow]] = [:]
+        entryRows["today"] = Adapters.periodRows(rows: rows, sinceMs: todayStart, client: client, includeUndated: false)
+        entryRows["month"] = Adapters.periodRows(rows: rows, sinceMs: monthStart, client: client, includeUndated: false)
+        entryRows["allTime"] = Adapters.periodRows(rows: rows, sinceMs: allTimeSince, client: client, includeUndated: true)
+
+        var clientPeriods: [String: [String: Any]] = [:]
+        for (period, periodRows) in entryRows {
+            var priced = periodRows
+            for i in 0..<priced.count {
+                priced[i].cost = Adapters.estimatedRowCost(row: priced[i], pricingByModel: pricing) ?? 0
             }
+            clientPeriods[period] = UsageCore.extractPeriod(entries: priced)
         }
-        var contributions: [Adapters.HistoryContribution] = []
-        for client in clients where adapterRows[client] != nil {
-            contributions += Adapters.historyContributions(rows: adapterRows[client] ?? [], client: client, pricingByModel: pricing)
+        return clientPeriods
+    }
+
+    /// Stable signature of the pricing entries relevant to a client's rows.
+    /// When it changes (e.g. a model's pricing resolved for the first time),
+    /// the cached contributions are recomputed from the cached rows — no
+    /// file re-read needed.
+    private func pricingSignature(for rows: [UsageCore.UsageRow]) -> String {
+        var parts: [String] = []
+        var seen = Set<String>()
+        for row in rows {
+            let key = (row.model ?? "").trimmingCharacters(in: .whitespaces).lowercased()
+            guard seen.insert(key).inserted, let p = cachedPricing[key] else { continue }
+            let pricing = p.pricing
+            parts.append(String(format: "%@:%.10g:%.10g:%.10g:%.10g",
+                                key,
+                                pricing?.inputCostPerToken ?? -1,
+                                pricing?.outputCostPerToken ?? -1,
+                                pricing?.cacheReadInputTokenCost ?? -1,
+                                pricing?.cacheCreationInputTokenCost ?? -1))
         }
-        HistoryCore.mergeAdapterContributions(contributions, into: &days)
-        return HistoryCore.normalizeHistory(days: days, todayKey: nil, totalActiveTimeMsOverride: totalActiveTimeOverride)
+        return parts.joined(separator: "|")
+    }
+
+    /// One graph scan for the tokscale clients: per-day contributions plus
+    /// the total-active-time override (Phase 3 caches both).
+    private func scanTokscaleGraph(clients: [String]) -> (days: [HistoryCore.Day], activeTimeMs: Double?)? {
+        guard !clients.isEmpty else { return ([], nil) }
+        guard let graph = try? TokscaleRunner.shared.graph(clients: clients) else { return nil }
+        return (HistoryCore.parseTokscaleGraph(graph), graph.timeMetrics?.totalActiveTimeMs)
     }
 
     private func buildStats(settings: [String: Any], clients: [String], today: [String: Any], month: [String: Any], allTime: [String: Any], history: [String: Any]?, collectedAt: Date) -> [String: Any] {

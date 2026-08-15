@@ -13,6 +13,62 @@ final class TokscaleRunner {
     /// processes one refresh started).
     private var spawnCount = 0
 
+    /// Live subprocess registry (PLAN.md Phase 4): the app terminates every
+    /// in-flight scan on quit so no orphaned tokscale process survives.
+    private var runningProcesses: [Process] = []
+
+    /// When false, pricing(for:) resolves from the in-memory/disk caches
+    /// only and never spawns (first startup tick fast path). Set by the
+    /// collector queue per tick; single-writer, no lock needed.
+    var allowSubprocessLookup = true
+
+    // MARK: - Persistent pricing cache (PLAN.md Phase 3)
+
+    /// Pricing lookups persist across launches so the first tick does not
+    /// pay a cold `tokscale pricing` subprocess (measured ~5s, network) for
+    /// every distinct model. The same 6h TTL as the in-memory cache applies;
+    /// entries are re-validated lazily on lookup.
+    private var pricingDiskURL: URL {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return support.appendingPathComponent("Token Monitor", isDirectory: true)
+            .appendingPathComponent("pricing-cache.json")
+    }
+
+    private struct DiskPricingEntry: Codable {
+        let fetchedAtMs: Double
+        let pricing: TokscalePricing
+    }
+
+    private func loadDiskPricingCache() {
+        guard let data = try? Data(contentsOf: pricingDiskURL),
+              let dict = try? JSONDecoder().decode([String: DiskPricingEntry].self, from: data) else { return }
+        lock.lock()
+        for (key, entry) in dict {
+            pricingCache[key] = (entry.pricing, Date(timeIntervalSince1970: entry.fetchedAtMs / 1000))
+        }
+        lock.unlock()
+        if PerfDiag.enabled && !dict.isEmpty {
+            PerfDiag.log(String(format: "pricing cache loaded %d entries", dict.count))
+        }
+    }
+
+    private func persistPricingCache() {
+        lock.lock()
+        var dict: [String: DiskPricingEntry] = [:]
+        for (key, entry) in pricingCache {
+            dict[key] = DiskPricingEntry(fetchedAtMs: entry.fetchedAt.timeIntervalSince1970 * 1000, pricing: entry.pricing)
+        }
+        lock.unlock()
+        guard let data = try? JSONEncoder().encode(dict) else { return }
+        do {
+            let dir = pricingDiskURL.deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try data.write(to: pricingDiskURL, options: .atomic)
+        } catch {
+            NSLog("[pricing] disk cache write failed: %@", String(describing: error))
+        }
+    }
+
     private func binaryURL() -> URL? {
         if let bundled = Bundle.main.url(forResource: "tokscale", withExtension: nil), FileManager.default.isExecutableFile(atPath: bundled.path) {
             return bundled
@@ -53,6 +109,14 @@ final class TokscaleRunner {
 
         let started = Date()
         try process.run()
+        lock.lock()
+        runningProcesses.append(process)
+        lock.unlock()
+        defer {
+            lock.lock()
+            runningProcesses.removeAll { $0 === process }
+            lock.unlock()
+        }
         let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
         let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
@@ -106,8 +170,10 @@ final class TokscaleRunner {
         return try JSONDecoder().decode(TokscaleGraph.self, from: Data(String(result.stdout[start...]).utf8))
     }
 
-    /// Cached `tokscale pricing` lookup (mirrors the 6h TTL the JS side used).
+    /// Cached `tokscale pricing` lookup: in-memory → persistent disk cache
+    /// (same 6h TTL as the JS side used) → one subprocess fetch.
     func pricing(for modelId: String) -> TokscalePricing? {
+        if pricingCache.isEmpty { loadDiskPricingCache() }
         let key = modelId.trimmingCharacters(in: .whitespaces).lowercased()
         guard !key.isEmpty else { return nil }
         lock.lock()
@@ -116,10 +182,12 @@ final class TokscaleRunner {
             return cached.pricing
         }
         lock.unlock()
+        guard allowSubprocessLookup else { return nil }
         guard let fetched = fetchPricing(modelId) else { return nil }
         lock.lock()
         pricingCache[key] = (fetched, Date())
         lock.unlock()
+        persistPricingCache()
         return fetched
     }
 
@@ -128,6 +196,16 @@ final class TokscaleRunner {
               result.exitCode == 0,
               let start = result.stdout.firstIndex(of: "{") else { return nil }
         return try? JSONDecoder().decode(TokscalePricing.self, from: Data(String(result.stdout[start...]).utf8))
+    }
+
+    /// Terminate every in-flight tokscale subprocess (app termination path).
+    func terminateAll() {
+        lock.lock()
+        let processes = runningProcesses
+        lock.unlock()
+        for process in processes {
+            process.terminate()
+        }
     }
 }
 
@@ -142,3 +220,4 @@ enum CollectorError: LocalizedError {
         }
     }
 }
+

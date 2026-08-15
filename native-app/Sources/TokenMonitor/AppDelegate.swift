@@ -40,6 +40,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, BridgeDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         ShortcutController.shared.stop()
+        // No orphaned scanner processes (PLAN.md Phase 4 item 6).
+        TokscaleRunner.shared.terminateAll()
         SingleInstanceCoordinator.shared.release()
         if let showMainWindowObserver {
             DistributedNotificationCenter.default().removeObserver(showMainWindowObserver)

@@ -13,22 +13,39 @@ final class LimitsRuntime {
     private let queue = DispatchQueue(label: "limits", qos: .utility)
     private let lock = NSLock()
     private var timer: Timer?
+    private var settingsObserver: NSObjectProtocol?
     private var currentSummary: JSON = ["providers": [Any](), "updatedAt": NSNull(), "refreshMs": 300000]
     private var refreshing = false
 
     func start() {
-        guard timer == nil else { return }
+        rebuildTimer()
+        // limitsRefreshMs changes take effect without a restart (PLAN.md
+        // Phase 4: the timer used to capture the interval at launch only).
+        settingsObserver = NotificationCenter.default.addObserver(
+            forName: SettingsStore.changedNotification,
+            object: nil,
+            queue: nil
+        ) { [weak self] note in
+            guard let self, let keys = note.userInfo?["keys"] as? [String],
+                  keys.contains("limitsRefreshMs") else { return }
+            DispatchQueue.main.async { [weak self] in self?.rebuildTimer() }
+        }
+        // First refresh shortly after launch so the Home limits module has
+        // data without waiting a full interval.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            self?.refresh()
+        }
+    }
+
+    private func rebuildTimer() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        timer?.invalidate()
         let interval = refreshInterval()
         let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
             self?.refresh()
         }
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
-        // First refresh shortly after launch so the Home limits module has
-        // data without waiting a full interval.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
-            self?.refresh()
-        }
     }
 
     private func refreshInterval() -> TimeInterval {

@@ -174,9 +174,11 @@ struct TokscaleGraph: Decodable {
     }
 }
 
-/// `tokscale pricing <model> --json --no-spinner` output.
-struct TokscalePricing: Decodable {
-    struct Pricing: Decodable {
+/// `tokscale pricing <model> --json --no-spinner` output. Codable so the
+/// 6h-TTL cache can persist across launches (Phase 3: pricing lookups no
+/// longer pay a ~5s cold subprocess+network spawn on every first tick).
+struct TokscalePricing: Codable {
+    struct Pricing: Codable {
         let inputCostPerToken: Double?
         let outputCostPerToken: Double?
         let cacheReadInputTokenCost: Double?

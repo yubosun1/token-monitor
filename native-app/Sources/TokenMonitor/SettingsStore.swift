@@ -6,6 +6,11 @@ import Foundation
 final class SettingsStore {
     static let shared = SettingsStore()
 
+    /// In-process change notification (PLAN.md Phase 4): posted after every
+    /// update with the changed keys, so the collector can coalesce a
+    /// settings-change refresh and rebuild its timer when refreshMs moves.
+    static let changedNotification = Notification.Name("TokenMonitor.settingsChanged")
+
     private let fileManager = FileManager.default
     let fileURL: URL
     private var values: [String: Any]
@@ -135,7 +140,8 @@ final class SettingsStore {
         return values
     }
 
-    /// Shallow merge + persist; returns the merged settings.
+    /// Shallow merge + persist; returns the merged settings. Posts
+    /// changedNotification with the changed keys (empty patch → no post).
     @discardableResult
     func update(_ patch: [String: Any]) -> [String: Any] {
         lock.lock()
@@ -143,6 +149,13 @@ final class SettingsStore {
         let merged = values
         lock.unlock()
         persist(merged)
+        if !patch.isEmpty {
+            NotificationCenter.default.post(
+                name: Self.changedNotification,
+                object: nil,
+                userInfo: ["keys": Array(patch.keys)]
+            )
+        }
         return merged
     }
 

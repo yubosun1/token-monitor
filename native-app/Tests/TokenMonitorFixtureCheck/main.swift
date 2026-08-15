@@ -354,6 +354,75 @@ func runChecks() {
     }
 }
 
+    // File fingerprint behavior (PLAN.md Phase 3 test matrix): no change,
+    // append, overwrite, delete, atomic rename, new subdirectory.
+    do {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("tm-fp-test-\(UUID().uuidString)")
+        try! fm.createDirectory(at: root.appendingPathComponent("sub", isDirectory: true), withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+        let a = root.appendingPathComponent("a.jsonl")
+        let b = root.appendingPathComponent("b.jsonl")
+        try! Data("one\n".utf8).write(to: a)
+        try! Data("two\n".utf8).write(to: b)
+        let sig0 = SourceScanner.fingerprint(client: "proma", roots: [root.path]).signature
+        check(!sig0.isEmpty, "fingerprint non-empty for two files")
+
+        // No change -> identical signature.
+        let sig0b = SourceScanner.fingerprint(client: "proma", roots: [root.path]).signature
+        checkEqual(sig0b, sig0, "fingerprint stable without changes")
+
+        // Append -> signature changes (size/mtime).
+        let fh = try! FileHandle(forWritingTo: a)
+        fh.seekToEndOfFile()
+        fh.write(Data("more\n".utf8))
+        try! fh.close()
+        let sig1 = SourceScanner.fingerprint(client: "proma", roots: [root.path]).signature
+        check(sig1 != sig0, "append changes signature")
+
+        // Overwrite same size (mtime still changes) -> signature changes.
+        try! Data("three\n".utf8).write(to: b)
+        let sig2 = SourceScanner.fingerprint(client: "proma", roots: [root.path]).signature
+        check(sig2 != sig1, "overwrite changes signature")
+
+        // Delete -> signature changes.
+        try! fm.removeItem(at: b)
+        let sig3 = SourceScanner.fingerprint(client: "proma", roots: [root.path]).signature
+        check(sig3 != sig2, "delete changes signature")
+
+        // New file -> signature changes.
+        let c = root.appendingPathComponent("c.jsonl")
+        try! Data("four\n".utf8).write(to: c)
+        let sig4 = SourceScanner.fingerprint(client: "proma", roots: [root.path]).signature
+        check(sig4 != sig3, "new file changes signature")
+
+        // Atomic rename (write tmp then rename) of a NEW name -> signature
+        // changes; renaming a file away and back to the same name is
+        // correctly stable (same path, size and mtime).
+        let tmp = root.appendingPathComponent("e.jsonl.tmp")
+        try! Data("five\n".utf8).write(to: tmp)
+        let e = root.appendingPathComponent("e.jsonl")
+        try! fm.moveItem(at: tmp, to: e)
+        let sig5 = SourceScanner.fingerprint(client: "proma", roots: [root.path]).signature
+        check(sig5 != sig4, "atomic rename of a new name changes signature")
+
+        // New subdirectory with a file -> signature changes.
+        try! Data("five\n".utf8).write(to: root.appendingPathComponent("sub/d.jsonl"))
+        let sig6 = SourceScanner.fingerprint(client: "proma", roots: [root.path]).signature
+        check(sig6 != sig5, "new nested file changes signature")
+
+        // Extension filter: non-jsonl files do not participate (proma).
+        try! Data("noise".utf8).write(to: root.appendingPathComponent("ignore.txt"))
+        let sig7 = SourceScanner.fingerprint(client: "proma", roots: [root.path]).signature
+        checkEqual(sig7, sig6, "unrelated file types are ignored")
+
+        // Missing roots produce an empty, stable fingerprint.
+        let missing = SourceScanner.fingerprint(client: "proma", roots: ["/nonexistent/tm-path"])
+        check(missing.isEmpty, "missing roots yield empty fingerprint")
+        let missing2 = SourceScanner.fingerprint(client: "proma", roots: ["/nonexistent/tm-path"])
+        checkEqual(missing2.signature, missing.signature, "empty fingerprint is stable")
+    }
+
 runChecks()
 print("fixture checks: \(checkCount) checks, \(failureCount) failures")
 if failureCount > 0 { exit(1) }
