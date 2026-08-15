@@ -57,6 +57,17 @@
     return addDaysUTC(k, -dayOfWeekMon(k));
   }
 
+  // Brightness levels for a single value. The token heatmap keys brightness off
+  // absolute token amounts — 1M / 10M / 100M bands — so one giant day doesn't
+  // flatten the rest of the grid into level 1. Cost keeps the ratio-of-max scale,
+  // since dollar amounts have no universal magnitude.
+  const TOKEN_BAND_TOP = [1_000_000, 10_000_000, 100_000_000]; // tops of levels 1, 2, 3
+
+  function tokenHeatmapIntensity(value) {
+    const v = n(value);
+    return v >= 100_000_000 ? 4 : v >= 10_000_000 ? 3 : v >= 1_000_000 ? 2 : v > 0 ? 1 : 0;
+  }
+
   function heatmapIntensity(value, max) {
     if (max <= 0) return 0;
     const ratio = n(value) / max;
@@ -68,10 +79,9 @@
   // without relying on optional wire-level intensity fields.
   function computeHeatmapIntensities(daily) {
     const rows = Array.isArray(daily) ? daily : [];
-    const maxTokens = Math.max(0, ...rows.map((row) => n(row?.tokens)));
     const maxCost = Math.max(0, ...rows.map((row) => n(row?.cost)));
     return rows.map((row) => {
-      const tokenIntensity = heatmapIntensity(row?.tokens, maxTokens);
+      const tokenIntensity = tokenHeatmapIntensity(row?.tokens);
       const costIntensity = heatmapIntensity(row?.cost, maxCost);
       return { ...row, intensity: costIntensity, costIntensity, tokenIntensity };
     });
@@ -519,10 +529,11 @@
     return `<svg class="dash-chart" viewBox="0 0 ${model.width} ${model.height}" width="100%" height="100%">${grid}${parts}</svg>`;
   }
 
-  // Brightness level for a single value against a scale max, mirroring
-  // heatmapIntensity so the legend and the cells always agree.
-  function heatmapLevelForValue(value, max) {
-    return heatmapIntensity(value, max);
+  // Brightness level for a single value against a scale max, mirroring the cell
+  // algorithms so the legend and the grid always agree. Token metric uses the
+  // absolute amount bands; cost keeps the ratio-of-max scale.
+  function heatmapLevelForValue(value, max, metric = 'tokens') {
+    return metric === 'cost' ? heatmapIntensity(value, max) : tokenHeatmapIntensity(value);
   }
 
   // Value-labelled 5-swatch scale for a heatmap. `maxValue` is the largest value
@@ -530,7 +541,7 @@
   // cell brightness reads as a concrete number (in cost mode especially, where a
   // single big day can compress the rest of the grid into the dim levels).
   // `accentLevel`/`accentValue` (optional) mark one level — e.g. today's — with a
-  // ring and its actual formatted value so the reader can cross-reference.
+  // highlighted swatch and its actual formatted value so the reader can cross-reference.
   function heatmapLevelLegend(options) {
     const o = Object.assign(
       { maxValue: 0, metric: 'tokens', format: (v) => String(v), accentLevel: null, accentValue: null },
@@ -542,9 +553,13 @@
     const items = [0, 1, 2, 3, 4].map((level) => {
       const isAccent = accentLevel !== null && accentLevel === level;
       const accentOn = isAccent && o.accentValue !== null && o.accentValue !== undefined;
+      // Token scale labels the absolute band tops (1M / 10M / 100M); cost scale
+      // labels the ratio bands (≤ max·level/4) so both match their cell colours.
       const label = level === 4
         ? o.format(max)
-        : level === 0 ? '0' : `≤ ${o.format(max * level / 4)}`;
+        : level === 0 ? '0'
+          : o.metric === 'cost' ? `≤ ${o.format(max * level / 4)}`
+            : `≤ ${o.format(TOKEN_BAND_TOP[level - 1])}`;
       const shown = accentOn ? o.format(o.accentValue) : label;
       const title = accentOn ? ` title="${escapeXml(shown)}"` : '';
       return `<span class="heat-lvl-item${isAccent ? ' is-accent' : ''}"${title}><span class="heat-lvl-swatch lvl-${level}" aria-hidden="true"></span><span class="heat-lvl-label">${escapeXml(shown)}</span></span>`;
@@ -553,7 +568,7 @@
   }
 
   function heatmapSvg(model, options) {
-    const o = Object.assign({ titleOf: () => '', monthLabel: (m) => m.label, radius: 3, glowFilterId: '', spotlightId: '', spotlightRadius: 86, initialHidden: false, accentLevel: null }, options || {});
+    const o = Object.assign({ titleOf: () => '', monthLabel: (m) => m.label, radius: 3, glowFilterId: '', spotlightId: '', spotlightRadius: 86, initialHidden: false }, options || {});
     const botPad = 16;
     const pitch = (model.cell || 11) + (model.gap || 2);
     const glowFilterId = String(o.glowFilterId || '');
@@ -570,11 +585,8 @@
     }
     const defs = defsParts.length ? `<defs>${defsParts.join('')}</defs>` : '';
     const initialVisibility = o.initialHidden ? ' data-motion-hidden="true" opacity="0"' : '';
-    const accentLevel = Number(o.accentLevel);
-    const accent = Number.isInteger(accentLevel) && accentLevel >= 0 && accentLevel <= 4 ? accentLevel : null;
     const cellAttrs = (c) => {
-      const isAccent = accent !== null && c.intensity === accent;
-      return `class="heat lvl-${c.intensity}${isAccent ? ' lvl-highlight' : ''}" data-d="${escapeXml(c.date)}" data-t="${svgRound(c.tokens || 0)}" data-cost="${svgRound(c.cost || 0)}"${isAccent ? ' data-bright="1"' : ''} x="${svgRound(c.x)}" y="${svgRound(c.y)}" width="${svgRound(c.size)}" height="${svgRound(c.size)}" rx="${svgRound(Math.max(0, Number(o.radius) || 0))}"${initialVisibility}`;
+      return `class="heat lvl-${c.intensity}" data-d="${escapeXml(c.date)}" data-t="${svgRound(c.tokens || 0)}" data-cost="${svgRound(c.cost || 0)}" x="${svgRound(c.x)}" y="${svgRound(c.y)}" width="${svgRound(c.size)}" height="${svgRound(c.size)}" rx="${svgRound(Math.max(0, Number(o.radius) || 0))}"${initialVisibility}`;
     };
     const cells = (model.cells || []).map((c) =>
       `<rect ${cellAttrs(c)}>${o.titleOf(c) ? `<title>${escapeXml(o.titleOf(c))}</title>` : ''}</rect>`

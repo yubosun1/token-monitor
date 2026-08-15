@@ -48,6 +48,21 @@ final class BridgeCore {
         for pusher in snapshot { pusher(event, payload) }
     }
 
+    /// Settings as the renderer may see them: credentials are stripped and the
+    /// UI-facing credential state is injected. `deepseekApiKeyConfigured` is
+    /// what the renderer's `renderDeepseekStatus` reads; `deepseekApiKeySource`
+    /// tells it where the key came from ("settings" when stored locally).
+    func rendererSettingsSnapshot() -> [String: Any] {
+        var snapshot = settings.snapshot()
+        snapshot.removeValue(forKey: "deepseekApiKey")
+        snapshot.removeValue(forKey: "opencodeProfiles")
+        snapshot.removeValue(forKey: "opencodeCookie")
+        let hasDeepseekKey = !CredentialStore.shared.deepseekApiKey().isEmpty
+        snapshot["deepseekApiKeySource"] = hasDeepseekKey ? "settings" : ""
+        snapshot["deepseekApiKeyConfigured"] = hasDeepseekKey
+        return snapshot
+    }
+
     func emptyPeriod() -> [String: Any] {
         return [
             "totalTokens": 0, "totalCost": 0, "costUsd": 0,
@@ -77,14 +92,7 @@ final class BridgeCore {
     func handleInvoke(_ method: String, args: [Any]) -> Any {
         switch method {
         case "settings:get":
-            var snapshot = settings.snapshot()
-            // Credentials never cross to the renderer; the UI learns about
-            // them through the dedicated opencode:* and status handlers.
-            snapshot.removeValue(forKey: "deepseekApiKey")
-            snapshot.removeValue(forKey: "opencodeProfiles")
-            snapshot.removeValue(forKey: "opencodeCookie")
-            snapshot["deepseekApiKeySource"] = !CredentialStore.shared.deepseekApiKey().isEmpty ? "settings" : ""
-            return snapshot
+            return rendererSettingsSnapshot()
 
         case "settings:update":
             guard var patch = args.first as? [String: Any] else { return settings.snapshot() }
@@ -114,8 +122,8 @@ final class BridgeCore {
             if patch["windowToggleShortcut"] != nil {
                 ShortcutController.shared.apply(settings: merged)
             }
-            push("settings:push", merged)
-            return merged
+            push("settings:push", rendererSettingsSnapshot())
+            return rendererSettingsSnapshot()
 
         case "stats:get":
             return Collector.shared.latestStats() ?? emptyStats()
@@ -203,13 +211,10 @@ final class BridgeCore {
 
         case "subscriptions:save":
             let list = Subscriptions.normalizeSubscriptions(args.first)
-            var patch = settings.update(["subscriptions": list, "subscriptionsCacheHub": ""])
-            patch.removeValue(forKey: "deepseekApiKey")
-            patch.removeValue(forKey: "opencodeProfiles")
-            patch.removeValue(forKey: "opencodeCookie")
-            push("settings:push", patch)
+            settings.update(["subscriptions": list, "subscriptionsCacheHub": ""])
+            push("settings:push", rendererSettingsSnapshot())
             push("stats:push", Collector.shared.latestStats() ?? emptyStats())
-            return patch
+            return rendererSettingsSnapshot()
 
         case "subscriptions:adoptOrphans", "subscriptions:discardOrphans":
             // Local mode has no hub: orphans are a hub-join artifact.
@@ -309,7 +314,7 @@ final class BridgeCore {
     func handleSend(_ method: String, args: [Any], window: NSWindow?) {
         switch method {
         case "window:contentReady":
-            push("settings:push", settings.snapshot())
+            push("settings:push", rendererSettingsSnapshot())
             push("stats:push", Collector.shared.latestStats() ?? emptyStats())
         case "window:viewState", "setViewState":
             if let patch = args.first as? [String: Any] {

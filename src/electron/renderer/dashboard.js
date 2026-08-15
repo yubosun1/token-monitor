@@ -17,7 +17,6 @@ const els = {
   body: document.body,
   themeToggle: document.getElementById('themeToggle'),
   refreshBtn: document.getElementById('refreshBtn'),
-  minBtn: document.getElementById('minBtn'),
   closeBtn: document.getElementById('closeBtn'),
   tabs: Array.from(document.querySelectorAll('.dash-tab')),
   trendsPane: document.getElementById('trendsPane'),
@@ -492,7 +491,7 @@ function renderActivity() {
   if (metricMax > 0) {
     const today = metricRows.find((row) => String(row.date).slice(0, 10) === todayKey());
     todayValue = Number(today?.[metricField]) || 0;
-    todayLevel = charts.heatmapLevelForValue(todayValue, metricMax);
+    todayLevel = charts.heatmapLevelForValue(todayValue, metricMax, state.heatmapMetric);
     els.heatmapLegend.innerHTML = charts.heatmapLevelLegend({
       maxValue: metricMax,
       metric: state.heatmapMetric,
@@ -504,7 +503,7 @@ function renderActivity() {
     els.heatmapLegend.innerHTML = '';
   }
   els.heatmap.innerHTML = heat.cells.length
-    ? charts.heatmapSvg(heat, { monthLabel: (m) => monthLabel(m.label), initialHidden: hideHeatmapForEntry, accentLevel: todayLevel })
+    ? charts.heatmapSvg(heat, { monthLabel: (m) => monthLabel(m.label), initialHidden: hideHeatmapForEntry })
     : '';
   animateHeatmapEntry();
   state.dayMap = new Map((state.history?.daily || []).map((d) => [String(d.date).slice(0, 10), { tokens: Number(d.tokens || 0), cost: Number(d.cost || 0) }]));
@@ -625,7 +624,10 @@ async function boot() {
     window.TokenMonitorCurrency.configureRates(settings.currencyRatesEffective);
   }
   state.flat = settings.dashboardFlat === true;
-  state.heatmapMetric = settings.heatmapMetric || 'tokens';
+  // Tokens is the dashboard default. A persisted heatmapMetric only applies when
+  // it was explicitly chosen in the current UI (heatmapMetricExplicit) — the
+  // legacy "cost" default inherited from the Electron settings is treated as unset.
+  state.heatmapMetric = settings.heatmapMetricExplicit === true ? (settings.heatmapMetric || 'tokens') : 'tokens';
   applyAppearance(settings);
   applyTranslations();
   populateRangeSelect();
@@ -667,7 +669,7 @@ window.tokenMonitor.onSettingsPush?.((next) => {
     applyReduceMotionPreference(reduceMotion);
     needsRender = true;
   }
-  const nextMetric = next.heatmapMetric || 'tokens';
+  const nextMetric = next.heatmapMetricExplicit === true ? (next.heatmapMetric || 'tokens') : 'tokens';
   if (state.heatmapMetric !== nextMetric) {
     state.heatmapMetric = nextMetric;
     needsRender = true;
@@ -707,11 +709,12 @@ els.heatmapMetricBtns.forEach((b) => b.addEventListener('click', () => {
   state.heatmapMetric = b.dataset.val;
   state.motion = 'none';
   render();
-  window.tokenMonitor.updateSettings({ heatmapMetric: state.heatmapMetric });
+  // Record an explicit user choice: boot only honours heatmapMetric when this
+  // flag is set, so the legacy "cost" default is never re-applied on launch.
+  window.tokenMonitor.updateSettings({ heatmapMetric: state.heatmapMetric, heatmapMetricExplicit: true });
 }));
 els.themeToggle.addEventListener('click', () => { state.flat = !state.flat; els.body.classList.toggle('flat', state.flat); window.tokenMonitor.updateSettings({ dashboardFlat: state.flat }); });
 els.refreshBtn.addEventListener('click', refresh);
-els.minBtn.addEventListener('click', () => window.tokenMonitor.dashboard.minimize());
 els.closeBtn.addEventListener('click', () => window.tokenMonitor.dashboard.close());
 
 els.chart.addEventListener('mousemove', (ev) => {

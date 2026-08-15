@@ -8,3 +8,6 @@ native-app/.build/
 native-app/.tmp/
 native-app/.cache/
 native-app/build/
+
+# WorkBuddy workspace data
+.workbuddy/
