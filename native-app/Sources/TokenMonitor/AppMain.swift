@@ -13,12 +13,16 @@ public func runTokenMonitorApp() {
     PerfDiag.log(String(format: "process launched pid=%d", getpid()))
     PerfDiag.cpuMark("launch")
 
-    // Single-instance ownership (PLAN.md Phase 1) must be settled before
-    // any status item, window, WebView or collector is created. A losing
-    // second launch asks the running instance to surface its window and
-    // exits without touching AppKit or starting any background work.
-    guard SingleInstanceCoordinator.shared.acquire() else {
-        SingleInstanceCoordinator.shared.notifyExistingInstance()
+    // Single-instance ownership (PLAN.md Phase 1 + review round Phase 6):
+    // register the cross-process activation receiver BEFORE competing for
+    // the lock, so a second launch racing our initialization cannot lose
+    // its activation request. A losing launch notifies the winner and exits
+    // without touching AppKit or starting any background work.
+    let instanceCoordinator = SingleInstanceCoordinator.shared
+    instanceCoordinator.registerActivationObserver()
+    guard instanceCoordinator.acquire() else {
+        instanceCoordinator.notifyExistingInstance()
+        instanceCoordinator.unregisterActivationObserver()
         return
     }
 
@@ -32,4 +36,3 @@ public func runTokenMonitorApp() {
     // the flock immediately (crash/force-quit releases it via the kernel).
     SingleInstanceCoordinator.shared.release()
 }
-

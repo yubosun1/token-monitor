@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import Darwin
 
 /// Enforces a single running app instance (PLAN.md Phase 1).
@@ -13,13 +14,24 @@ import Darwin
 /// A second launch that loses the race posts a DistributedNotificationCenter
 /// notification asking the running instance to show its main window, then
 /// exits without ever creating a window, WebView, status item or collector.
+///
+/// Activation buffering (review round Phase 6): every launch registers the
+/// cross-process activation receiver BEFORE competing for the flock, so an
+/// activation arriving while the winner's AppDelegate is still initializing
+/// is buffered and consumed once the show callback is installed — the
+/// request can no longer be lost to initialization timing.
 final class SingleInstanceCoordinator {
     static let shared = SingleInstanceCoordinator()
 
     /// Cross-process notification: a second launch asked us to surface.
     static let showMainWindowNotification = Notification.Name("com.javis.tokenmonitor.showMainWindow")
 
+    private let stateLock = NSLock()
     private var lockFD: Int32 = -1
+    private var activationObserver: NSObjectProtocol?
+    private var observerRegistered = false
+    private var pendingActivation = false
+    private var showCallback: (() -> Void)?
 
     private var lockURL: URL {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -57,10 +69,71 @@ final class SingleInstanceCoordinator {
         return true
     }
 
-    /// Ask the running instance to show its main window.
+    // MARK: - Activation receiver / buffering (review round Phase 6)
+
+    /// Register the cross-process activation receiver. Must be called before
+    /// competing for the flock so early activation requests are buffered
+    /// instead of dropped. Idempotent per process.
+    func registerActivationObserver() {
+        stateLock.lock()
+        guard !observerRegistered else { stateLock.unlock(); return }
+        observerRegistered = true
+        stateLock.unlock()
+        activationObserver = DistributedNotificationCenter.default().addObserver(
+            forName: Self.showMainWindowNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.handleRemoteActivation()
+        }
+    }
+
+    /// Remove the receiver (loser before exit; winner on termination).
+    /// Idempotent; does not clear an installed show callback.
+    func unregisterActivationObserver() {
+        stateLock.lock()
+        if let activationObserver {
+            DistributedNotificationCenter.default().removeObserver(activationObserver)
+        }
+        activationObserver = nil
+        observerRegistered = false
+        stateLock.unlock()
+    }
+
+    /// Handle a remote activation request: fire the show callback when it is
+    /// installed, otherwise buffer the request (multiple requests coalesce).
+    func handleRemoteActivation() {
+        stateLock.lock()
+        if let callback = showCallback {
+            stateLock.unlock()
+            callback()
+        } else {
+            pendingActivation = true
+            stateLock.unlock()
+        }
+    }
+
+    /// Install the AppDelegate show callback and immediately consume any
+    /// buffered activation (exactly once, no matter how many arrived).
+    func installShowCallback(_ callback: @escaping () -> Void) {
+        stateLock.lock()
+        showCallback = callback
+        let pending = pendingActivation
+        pendingActivation = false
+        stateLock.unlock()
+        if pending { callback() }
+    }
+
+    /// Ask the running instance to show its main window. The distributed
+    /// notification is the primary channel; activating the owner PID read
+    /// from the lock file is a best-effort extra fallback (the flock — not
+    /// the PID — remains the ownership authority).
     func notifyExistingInstance() {
         DistributedNotificationCenter.default().postNotificationName(
             Self.showMainWindowNotification, object: nil, userInfo: nil, deliverImmediately: true)
+        if let pidText = try? String(contentsOf: lockURL, encoding: .utf8),
+           let pid = pid_t(pidText.trimmingCharacters(in: .whitespacesAndNewlines)),
+           let running = NSRunningApplication(processIdentifier: pid) {
+            running.activate(options: [.activateIgnoringOtherApps])
+        }
     }
 
     /// Release ownership on the normal termination path (idempotent).
@@ -72,4 +145,3 @@ final class SingleInstanceCoordinator {
         PerfDiag.log("single-instance: released lock")
     }
 }
-

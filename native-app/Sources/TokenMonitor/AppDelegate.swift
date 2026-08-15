@@ -4,17 +4,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, BridgeDelegate {
     private var statusItem: NSStatusItem?
     private var mainWindowController: DashboardWindowController?
     private var dashboardWindowController: DashboardViewWindowController?
-    private var showMainWindowObserver: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // A second launch that lost the single-instance lock asks us to
-        // surface the main window (PLAN.md Phase 1).
-        let center = DistributedNotificationCenter.default()
-        showMainWindowObserver = center.addObserver(
-            forName: SingleInstanceCoordinator.showMainWindowNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
+        // surface the main window. Requests that arrived before this point
+        // were buffered by the coordinator and fire exactly once here
+        // (review round Phase 6).
+        SingleInstanceCoordinator.shared.installShowCallback { [weak self] in
             self?.showMainWindow(center: false)
         }
         // The renderer opens the dashboard from the Activity/Trends modules
@@ -86,10 +82,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, BridgeDelegate {
         ShortcutController.shared.stop()
         // No orphaned scanner processes (PLAN.md Phase 4 item 6).
         TokscaleRunner.shared.terminateAll()
+        SingleInstanceCoordinator.shared.unregisterActivationObserver()
         SingleInstanceCoordinator.shared.release()
-        if let showMainWindowObserver {
-            DistributedNotificationCenter.default().removeObserver(showMainWindowObserver)
-        }
     }
 
     // MARK: - Status item

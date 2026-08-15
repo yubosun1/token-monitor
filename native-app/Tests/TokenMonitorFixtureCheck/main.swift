@@ -858,8 +858,43 @@ func runVisibilityTests() {
     }
 }
 
+// MARK: - Single-instance activation buffering tests (review round Phase 6)
+
+func runSingleInstanceTests() {
+    let coordinator = SingleInstanceCoordinator.shared
+    // S1: activations before the show callback is installed are buffered and
+    // consumed exactly once on install (multiple requests coalesce).
+    do {
+        var fired = 0
+        coordinator.handleRemoteActivation()
+        coordinator.handleRemoteActivation()
+        coordinator.handleRemoteActivation()
+        checkEqual(fired, 0, "S1 buffered before callback installed")
+        coordinator.installShowCallback { fired += 1 }
+        checkEqual(fired, 1, "S1 pending activation consumed exactly once")
+    }
+    // S2: after install, each activation fires immediately.
+    do {
+        var fired = 0
+        coordinator.installShowCallback { fired += 1 }
+        coordinator.handleRemoteActivation()
+        coordinator.handleRemoteActivation()
+        checkEqual(fired, 2, "S2 post-install activations fire immediately")
+    }
+    // S3: unregister is idempotent and does not clear the callback.
+    do {
+        var fired = 0
+        coordinator.installShowCallback { fired += 1 }
+        coordinator.unregisterActivationObserver()
+        coordinator.unregisterActivationObserver()
+        coordinator.handleRemoteActivation()
+        checkEqual(fired, 1, "S3 callback survives unregister")
+    }
+}
+
 runChecks()
 runCollectorStateTests()
 runVisibilityTests()
+runSingleInstanceTests()
 print("fixture checks: \(checkCount) checks, \(failureCount) failures")
 if failureCount > 0 { exit(1) }
