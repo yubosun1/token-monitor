@@ -478,94 +478,107 @@ final class Collector {
         var tokscaleChanged = false
         if fullCheck {
             lastFullCheckAt = now
-            let fp = tokscaleClients.isEmpty
-                ? SourceScanner.Fingerprint(files: [], signature: "")
-                : environment.tokscaleFingerprint(tokscaleClients)
-            let sortedClients = tokscaleClients.sorted()
-            var contextChanged = true
-            if let snap = tokscaleSnapshot {
-                contextChanged = snap.fingerprint != fp.signature
-                    || snap.clients != sortedClients
-                    || snap.allTimeSinceMs != allTimeSince
-                    || snap.dayKey != dayKey
-                    || snap.monthKey != monthKey
-                    || snap.pricingGeneration != pricingGeneration
-            }
-            if forced || contextChanged {
-                let span = PerfDiag.span("source-tokscale")
-                var snap = tokscaleSnapshot ?? TokscaleSnapshot(
-                    fingerprint: fp.signature, clients: sortedClients,
-                    allTimeSinceMs: allTimeSince, dayKey: dayKey, monthKey: monthKey,
-                    pricingGeneration: pricingGeneration,
-                    periods: Self.emptyTokscalePeriods(), periodsSuccess: false,
-                    graphDays: [], graphActiveTime: nil, graphSuccess: false
-                )
-                // Periods and graph scan independently; each keeps its own
-                // success flag so a partial failure retries only the failed
-                // part on later full checks.
-                let periodSpan = PerfDiag.span("tokscale-periods")
-                if let periods = environment.tokscalePeriods(tokscaleClients, settings, now) {
-                    snap.periods = periods
-                    snap.periodsSuccess = true
-                    periodFailures = 0
-                    tokscaleChanged = true
-                } else {
-                    periodFailures += 1
-                    periodRetryAfter = now.addingTimeInterval(Self.backoff(failures: periodFailures))
-                }
-                periodSpan.end()
-                let graphSpan = PerfDiag.span("tokscale-graph")
-                if let (days, activeTime) = environment.tokscaleGraph(tokscaleClients) {
-                    snap.graphDays = days
-                    snap.graphActiveTime = activeTime
-                    snap.graphSuccess = true
-                    graphFailures = 0
-                    tokscaleChanged = true
-                } else {
-                    graphFailures += 1
-                    graphRetryAfter = now.addingTimeInterval(Self.backoff(failures: graphFailures))
-                }
-                graphSpan.end()
-                snap.fingerprint = fp.signature
-                snap.clients = sortedClients
-                snap.allTimeSinceMs = allTimeSince
-                snap.dayKey = dayKey
-                snap.monthKey = monthKey
-                snap.pricingGeneration = pricingGeneration
-                tokscaleSnapshot = snap
-                span.end()
+            if tokscaleClients.isEmpty {
+                tokscaleSnapshot = nil
             } else {
-                PerfDiag.log("source tokscale: fingerprint unchanged, reusing snapshot (no subprocess)")
-                var snap = tokscaleSnapshot!
-                if !snap.periodsSuccess, now >= periodRetryAfter {
-                    let span = PerfDiag.span("tokscale-periods-retry")
+                let fp = environment.tokscaleFingerprint(tokscaleClients)
+                let sortedClients = tokscaleClients.sorted()
+                var contextChanged = true
+                if let snap = tokscaleSnapshot {
+                    contextChanged = snap.fingerprint != fp.signature
+                        || snap.clients != sortedClients
+                        || snap.allTimeSinceMs != allTimeSince
+                        || snap.dayKey != dayKey
+                        || snap.monthKey != monthKey
+                        || snap.pricingGeneration != pricingGeneration
+                }
+                if forced || contextChanged {
+                    let span = PerfDiag.span("source-tokscale")
+                    // Fresh validity for the new context (round-4 Phase 1):
+                    // the VALUES start from the last-known-good snapshot so the
+                    // UI can keep showing degraded data, but the SUCCESS flags
+                    // restart as unknown. An old context's success must never
+                    // mark the new context valid, or a part that failed under
+                    // the new context would never retry (its flag would stay
+                    // true forever). Each part flips its own flag: success
+                    // stores the value and clears the failure count, failure
+                    // keeps the last-known-good value but marks the part for
+                    // retry and advances only its own backoff.
+                    var next = TokscaleSnapshot(
+                        fingerprint: fp.signature, clients: sortedClients,
+                        allTimeSinceMs: allTimeSince, dayKey: dayKey, monthKey: monthKey,
+                        pricingGeneration: pricingGeneration,
+                        periods: tokscaleSnapshot?.periods ?? Self.emptyTokscalePeriods(),
+                        periodsSuccess: false,
+                        graphDays: tokscaleSnapshot?.graphDays ?? [],
+                        graphActiveTime: tokscaleSnapshot?.graphActiveTime,
+                        graphSuccess: false
+                    )
+                    let periodSpan = PerfDiag.span("tokscale-periods")
                     if let periods = environment.tokscalePeriods(tokscaleClients, settings, now) {
-                        snap.periods = periods
-                        snap.periodsSuccess = true
+                        next.periods = periods
+                        next.periodsSuccess = true
                         periodFailures = 0
                         tokscaleChanged = true
                     } else {
+                        next.periodsSuccess = false
                         periodFailures += 1
                         periodRetryAfter = now.addingTimeInterval(Self.backoff(failures: periodFailures))
                     }
-                    span.end()
-                }
-                if !snap.graphSuccess, now >= graphRetryAfter {
-                    let span = PerfDiag.span("tokscale-graph-retry")
+                    periodSpan.end()
+                    let graphSpan = PerfDiag.span("tokscale-graph")
                     if let (days, activeTime) = environment.tokscaleGraph(tokscaleClients) {
-                        snap.graphDays = days
-                        snap.graphActiveTime = activeTime
-                        snap.graphSuccess = true
+                        next.graphDays = days
+                        next.graphActiveTime = activeTime
+                        next.graphSuccess = true
                         graphFailures = 0
                         tokscaleChanged = true
                     } else {
+                        next.graphSuccess = false
                         graphFailures += 1
                         graphRetryAfter = now.addingTimeInterval(Self.backoff(failures: graphFailures))
                     }
+                    graphSpan.end()
+                    tokscaleSnapshot = next
                     span.end()
+                } else {
+                    PerfDiag.log("source tokscale: fingerprint unchanged, reusing snapshot (no subprocess)")
+                    var snap = tokscaleSnapshot!
+                    if !snap.periodsSuccess, now >= periodRetryAfter {
+                        let span = PerfDiag.span("tokscale-periods-retry")
+                        if let periods = environment.tokscalePeriods(tokscaleClients, settings, now) {
+                            snap.periods = periods
+                            snap.periodsSuccess = true
+                            periodFailures = 0
+                            tokscaleChanged = true
+                        } else {
+                            periodFailures += 1
+                            periodRetryAfter = now.addingTimeInterval(Self.backoff(failures: periodFailures))
+                        }
+                        span.end()
+                    }
+                    if !snap.graphSuccess, now >= graphRetryAfter {
+                        let span = PerfDiag.span("tokscale-graph-retry")
+                        if let (days, activeTime) = environment.tokscaleGraph(tokscaleClients) {
+                            snap.graphDays = days
+                            snap.graphActiveTime = activeTime
+                            snap.graphSuccess = true
+                            graphFailures = 0
+                            tokscaleChanged = true
+                        } else {
+                            graphFailures += 1
+                            graphRetryAfter = now.addingTimeInterval(Self.backoff(failures: graphFailures))
+                        }
+                        span.end()
+                    }
+                    tokscaleSnapshot = snap
                 }
-                tokscaleSnapshot = snap
             }
+        } else if tokscaleClients.isEmpty {
+            // No tokscale clients enabled: nothing to scan and nothing to
+            // keep — a cheap tick after disabling every tokscale client must
+            // not resurrect the old snapshot's data.
+            tokscaleSnapshot = nil
         }
 
         let tokscalePeriods = tokscaleSnapshot?.periods ?? Self.emptyTokscalePeriods()
