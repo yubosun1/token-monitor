@@ -105,6 +105,10 @@ final class Collector {
     // Coordination state (short lock only).
     private let coordLock = NSLock()
     private var workerRunning = false
+    /// Kind of the tick currently executing, nil while idle (round-4
+    /// Phase 4). Owned by coordLock; updated atomically when the worker
+    /// takes an item and when it goes idle — including every early return.
+    private var runningKind: RefreshKind?
     private var pendingQueue: [RefreshRequest] = []
     private var pendingInvalidations = CollectorInvalidations()
     /// True once the very first tick published stats (cheap-first startup
@@ -221,6 +225,7 @@ final class Collector {
 
     struct CollectorInvalidations {
         var purgePricing = false
+        var isEmpty: Bool { !purgePricing }
     }
 
     // MARK: - Scheduling
@@ -323,16 +328,31 @@ final class Collector {
     /// coordination lock immediately — no waiting for a running tick.
     ///
     /// Merge rules:
+    ///  - while a full/fullForced tick is RUNNING, an arriving cheap
+    ///    refresh is covered by it and dropped outright (round-4 Phase 4)
+    ///    instead of queueing a redundant follow-up — unless an
+    ///    invalidation arrived after the running tick consumed its
+    ///    snapshot, in which case one follow-up still runs so the purge
+    ///    applies;
     ///  - the very first startup cheap tick is never merged with: the
     ///    startup full request queues behind it so the first stats push
     ///    stays cheap (cheap-first startup);
     ///  - otherwise a request is dropped when an equally strong or stronger
     ///    request is already queued, and replaces the weakest queued
-    ///    request otherwise, so bursts collapse to one necessary refresh.
+    ///    request otherwise, so bursts collapse to one necessary refresh;
+    ///    strong requests (settings-change / manual full, fullForced) are
+    ///    never dropped.
     func requestRefresh(_ kind: RefreshKind, reason: RefreshReason) {
         coordLock.lock()
         var spawnWorker = false
-        if pendingQueue.isEmpty {
+        if workerRunning, let running = runningKind,
+           (running == .full || running == .fullForced), kind == .cheap {
+            // Covered by the running source check; keep at most one cheap
+            // follow-up when a purge invalidation still needs a tick.
+            if pendingQueue.isEmpty && !pendingInvalidations.isEmpty {
+                pendingQueue.append(RefreshRequest(kind: kind, reason: reason))
+            }
+        } else if pendingQueue.isEmpty {
             pendingQueue.append(RefreshRequest(kind: kind, reason: reason))
         } else {
             let firstStartupCheap = pendingQueue.count == 1
@@ -379,10 +399,15 @@ final class Collector {
             coordLock.lock()
             guard let pending = pendingQueue.first else {
                 workerRunning = false
+                runningKind = nil
                 coordLock.unlock()
                 return
             }
             pendingQueue.removeFirst()
+            // runningKind is updated atomically at take-time and at idle, so
+            // requestRefresh always sees the kind actually executing; the
+            // tick itself runs without the lock.
+            runningKind = pending.kind
             let invalidations = pendingInvalidations
             pendingInvalidations = CollectorInvalidations()
             coordLock.unlock()
