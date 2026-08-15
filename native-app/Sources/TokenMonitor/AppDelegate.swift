@@ -36,6 +36,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, BridgeDelegate {
         if !trayMode || diag {
             showMainWindow(center: true)
         }
+        // Dev aid: TOKEN_MONITOR_DIAG_LIFECYCLE=1 opens/closes the dashboard
+        // repeatedly, logging the footprint after every teardown so Phase 5
+        // memory behavior is measurable without manual clicking.
+        if diag, ProcessInfo.processInfo.environment["TOKEN_MONITOR_DIAG_LIFECYCLE"] != nil {
+            runDashboardLifecycleProbe()
+        }
+    }
+
+    /// Diag-only: open the dashboard, close it (same path as the renderer
+    /// close button), and log the post-teardown footprint per cycle.
+    private func runDashboardLifecycleProbe() {
+        let total = Int(ProcessInfo.processInfo.environment["TOKEN_MONITOR_DIAG_LIFECYCLE_CYCLES"] ?? "20") ?? 20
+        var cycles = 0
+        func cycle() {
+            guard cycles < total else {
+                NSLog("[diag] lifecycle probe done (%d cycles)", total)
+                return
+            }
+            cycles += 1
+            PerfDiag.log(String(format: "lifecycle cycle %d open", cycles))
+            openDashboard()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                guard let self, let controller = self.dashboardWindowController else {
+                    NSLog("[diag] lifecycle probe: dashboard controller missing, aborting")
+                    return
+                }
+                // Same path the renderer close button takes.
+                controller.bridgeDidRequestClose(controller.bridge)
+                self.dashboardWindowController = nil
+                PerfDiag.footprintMark(String(format: "lifecycle-cycle-%02d", cycles))
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { cycle() }
+            }
+        }
+        // Wait for the startup scans to settle before the first cycle.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15, execute: cycle)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
