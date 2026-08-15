@@ -42,6 +42,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, BridgeDelegate {
         if diag, ProcessInfo.processInfo.environment["TOKEN_MONITOR_DIAG_LIFECYCLE"] != nil {
             runDashboardLifecycleProbe()
         }
+        // Dev aid: TOKEN_MONITOR_DIAG_SETTINGS=1 lowers refreshMs at runtime
+        // through the same settings:update path the renderer uses, so the
+        // Phase 4 timer hot-reload is observable in the tick cadence.
+        if diag, ProcessInfo.processInfo.environment["TOKEN_MONITOR_DIAG_SETTINGS"] != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 20) {
+                BridgeCore.shared.settings.update(["refreshMs": 8000])
+                NSLog("[diag] settings probe: refreshMs -> 8000 (expect 8s tick cadence)")
+            }
+        }
     }
 
     /// Diag-only: open the dashboard, close it (same path as the renderer

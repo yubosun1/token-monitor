@@ -94,12 +94,18 @@ final class Collector {
     }
 
     private func refreshInterval() -> TimeInterval {
-        let ms = (core.settings.snapshot()["refreshMs"] as? Double) ?? 15000
+        // doubleValue tolerates Int/Double/String payloads: renderer patches
+        // arrive as JSON NSNumbers, but in-process callers may store Swift
+        // Ints, which an as? Double read would reject and silently fall back
+        // to the default (PLAN.md Phase 4 timer hot-reload).
+        let raw = UsageCore.doubleValue(core.settings.snapshot()["refreshMs"])
+        let ms = raw > 0 ? raw : 15000
         return max(3.0, ms / 1000.0)
     }
 
     private func fullInterval() -> TimeInterval {
-        let ms = (core.settings.snapshot()["collectionIntervalMs"] as? Double) ?? 300000
+        let raw = UsageCore.doubleValue(core.settings.snapshot()["collectionIntervalMs"])
+        let ms = raw > 0 ? raw : 300000
         return max(refreshInterval(), ms / 1000.0)
     }
 
@@ -108,6 +114,7 @@ final class Collector {
         dispatchPrecondition(condition: .onQueue(.main))
         timer?.invalidate()
         let interval = refreshInterval()
+        PerfDiag.log(String(format: "timer rebuild interval=%.1fs", interval))
         let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
             self?.requestRefresh(.cheap, reason: .timer)
         }

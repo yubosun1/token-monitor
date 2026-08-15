@@ -49,7 +49,10 @@ final class LimitsRuntime {
     }
 
     private func refreshInterval() -> TimeInterval {
-        let ms = (core.settings.snapshot()["limitsRefreshMs"] as? Double) ?? 300000
+        // Tolerant numeric read (Int/Double/String), same reason as the
+        // collector timer: in-process updates may store Swift Ints.
+        let raw = UsageCore.doubleValue(core.settings.snapshot()["limitsRefreshMs"])
+        let ms = raw > 0 ? raw : 300000
         return max(30.0, ms / 1000.0)
     }
 
