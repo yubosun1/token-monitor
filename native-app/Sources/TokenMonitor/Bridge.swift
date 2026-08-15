@@ -227,21 +227,6 @@ final class BridgeCore {
             settings.update(["subscriptionsOrphaned": [Any]()])
             return ["ok": true]
 
-        case "appUpdate:getState":
-            return ["status": "disabled", "available": false, "version": NSNull()]
-
-        case "appUpdate:checkNow", "appUpdate:download", "appUpdate:install", "appUpdate:dismiss":
-            return ["status": "disabled"]
-
-        case "diagnostics:generate":
-            return ["ok": false]
-
-        case "tokscale:getStatus", "tokscale:checkNpm", "tokscale:downloadFromNpm", "tokscale:resetToBundled":
-            return ["ok": false, "available": false]
-
-        case "export:now", "export:pickAutoDir":
-            return ["ok": false, "canceled": true]
-
         case "floatingBubble:expand", "floatingBubble:peek", "floatingBubble:collapseIfIdle",
              "floatingBubble:setCollapsedSize", "floatingBubble:move":
             return [String: Any]()

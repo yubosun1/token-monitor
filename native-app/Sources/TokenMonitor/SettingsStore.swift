@@ -65,7 +65,6 @@ final class SettingsStore {
             "glassOpacity": 68,
             "glassBlur": 32,
             "systemGlass": true,
-            "windowsBackdrop": "acrylic",
             "reduceMotion": "system",
             // Collectors
             "refreshMs": 15000,

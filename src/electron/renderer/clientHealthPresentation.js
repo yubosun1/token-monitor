@@ -14,7 +14,6 @@
   const DIAGNOSTIC_TONES = {
     'source-missing': 'muted',
     'no-usage-observed': 'muted',
-    'wsl-detected-no-data': 'neutral',
     'sync-failed': 'warn',
     'sync-timeout': 'warn',
     'sync-spawn-failed': 'warn',
@@ -26,8 +25,7 @@
     'sync-timeout': 'collection',
     'sync-spawn-failed': 'collection',
     'sync-exit-error': 'collection',
-    'no-usage-observed': 'data',
-    'wsl-detected-no-data': 'data'
+    'no-usage-observed': 'data'
   };
   const QUIET_WHEN_UNAVAILABLE = new Set(['source-missing', 'no-usage-observed']);
 
@@ -98,7 +96,7 @@
   }
 
   // Local paths explain canonical logical checks; they never change their state
-  // or denominator. Pathless evidence such as wsl-home survives the merge.
+  // or denominator. Pathless evidence survives the merge.
   function mergeSourceChecks(checks, sources) {
     const groups = new Map();
     const canonicalIds = new Set();

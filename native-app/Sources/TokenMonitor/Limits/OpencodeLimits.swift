@@ -47,10 +47,11 @@ enum OpencodeLimits {
         // account, which licenses reading quota from one credential while
         // identity and balance come from the other.
         //
-        // The key OpenCode keeps in auth.json needs no setup. It is re-read
-        // every tick (never stored), and tracked as its own account until a
-        // saved profile claims it (same key stored verbatim), which keeps the
-        // zero-config path alive.
+        // The key OpenCode keeps in auth.json needs no setup. Native settings
+        // currently expose cookie profiles, not the upstream credential-binding
+        // flow, so an ambient key is published only when there is no configured
+        // account. Otherwise the same local sign-in appears as a second Home row
+        // with no identity-safe way for the user to merge it.
         let ambientKey = readGoApiKey(env)
 
         // Credential sources: enabled profiles > env var (appended if not present) > ambient.
@@ -69,7 +70,7 @@ enum OpencodeLimits {
         // account's own toggle owns it.
         let ambientEnabled = parseAmbientEnv(env["TOKEN_MONITOR_OPENCODE_AMBIENT"], default: true)
         let ambientClaimed = cookies.contains { $0.apiKey == ambientKey }
-        if !ambientKey.isEmpty && !ambientClaimed && ambientEnabled {
+        if !ambientKey.isEmpty && cookies.isEmpty && !ambientClaimed && ambientEnabled {
             cookies.append((opencodeAmbientAccountName, "", ambientKey, true))
         }
 

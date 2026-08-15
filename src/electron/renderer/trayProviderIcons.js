@@ -9,15 +9,7 @@
     claude: '../../../assets/icons/tray-claude.svg',
     'claude-brand': '../../../assets/icons/claude.svg',
     codex: '../../../assets/icons/tray-codex.svg',
-    chatgpt: '../../../assets/icons/codex.svg',
-    hermes: '../../../assets/icons/hermes-agent.svg',
-    kimi: '../../../assets/icons/kimi.svg',
-    mimo: '../../../assets/icons/xiaomi.svg',
-    grok: '../../../assets/icons/grok.svg',
-    micode: '../../../assets/icons/xiaomi.svg',
-    zcode: '../../../assets/icons/zai.svg',
-    zaiteam: '../../../assets/icons/zai.svg',
-    thirdparty: '../../../assets/icons/newapi.svg'
+    chatgpt: '../../../assets/icons/codex.svg'
   };
 
   function trayProviderIconSources(clientIds) {

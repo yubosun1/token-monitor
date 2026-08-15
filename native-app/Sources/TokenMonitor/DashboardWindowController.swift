@@ -242,6 +242,12 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
             scriptCount: document.scripts.length,
             totalTokens: document.getElementById('totalTokens')?.textContent || null,
             status: document.getElementById('status')?.textContent || null,
+            breakdownBars: [...document.querySelectorAll('.dash-breakdown-col')].map(col =>
+              [...col.querySelectorAll('.dash-bd-bar-bg')].map(bar => {
+                const rect = bar.getBoundingClientRect();
+                return [Math.round(rect.x), Math.round(rect.width)];
+              })
+            ),
             resources: performance.getEntriesByType('resource').map(r => ({ name: r.name.split('/').pop(), ok: r.transferSize > 0 || r.responseStatus > 0 })).filter(r => !r.ok).slice(0, 10)
           });
         })()
@@ -271,9 +277,27 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
                 NSLog("[diag] resource probe: %@", String(describing: error))
             }
         }
+        if self is DashboardViewWindowController {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+                guard let self, let webView = self.webView else { return }
+                let geometryProbe = """
+                JSON.stringify([...document.querySelectorAll('.dash-breakdown-col')].map(col =>
+                  [...col.querySelectorAll('.dash-bd-bar-bg')].map(bar => {
+                    const rect = bar.getBoundingClientRect();
+                    return [Math.round(rect.x), Math.round(rect.width)];
+                  })
+                ))
+                """
+                webView.evaluateJavaScript(geometryProbe) { result, _ in
+                    if let string = result as? String {
+                        NSLog("[diag] dashboard bars: %@", string)
+                    }
+                }
+            }
+        }
         // Dev aid: exercise the dashboard window so its own render errors
         // surface in the same log.
-        if ProcessInfo.processInfo.environment["TOKEN_MONITOR_DIAG"] != nil {
+        if self is DashboardWindowController {
             DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
                 guard let self, let webView = self.webView else { return }
                 webView.evaluateJavaScript("window.tokenMonitor && window.tokenMonitor.openDashboard()", completionHandler: nil)
@@ -291,12 +315,26 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
                   out.settingsOpen = !document.getElementById('settingsPanel')?.classList.contains('hidden');
                   out.settingsSections = [...document.querySelectorAll('.settings-section-toggle')].map(b => b.getAttribute('data-settings-section'));
                   out.clientRows = [...document.querySelectorAll('#clientDisplayList [class*="row"]')].map(r => (r.querySelector('[class*="name"], [class*="label"]')?.textContent || '').trim()).slice(0, 10);
+                  out.providerExpansion = {};
+                  for (const id of ['deepseek', 'opencode']) {
+                    const button = document.getElementById(`limitProviderDisclosure-${id}`);
+                    if (button?.getAttribute('aria-expanded') !== 'true') button?.click();
+                    await new Promise(r => setTimeout(r, 100));
+                    const options = document.getElementById(`limitProviderOptions-${id}`);
+                    out.providerExpansion[id] = {
+                      expanded: button?.getAttribute('aria-expanded') || null,
+                      hidden: options?.classList.contains('hidden') ?? null
+                    };
+                  }
                   if (settingsBtn) settingsBtn.click();
                   await new Promise(r => setTimeout(r, 200));
                   const limitsTab = document.querySelector('[data-view="limits"], .view-tab-limits');
                   if (limitsTab) limitsTab.click();
                   await new Promise(r => setTimeout(r, 500));
                   out.limitsProviders = [...document.querySelectorAll('.limit-provider-row')].map(r => (r.querySelector('[class*="name"], [class*="label"]')?.textContent || '').trim()).slice(0, 6);
+                  const openCodeTitle = [...document.querySelectorAll('#limitsPanel .limit-name-title')].find(el => el.textContent.trim() === 'OpenCode');
+                  const openCodeGroup = openCodeTitle?.closest('.limit-row-group');
+                  out.openCodeAccountRows = openCodeGroup?.querySelectorAll('.limit-account-row').length ?? (openCodeTitle ? 1 : 0);
                   const toolTab = document.querySelector('[data-view="tool"], [data-breakdown="tool"]');
                   if (toolTab) toolTab.click();
                   await new Promise(r => setTimeout(r, 300));
