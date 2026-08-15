@@ -1,317 +1,274 @@
-# Token Monitor 性能优化审查修复计划
+# Token Monitor 第四轮审查修复与内存优化计划
 
-## 1. 本轮目标
+## 1. 执行基线
 
-本计划只修复上一轮性能优化审查中确认的问题，不继续扩大瘦身范围，也不重写 UI。
+- 分支：`macos-native`
+- 审查基线提交：`001717f5`
+- 当前 fixture：120 checks，0 failures
+- 当前 Release 构建、JavaScript syntax check、`git diff --check` 均通过
+- 本轮基于现有原生 macOS + WKWebView 架构修复，不重写 UI，不恢复 Electron
 
-上一轮已经完成且应保留的内容：
+开始修改前先确认工作树，并保留用户已有改动：
 
-- 原生 Release 构建和 aggregation fixture 基线。
-- `flock` 单实例所有权机制。
-- 按数据源指纹复用解析结果的总体方向。
-- Tokscale pricing 磁盘缓存。
-- dashboard WebView 关闭释放机制。
-- 隐藏窗口暂停 renderer 的桥接能力。
-- 设置刷新间隔热更新。
-- Tokscale 单次扫描可行性调查。
+```bash
+git status --short
+git log --oneline -8
+```
 
-本轮必须修复：
+## 2. 本轮目标与顺序
 
-1. `clients`、`allTimeSince`、日期/月边界没有正确失效缓存。
-2. 启动 cheap tick 中未解析的 pricing 不会在 full tick 重试。
-3. Tokscale 指纹未变化时没有推进 full refresh 时间，导致之后每 15 秒执行 full 检查。
-4. 当前 refresh coalescing 不能合并采集期间到达的请求。
-5. tray、快捷键和主窗口关闭路径没有发送隐藏状态。
-6. 第二实例在首实例初始化期间发出的唤起请求可能丢失。
-7. 当前新增测试没有覆盖上述 Collector 运行时状态变化。
-8. `git diff --check` 因文件末尾多余空行失败。
+1. 修复 Tokscale 跨日期/上下文后部分扫描失败时错误复用成功状态的问题。
+2. 消除 Collector 对 `statsCache` 的跨锁数据竞争。
+3. 正确处理 enabled clients 为空，并清理禁用客户端的缓存。
+4. 让模型 pricing 在应用长期运行时遵守 6 小时 TTL。
+5. 修正运行中 full refresh 对后续 timer cheap refresh 的覆盖规则。
+6. 停止每个 tick 重写 custom pricing sidecar。
+7. 删除重复保留完整 DSH 解压数据的缓存，降低主进程内存。
+8. 前述优化测量通过后，为主页 WebView 增加长时间隐藏后的可选 teardown。
 
-## 2. 范围边界
+正确性优先于性能数字。每个阶段先增加会失败的回归测试，再修改实现。
 
-- 不回退 `aef03dfe..HEAD` 中已经验证有效的功能和性能改动。
-- 不修改 OpenCode Go 去重、模型图标、仪表盘比例条或 DeepSeek/OpenCode 额度展开逻辑。
-- 不修改额度语义、费用公式、history wire shape、session/model/client 聚合口径。
-- 不删除 vendored Tokscale 二进制。
-- 不在本轮实现 Tokscale combined 命令；现有二进制缺少逐条时间字段，继续保留 3 period + 1 graph 扫描。
-- 不把指纹扫描等同于 period 缓存有效。文件内容、查询上下文、定价和日历边界是不同的失效维度。
-- 不用延长刷新间隔掩盖错误调度。
-- 不继续批量删除代码或资源，直到本计划全部验收通过。
+## 3. 范围边界
 
-## 3. 核心设计要求
+- 不改变费用公式、period/history wire shape、模型/工具聚合口径。
+- 不回退 raw/derived cache、cheap-first startup、窗口 visibility、dashboard teardown 和单实例唤起修复。
+- 不修改 OpenCode Go 去重、模型图标、仪表盘比例条、DeepSeek/OpenCode 额度展开等已完成功能。
+- 不通过延长刷新间隔或关闭数据源掩盖 CPU/内存问题。
+- 不删除 vendored Tokscale、libzstd 或 DSH 支持，不引入新依赖。
+- 不在未测量前大范围重写 Collector 或 renderer。
+- 不把 Activity Monitor 的 RSS 直接当作独占内存；验收使用 physical footprint，并单独记录 WebKit 子进程。
 
-### 3.1 分离原始数据缓存和派生结果缓存
+## 4. Phase 0：先补回归测试
 
-当前 `ClientSnapshot` 把文件指纹、原始 rows、pricing、periods 和 history 绑在一起，导致文件未变化时无法响应日期、设置和定价变化。
+主要文件：`native-app/Tests/TokenMonitorFixtureCheck/main.swift`。允许增加轻量测试 seam，但测试不得访问用户真实会话或网络。
 
-应拆成两层：
+### T10：旧成功快照跨上下文后部分失败
 
-1. **Raw cache**：`fingerprint + rows`。仅在源文件指纹变化时重新读取文件。
-2. **Derived cache**：`periods + history contributions`。其 cache key 至少包含：
-   - raw fingerprint；
-   - client ID；
-   - `allTimeSince`；
-   - 当前本地 day key；
-   - 当前本地 month key；
-   - 相关模型的 pricing generation/signature。
+1. 在 2026-08-15 完成一次 period + graph 成功扫描。
+2. fake clock 推进到 2026-08-16，fingerprint 不变，让新 period 失败、graph 成功。
+3. 旧 period 可以作为 last-known-good 降级显示，但对新 context 的 `periodsSuccess` 必须为 false。
+4. 推进到 backoff 后再次 full，断言只重试 period 并恢复，成功 graph 不重复执行。
+5. 增加对称场景：旧成功快照存在，clients/fingerprint 改变后 graph 失败，graph 必须重试，period 不重复执行。
 
-文件未变化但日期、月份、allTimeSince 或 pricing 改变时，应复用 rows 重新派生 periods/history，不能重新读取原始文件，也不能继续返回旧结果。
+### T11：全部客户端被禁用
 
-### 3.2 配置必须进入合并上下文
+1. 先生成非空 stats/history，再把 `clients` 改为空字符串并触发 settings full。
+2. 断言推送一次 wire shape 合法的空 stats/history。
+3. 断言旧 client 不再出现在 totals、history、clientStatus。
+4. 断言对应 raw/derived snapshot 被清理或不再保留。
+5. 再启用客户端后可以正常恢复。
 
-最终 merged periods/history 不能只根据 `adapterChanged || tokscaleChanged` 决定是否重建。合并上下文至少包含：
+### T12：pricing TTL
 
-- 规范化并排序后的 enabled clients；
-- `allTimeSince`；
-- 当前 day/month key；
-- adapter derived snapshot generations；
-- Tokscale snapshot generation。
+1. 第一次 full 成功解析 pricing；TTL 内再次 full 不新增 resolve lookup。
+2. fake clock 推进超过 6 小时，runner 返回更新价格。
+3. 断言恰好执行一次 resolve，并从 cached rows 重派生费用，raw source 不重读。
+4. 过期 lookup 失败时保留上一次成功价格并有限退避，不能把费用清零。
 
-上下文变化即重新合并。禁用客户端后必须立即从 periods、history、client status 和缓存合并输入中移除，不能等待该客户端源文件变化。
+### T13：运行中的 full 覆盖 timer cheap
 
-### 3.3 时钟需要可测试
+1. 阻塞一个正在执行的 full，期间只注入多个 `.cheap/.timer`。
+2. full 完成后断言没有多余后继 tick。
+3. settings generation 更新、manual full 或 fullForced 到达时，仍保留最多一个必要后继 full。
 
-为 Collector 的日期判断增加可注入的 `nowProvider` 或等价轻量测试入口。生产环境默认 `Date()`，测试中可以跨越午夜、月初和 DST 边界。
+### T14：custom pricing sidecar 调用次数
 
-不要在测试中修改系统时间，也不要只测试 `localDayStart()`；必须测试同一个 Collector/缓存实例在时间推进后的输出变化。
+1. 多个普通 cheap/full 使用同一份 `customModelPricing`，sync 不重复执行。
+2. 设置实际改变后恰好 sync 一次，并使 pricing generation 失效。
 
-## 4. 实施阶段
+### T15：DSH 解压生命周期
 
-### Phase 0：先补会失败的回归测试
+1. 临时 zstd fixture 连续解析两次，第二次命中解析结果缓存，不再次解压。
+2. 实现中不再长期持有完整解压 `Data`。
+3. 文件 stamp 变化时只替换该文件解析结果。
+4. 文件删除或 DSH 被禁用后，对应 parse cache 被清理。
 
-在改实现前增加测试，至少覆盖：
+所有测试必须驱动同一个 Collector/缓存实例发生状态变化，并断言 period/graph spawn、raw read、pricing lookup、tick、sidecar sync 的调用次数。TTL/backoff 使用 fake clock，不使用真实 sleep。
 
-1. 文件指纹不变，时间从 23:59 推进到次日 00:01，today 自动重新派生。
-2. 文件指纹不变，时间跨月后 month 自动重新派生。
-3. 文件指纹不变，`allTimeSince` 改变后 adapter allTime 从缓存 rows 重算。
-4. `clients` 从 `proma,hanako` 改为 `hanako` 后，Proma 立即从 merged totals/history 中消失。
-5. startup cheap tick pricing miss，随后 full tick pricing success，费用由 0/unknown 更新为正确值。
-6. scheduled full check 指纹未变化后，下一个 cheap tick 不再立即升级为 full。
-7. 长时间 tick 执行期间到达多个 timer/manual/settings 请求，完成后最多执行一个必要的后继刷新。
-8. Tokscale period 成功但 graph 失败时，下一次按策略重试 graph，不能永久绑定到成功的 period 指纹。
-9. 主窗口所有 hide 路径恰好发送一次 `window:visibility=false`，show 路径发送 `true`。
-10. 首实例尚未完成 AppDelegate 初始化时收到第二实例请求，初始化完成后仍会显示窗口。
+## 5. Phase 1：修复 Tokscale 部分失败状态机
 
-测试要求：
+主要文件：`native-app/Sources/TokenMonitor/Collector/CollectorCore.swift`
 
-- 不能只往现有 fixture checker 加纯函数断言；需要能够驱动 Collector/scheduler/cache 状态变化的测试 harness。
-- 文件扫描、Tokscale runner、pricing lookup 和时钟应使用 fake/stub，禁止测试启动真实网络 pricing 或读取用户实际会话目录。
-- 测试应断言调用次数，例如 raw read 次数、period derive 次数、Tokscale spawn 次数和实际 tick 次数。
+当前 `forced || contextChanged` 分支从旧 `TokscaleSnapshot` 开始修改。新扫描失败时，旧 `periodsSuccess/graphSuccess` 可能仍为 true，随后 fingerprint、clients、day/month 又被覆盖为新 context，失败部分因此永久不重试。
 
-### Phase 1：修复设置和日历边界失效
+实施要求：
 
-主要文件：
-
-- `native-app/Sources/TokenMonitor/Collector/CollectorCore.swift`
-- `native-app/Sources/TokenMonitor/Collector/Adapters.swift`
-- 必要的测试支持文件
-
-实施内容：
-
-1. 按第 3 节拆分 raw cache 与 derived cache。
-2. 每个 tick 计算稳定的 `dayKey` 和 `monthKey`，同一次 tick 内统一使用同一个 `now`，避免午夜期间前后不一致。
-3. day key 变化时重新派生 adapter today；month key 变化时重新派生 adapter month；无需重新读取 rows。
-4. `allTimeSince` 变化时重新派生 adapter allTime。
-5. enabled clients 变化时清理或忽略禁用客户端的 snapshot，并无条件重建最终 merge/history。
-6. 对 Tokscale：
-   - 因当前 period JSON 没有时间字段，跨日必须重新扫描 today；
-   - 跨月必须重新扫描 month；
-   - `allTimeSince` 变化必须重新扫描 allTime；
-   - Tokscale client 集合变化必须重新扫描受影响的 periods/graph；
-   - 如果 runner 目前只能一次调用三个 period，可先保持完整 3+1 扫描，正确性优先。
-7. 不要简单地对 `clients`/`allTimeSince` 调用 `clientSnapshots.removeAll()`：adapter rows 能安全复用时应保留 raw cache，只失效 derived cache。
-
-验收：
-
-- Phase 0 的日期、allTimeSince 和 clients 回归测试通过。
-- 跨边界或改设置后统计立即正确。
-- adapter 源文件未变化时没有重新读取原始文件。
-
-### Phase 2：修复 pricing 补全和失效
-
-主要文件：
-
-- `CollectorCore.swift`
-- `TokscaleRunner.swift`
-- `Adapters.swift`
-
-实施内容：
-
-1. Raw snapshot 必须记录相关的规范化 model IDs，以及当前未解析 pricing 的 model IDs。
-2. cheap startup 可以只读内存/磁盘 pricing cache，但不能把未命中视为永久有效结果。
-3. 紧随其后的 full tick 必须对 unresolved/expired model pricing 进行一次受控补全，即使文件指纹没有变化。
-4. pricing 成功补全后，只从缓存 rows 重新派生对应客户端的 periods/history，不重新读取源文件。
-5. 防止同一 model 在同一 refresh 中重复 lookup；多个客户端使用同一 model 时共享结果。
-6. `allowSubprocessLookup` 这种全局可变开关应改为显式 lookup policy 参数或其他线程安全机制，避免未来并发调用互相影响。
-7. 明确定义失败重试：本次失败保留 unresolved 状态，下一次 scheduled full 或带退避的 retry 再试；cheap tick 不应每 15 秒触发网络查询。
-8. 自定义 pricing 变化时使相关 pricing generation 增加，并重新派生受影响客户端。
-
-验收：
-
-- 冷缓存首次 cheap stats 可快速出现。
-- full tick 完成后缺失模型费用自动更新，不需要修改源文件。
-- pricing 失败不会清空已有费用或产生高频重试。
-- pricing 命中磁盘缓存时不启动子进程。
-
-### Phase 3：修复 full cadence 和失败状态
-
-主要文件：`CollectorCore.swift`、`TokscaleRunner.swift`。
-
-实施内容：
-
-1. 区分以下时间：
-   - `lastFullCheckAt`：最近一次按计划完成源指纹检查的时间；
-   - `lastSuccessfulPeriodScanAt`；
-   - `lastSuccessfulGraphScanAt`。
-2. scheduled full 到期后，即使 Tokscale 指纹未变化并复用快照，也要推进 `lastFullCheckAt`，下一次 full 检查应等待完整 `collectionIntervalMs`。
-3. 手动刷新可以立即执行一次 full source check，但文件未变化时仍不强制 3+1 扫描。
-4. `TOKEN_MONITOR_FORCE_RESCAN` 才允许绕过指纹。
-5. period 和 graph 的成功状态分开记录：
-   - period 成功、graph 失败时保留新的 periods 和旧 history；
-   - 不得把 graph 标记为已成功；
-   - graph 按有限退避重试，不能因 period 指纹已记录而永久跳过；
-   - graph retry 不应重新跑已经成功且输入未变化的三个 period。
-6. 连续失败使用有上限的退避，避免每个 cheap tick 重启失败子进程。
-
-验收：
-
-- 指纹不变时，每个 `collectionIntervalMs` 最多进行一次 Tokscale source check，且 0 个 Tokscale 子进程。
-- 5 分钟 full check 后不会退化为每 15 秒 full check。
-- 部分失败能够恢复，UI 始终保留各部分最后一次成功快照。
-
-### Phase 4：真正实现 refresh coalescing
-
-当前问题：`enqueue()` 与同步耗时的 `tick()` 在同一个串行队列。tick 运行时，新请求只能排在队列后面，无法更新 `pendingRefresh`，所以不能真正合并。
-
-推荐结构：
-
-1. 使用一个短时持有的 coordination lock（或独立 actor/state queue）管理：
-   - `workerRunning`；
-   - 当前 refresh kind/context generation；
-   - 最多一个 pending refresh。
-2. 真正耗时的 tick 在 worker queue 上运行，不持有 coordination lock。
-3. `requestRefresh()` 从 main/timer/settings 任意线程进入时，立即在 coordination state 中合并请求，不等待正在运行的 tick。
-4. worker 完成后原子取走一个 pending request；没有 pending 才退出 worker。
-5. 合并规则：
-   - pending `full` 覆盖 `cheap`；
-   - 多个相同请求只保留一次；
-   - 正在运行的 full 通常覆盖期间到达的 timer cheap；
-   - 如果请求携带更新后的 settings generation，必须保留一个后继刷新；
-   - manual full 默认强制 source check，但不等于 force rescan；
-   - diagnostic `fullForced` 强度最高。
-6. Collector 的缓存数据仍只由 worker 单写；coordination lock 不用于保护整个 tick。
-7. 避免递归 pump 或在锁内执行 tick/push。
-
-验收：
-
-- fake tick 阻塞期间注入 10 个 cheap、3 个 manual full 和 1 个 settings change，当前 tick 结束后最多再执行一个满足最新 generation 的 full。
-- 没有丢失 settings change。
-- 没有并发执行两个 Collector tick。
-- 没有死锁，主线程不会等待扫描完成。
-
-### Phase 5：统一窗口可见性路径
-
-主要文件：
-
-- `native-app/Sources/TokenMonitor/AppDelegate.swift`
-- `native-app/Sources/TokenMonitor/DashboardWindowController.swift`
-- `native-app/Sources/TokenMonitor/Bridge.swift`
-- renderer visibility listener
-
-实施内容：
-
-1. 在 `GlassWindowController` 提供统一的 `showManagedWindow()` / `hideManagedWindow()`（名称可按项目风格调整）。
-2. 所有隐藏入口必须经过统一方法：
-   - tray 左键；
-   - 全局快捷键；
-   - renderer 主窗口关闭按钮；
-   - 自动失焦隐藏；
-   - 如果 miniaturize 也应暂停，则监听 miniaturize/deminiaturize。
-3. hide 方法执行 `orderOut`、发送 `window:visibility=false` 并调用 `windowDidHide()`；重复 hide 不重复发事件或重复安排 teardown。
-4. show 方法显示窗口、取消 idle teardown，并发送 `true`。
-5. 页面尚未加载完成时 visibility push 可能丢失；在 `didFinish` 后同步一次当前原生可见状态，或让 renderer 主动查询初始状态。
-6. dashboard explicit close 仍立即 detach/tearDown；main widget 仍保持 hide-only，不扩大内存策略。
-
-验收：
-
-- 每条 hide/show 路径的事件顺序和次数有自动测试或 bridge spy 验证。
-- 主窗口通过 tray/快捷键隐藏后，renderer ticker 停止。
-- dashboard 隐藏 60 秒后只 teardown 一次，重新打开无重复 listener。
-
-### Phase 6：关闭单实例唤起竞态
-
-主要文件：
-
-- `SingleInstanceCoordinator.swift`
-- `AppMain.swift`
-- `AppDelegate.swift`
-
-推荐方案：
-
-1. Coordinator 在竞争 `flock` **之前**注册跨进程唤起通知接收器。
-2. 通知到达时如果 AppDelegate/show callback 尚未就绪，记录 `pendingActivation = true`。
-3. AppDelegate 初始化后向 Coordinator 安装 show callback，并立即消费 pending activation。
-4. 第二实例失去锁后发送通知，随后清理自己的 observer 并退出，不创建 AppKit UI、collector 或 WebView。
-5. 可使用锁文件中的 owner PID，通过 `NSRunningApplication(processIdentifier:)` activate 作为额外 fallback，但 PID 不是锁所有权依据。
-6. 若继续使用单向 distributed notification，应增加有界重试或确认机制，验证快速并发启动不会丢请求；不要用无限 sleep。
-7. 正常退出和异常退出仍依赖 kernel 释放 `flock`，保留当前优点。
-
-验收：
-
-- 在首实例取得锁但 AppDelegate 尚未完成初始化的测试窗口内启动第二实例，首实例最终显示窗口。
-- 快速并发启动 20 次仍只有一个 collector/app 实例。
-- 第二实例不创建状态栏、WebView 或 Tokscale 子进程。
-- `kill -9` 后能够重新启动。
-
-### Phase 7：验证、文档校正和格式清理
-
-1. 清除本轮新增文件末尾的多余空行，使 `git diff --check` 返回 0。
-2. 更新 `native-app/docs/perf-delivery-record.md`，不得继续声称尚未通过测试证明的 coalescing/cadence 行为。
-3. 重新测量：
-   - launch → first stats；
-   - launch → pricing-complete stats；
-   - 启动 Tokscale 子进程数；
-   - 5 分钟边界后的 full check 次数；
-   - 无变化 10 分钟内的 CPU；
-   - dashboard 20 次生命周期；
-   - 快速重复启动行为。
-4. Release 构建和 staged resources 检查必须使用最终工作区重新执行，不能引用旧提交的结果。
-
-## 5. 最终验收标准
-
-- 修改 `allTimeSince` 后，无需修改数据文件即可得到新的 allTime 统计。
-- 禁用任一客户端后，该客户端立即从 totals/history 中消失。
-- 应用跨午夜和月初持续运行时，today/month 自动切换且统计正确。
-- startup cheap tick 未命中的定价会在 full tick 补全，费用不永久保持 0。
-- 数据未变化时，scheduled full check 不启动 Tokscale；之后等待完整 `collectionIntervalMs` 才再次检查。
-- period 或 graph 单独失败后可以单独恢复，不清空最后成功数据。
-- 扫描运行期间的重复请求被合并，最多保留一个必要的后继刷新。
-- 所有主窗口隐藏路径都会暂停 renderer；重新显示只执行一次 catch-up render。
-- 首实例初始化期间的第二次启动请求不会丢失。
-- fixture、Collector 状态测试、scheduler 并发测试、JS syntax、资源引用检查、Release build 和 `git diff --check` 全部通过。
-- OpenCode Go 去重、全部模型图标、比例条对齐以及 DeepSeek/OpenCode 展开功能保持正常。
-
-## 6. 推荐提交顺序
-
-1. `test(collector): cover cache invalidation and refresh scheduling`
-2. `fix(collector): invalidate derived snapshots by context`
-3. `fix(collector): retry unresolved model pricing`
-4. `fix(collector): preserve full refresh cadence and partial retries`
-5. `fix(collector): coalesce refreshes outside the worker queue`
-6. `fix(native): unify managed window visibility events`
-7. `fix(native): buffer early single-instance activation requests`
-8. `docs(perf): update measurements and pass final checks`
-
-不要将缓存模型、调度器、窗口生命周期和单实例修复压进同一个提交。
-
-## 7. 交付要求
-
-DeepSeek 完成后应提供：
-
-- 每个 Phase 对应的提交 ID。
-- 新增测试名称及其验证的具体回归。
-- 缓存 key、generation 和失败退避规则说明。
-- refresh coalescing 的状态转换说明，以及压力测试的实际 tick 次数。
-- 修复前后 5 分钟边界和 10 分钟空闲测量数据。
-- 所有最终验证命令及退出码。
-
-不得只报告“fixture 通过”作为 Collector 缓存和调度正确性的证明。
+1. context 变化时创建属于新 context 的 validity 状态，不沿用旧 context 的成功标志。
+2. 可以保留旧 periods/graph 值作为 last-known-good UI 降级数据，但失败部分必须标为待重试。
+3. period 和 graph validity 独立；成功部分更新值并清除失败计数，失败部分设为 false 并更新自己的 backoff。
+4. snapshot context 与 validity 一起提交，不能把旧结果标为新 context 成功。
+5. `forced` 可尝试两部分，但失败后同样保留正确失败状态。
+6. `lastFullCheckAt` 表示 source check 完成，不等于 period/graph 成功时间。
+
+验收：T10 和原 T8 同时通过。
+
+## 6. Phase 2：修复并发状态与空客户端
+
+### 6.1 消除 `statsCache` 数据竞争
+
+`statsCache` 的公开读取/写入由 `stateLock` 保护，但 `requestRefresh()` 在 `coordLock` 下读取它判断 cheap-first startup。
+
+1. 在 coordination state 中增加独立状态，例如 `hasCompletedInitialStats`。
+2. 该状态只在 `coordLock` 下读写；coordination 代码不得直接读 `statsCache`。
+3. `statsCache/cachedHistory` 的跨线程读写统一使用 `stateLock`。
+4. worker-owned cache 保持单 writer，不给整个 tick 加大锁。
+5. 尽可能使用 Thread Sanitizer 验证；环境不能运行时必须说明。
+
+### 6.2 enabled clients 为空
+
+1. 不得直接 return 并留下旧 UI。
+2. 构造与正常协议相同的空 periods、history、stats 和 clientStatus。
+3. 更新 state cache 并 push 一次空结果。
+4. 清理 raw/derived/merged/Tokscale 中不再需要的数据。
+5. 仅禁用部分 clients 时也移除禁用 client 的缓存，不能永久保存不可达 rows。
+
+验收：T11 和原有禁用单客户端测试通过。
+
+## 7. Phase 3：pricing TTL 与 sidecar I/O
+
+主要文件：`CollectorCore.swift`、`TokscaleRunner.swift`，必要时小范围修改 `SettingsStore.swift`。
+
+### 7.1 Collector pricing TTL
+
+`TokscaleRunner` 有 6 小时 TTL，但 Collector 的 `cachedPricing[model] != nil` 永久跳过 runner。
+
+1. Collector pricing cache 记录 `pricing + fetchedAt` 或每个 model 的下一次校验时间。
+2. cheap 只使用有效/last-known-good pricing，不启动子进程。
+3. full 只对 unresolved 或 expired model 调用 `.resolve`。
+4. TTL 使用可注入的 Collector `now`。
+5. resolve 成功后更新 pricing signature，使受影响 derived snapshot 从 cached rows 重算。
+6. expired resolve 失败时保留 last-known-good pricing并有限退避，不将费用清零。
+7. 同一 tick、同一 model 最多 lookup 一次，多客户端共享。
+8. custom pricing 改变仍立即失效相关缓存。
+
+### 7.2 custom pricing sidecar
+
+1. 只在启动和 `customModelPricing` 实际变化时 sync。
+2. 使用规范化、排序后的稳定 signature，字典遍历顺序不得造成假变化。
+3. 内容与目标文件一致时不写文件，避免无意义 mtime 和 SSD I/O。
+4. 写入失败保留日志，但不能在每个 cheap tick 无限重试。
+
+验收：T12、T14 通过；空闲 10 分钟 sidecar mtime 不变化。
+
+## 8. Phase 4：完善 refresh coalescing
+
+当前 coordination state 不知道正在执行的 refresh kind，full 运行期间到达的 timer cheap 会被排到后面。
+
+1. coordination state 增加 `runningKind` 和必要的 running settings/context generation。
+2. 正在运行的 full/fullForced 覆盖普通 timer cheap，直接丢弃。
+3. 不得丢弃更新的 settings generation、manual full、fullForced 或尚未处理的 invalidation。
+4. pending 最多保留一个必要后继请求，强请求覆盖弱请求。
+5. 保留 cheap-first startup：startup cheap 后仍执行 startup full。
+6. running 状态在 tick 完成和取下一项时原子更新，early return 也恢复 idle。
+7. 不在 `coordLock` 内执行 tick、push 或 I/O。
+
+验收：T13、原 T7、原 T9 全部通过。
+
+## 9. Phase 5：移除 DSH 重复大内存缓存
+
+主要文件：`native-app/Sources/TokenMonitor/Collector/Adapters.swift`
+
+审查实测：主进程 footprint 约 129 MB；heap 中七块大型 `__DataStorage` 合计约 71 MB，与当前 DSH zstd 解压尺寸高度吻合。`parseCache` 已保存每个文件的 `DshFileResult`，继续保存完整解压 JSONL 属于重复缓存。
+
+1. 删除 `decompressCache`；`decompressZstd()` 只返回本次解析的临时 `Data`。
+2. 保留按 `(path, mtime, size)` 缓存解析后 `DshFileResult`，避免重复解压/parse。
+3. 解压 `Data` 和中间 `String` 在 `parseDshFile()` 完成后可释放，不被 closure、Substring 或 JSON 对象长期引用。
+4. parse/file-list cache 必须有界清理：删除不存在文件、禁用 client 的条目；stamp 改变时替换而非保留历史版本。
+5. 不用另一个大容量 LRU 继续缓存完整解压文件。
+6. 注意 Array copy-on-write，不为“优化”复制所有 UsageRow。
+7. 不改变 DSH 去重、model attribution、时间和 token 解析语义。
+
+测量要求：
+
+1. 使用同一用户数据、Release app、相同启动后等待时间。
+2. 完成一次 DSH collection 后测主进程 physical footprint。
+3. 用 `heap <pid>` 确认不再有对应 DSH 尺寸的长期大型 `__DataStorage`。
+4. 连续三次无变化 full，确认不重复解压。
+5. 对比修复前约 129 MB；预计下降数十 MB，但只报告实测。
+
+验收：T15 通过，DSH totals/history 与修改前完全一致。
+
+## 10. Phase 6：主页 WebView 长时间隐藏回收
+
+仅在 Phase 1–5 全部通过并复测后执行。
+
+基线：WebContent 约 63 MB、GPU 约 19 MB、Networking 约 8 MB；`leaks` 为 0。主页 `DashboardWindowController` 永久持有的 `WKWebView` 是隐藏状态下最大的固定成本。
+
+1. 短时间隐藏保留 WebView，保证托盘快速切换。
+2. 连续隐藏 5–10 分钟后 teardown；建议默认 600 秒并集中定义。
+3. teardown detach Bridge，移除 script handler/observer/navigation delegate，停止加载并释放 WebView/window/controller。
+4. AppDelegate 清空 `mainWindowController`；下次 tray/hotkey/settings 请求重新创建。
+5. 重建后恢复 bounds、tab/settings 状态，并主动获取最新 stats/history/limits，不依赖丢失的旧 push。
+6. show 取消待执行 teardown；重复 hide/show 不创建多个 work item。
+7. dashboard 已有 teardown 行为保持不变。
+8. WebKit XPC 未立即退出时记录 30/60 秒 footprint，不强杀系统进程。
+
+生命周期测试：
+
+- delay 内 show：复用原 controller，不 teardown。
+- hide 超时：只 teardown 一次并清空 AppDelegate 引用。
+- 超时后 show：只创建一个新 WebView，数据和 visibility 恢复。
+- 连续 20 次 hide/timeout/show：controller、Bridge pusher、observer 不累积。
+
+如果重建延迟明显不可接受，可将本 phase 保留为可配置实验；Phase 5 仍必须交付。
+
+## 11. 最终验证
+
+```bash
+native-app/scripts/check-fixtures.sh
+TMPDIR="$PWD/native-app/.tmp" SWIFTPM_MODULECACHE_OVERRIDE="$PWD/native-app/.cache" \
+  swift build -c release --product TokenMonitor --package-path native-app --disable-sandbox
+node --check src/electron/renderer/app.js
+node --check src/electron/renderer/dashboard.js
+node --check native-app/Resources/tokenMonitorBridge.js
+git diff --check 001717f5..HEAD
+```
+
+还必须人工/运行时验证：
+
+1. 跨日期 context failure 可以按 backoff 恢复。
+2. 禁用全部 clients 后主页立即为空，再启用后恢复。
+3. pricing TTL 到期不会把已有费用清零。
+4. 空闲 10 分钟没有周期性 custom pricing 写入。
+5. DSH 不变时不重复解压，内存不随 refresh 次数增长。
+6. 主页/dashboard 的关闭、隐藏、重开正常。
+7. OpenCode Go 只显示一份，模型图标正常，dashboard 比例条对齐，DeepSeek/OpenCode 额度仍可展开。
+
+内存报告分别列出：
+
+- 主进程 physical footprint 与 peak；
+- WebContent/GPU/Networking physical footprint；
+- heap 中 `__DataStorage` 总量和最大块；
+- `UsageRow` array storage；
+- `leaks` 结果；
+- 修复前后相同场景的测量时间点。
+
+## 12. 推荐提交顺序
+
+1. `test(collector): cover context failures and empty clients`
+2. `fix(collector): preserve partial retry validity across contexts`
+3. `fix(collector): isolate coordination state and clear disabled clients`
+4. `test(pricing): cover ttl and sidecar synchronization`
+5. `fix(pricing): honor ttl and gate sidecar writes`
+6. `fix(collector): suppress covered timer refreshes`
+7. `test(dsh): cover parsed cache lifecycle`
+8. `perf(dsh): release decompressed session buffers`
+9. `perf(native): tear down long-hidden main webview`（独立提交，可按实测决定是否保留）
+10. `docs(perf): record final checks and memory measurements`
+
+不要把状态机、pricing、DSH 内存和 WebView 生命周期压进同一个提交。
+
+## 13. 交付要求
+
+DeepSeek 完成后必须提供：
+
+- 每个 phase 对应的 commit ID。
+- 新增测试名称、初始失败原因和修复后结果。
+- Tokscale snapshot validity/state transition 说明。
+- Collector coordination state 与请求覆盖规则说明。
+- pricing TTL、失败退避和 custom pricing signature 说明。
+- 删除 `decompressCache` 前后的 heap/footprint 对比。
+- 是否实施主页 WebView teardown，以及重建延迟和内存收益。
+- 最终验证命令、退出码和完整测试数量。
+
+不得只报告“fixture 通过”或 Activity Monitor RSS 下降。正确性、调用次数、physical footprint 和 heap 对象证据必须同时提供。

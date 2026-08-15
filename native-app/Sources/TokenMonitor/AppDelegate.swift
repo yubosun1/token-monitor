@@ -54,6 +54,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, BridgeDelegate {
         if diag, ProcessInfo.processInfo.environment["TOKEN_MONITOR_DIAG_MAIN_LIFECYCLE"] != nil {
             runMainWindowLifecycleProbe()
         }
+        // Dev aid: TOKEN_MONITOR_DIAG_CLIENTS_PROBE=1 disables every client
+        // through the real settings-update path, then restores the previous
+        // value — the empty stats push and the recovery push both land in
+        // the diag log (round-4 Phase 2.2 runtime check).
+        if diag, ProcessInfo.processInfo.environment["TOKEN_MONITOR_DIAG_CLIENTS_PROBE"] != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 20) {
+                let previous = BridgeCore.shared.settings.snapshot()["clients"] as? String
+                    ?? "claude,codex,opencode,workbuddy,proma,hanako,dsh"
+                BridgeCore.shared.settings.update(["clients": ""])
+                NSLog("[diag] clients probe: disabled all clients (expect empty stats push)")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 30) {
+                    BridgeCore.shared.settings.update(["clients": previous])
+                    NSLog("[diag] clients probe: restored clients (expect recovery push)")
+                }
+            }
+        }
     }
 
     /// Diag-only: hide the main window (the same path the tray toggle takes),
