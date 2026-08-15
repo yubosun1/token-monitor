@@ -194,8 +194,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, BridgeDelegate {
         ensureMainWindow()
         guard let wc = mainWindowController, let window = wc.window else { return }
         if window.isVisible {
-            window.orderOut(nil)
+            // Unified hide path (review round Phase 5): orders out and sends
+            // window:visibility=false exactly once.
+            wc.hideManagedWindow()
         } else {
+            if window.isMiniaturized { window.deminiaturize(nil) }
             wc.showWindow(nil)
             NSApp.activate(ignoringOtherApps: true)
         }

@@ -785,7 +785,62 @@ func runCollectorStateTests() {
     }
 }
 
+// MARK: - Managed visibility tests (review round Phase 5)
+
+func runVisibilityTests() {
+    // V1: duplicate hides/shows emit exactly one event each.
+    do {
+        var sent: [Bool] = []
+        var v = ManagedVisibility { sent.append($0) }
+        v.hide()
+        v.hide()
+        checkEqual(sent.count, 1, "V1 duplicate hides emit once")
+        checkEqual(sent.last, false, "V1 hide emits false")
+        v.show()
+        v.show()
+        checkEqual(sent.count, 2, "V1 duplicate shows emit once more")
+        checkEqual(sent.last, true, "V1 show emits true")
+        v.hide()
+        checkEqual(sent.count, 3, "V1 alternating transitions all emit")
+    }
+    // V2: resync after page load re-sends the current state even when it
+    // did not change (the pre-load push was lost).
+    do {
+        var sent: [Bool] = []
+        var v = ManagedVisibility { sent.append($0) }
+        v.show()
+        checkEqual(sent.count, 1, "V2 initial show emitted")
+        v.resync()
+        checkEqual(sent.count, 2, "V2 resync re-sends current state")
+        checkEqual(sent.last, true, "V2 resync sends visible state")
+        v.resync()
+        checkEqual(sent.count, 3, "V2 repeated resync also re-sends")
+    }
+    // V3: hide before any show (miniaturize during load), then resync.
+    do {
+        var sent: [Bool] = []
+        var v = ManagedVisibility { sent.append($0) }
+        v.hide()
+        checkEqual(sent.count, 1, "V3 hide before show emits once")
+        v.resync()
+        checkEqual(sent.count, 2, "V3 resync sends hidden state")
+        checkEqual(sent.last, false, "V3 resync sends false")
+    }
+    // V4: one event per transition, correct order.
+    do {
+        var sent: [Bool] = []
+        var v = ManagedVisibility { sent.append($0) }
+        v.show()
+        v.hide()
+        v.show()
+        v.hide()
+        checkEqual(sent.count, 4, "V4 one event per transition")
+        checkEqual(sent, [true, false, true, false], "V4 event sequence")
+    }
+}
+
 runChecks()
 runCollectorStateTests()
+runVisibilityTests()
 print("fixture checks: \(checkCount) checks, \(failureCount) failures")
 if failureCount > 0 { exit(1) }

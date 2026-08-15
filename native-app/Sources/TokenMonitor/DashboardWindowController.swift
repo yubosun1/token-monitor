@@ -88,6 +88,40 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
         bridge.attach(to: webView, window: panel)
         bridge.dragController = self
         bridge.lifecycleDelegate = self
+        startVisibilityTracking()
+    }
+
+    // MARK: - Managed visibility (review round Phase 5)
+
+    /// Every hide/show path routes through this state machine so the
+    /// renderer receives exactly one visibility event per transition, no
+    /// matter how many hide/show triggers fire in a row.
+    private(set) lazy var visibility = ManagedVisibility { [weak self] visible in
+        self?.bridge.pushLocal("window:visibility", ["visible": visible])
+    }
+
+    private var visibilityObservers: [NSObjectProtocol] = []
+
+    private func startVisibilityTracking() {
+        guard let window, visibilityObservers.isEmpty else { return }
+        let center = NotificationCenter.default
+        // A minimized window is not visible to the user: pause the renderer
+        // like any other hide path.
+        visibilityObservers.append(center.addObserver(
+            forName: NSWindow.didMiniaturizeNotification, object: window, queue: .main
+        ) { [weak self] _ in self?.visibility.hide() })
+        visibilityObservers.append(center.addObserver(
+            forName: NSWindow.didDeminiaturizeNotification, object: window, queue: .main
+        ) { [weak self] _ in self?.visibility.show() })
+    }
+
+    /// Unified hide path: order out, notify the renderer once, then run the
+    /// subclass hide hook. Repeated hides emit nothing extra.
+    func hideManagedWindow() {
+        guard let window, window.isVisible else { return }
+        window.orderOut(nil)
+        visibility.hide()
+        windowDidHide()
     }
 
     func loadPage(_ name: String) {
@@ -206,10 +240,12 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
         ) { [weak self] _ in self?.autoHideIfNeeded() })
     }
 
+    /// Unified show path: display and notify the renderer once. Subclasses
+    /// override to cancel pending idle teardown first.
     override func showWindow(_ sender: Any?) {
         lastShownAt = Date()
+        visibility.show()
         super.showWindow(sender)
-        pushVisibility(true)
     }
 
     private func autoHideIfNeeded() {
@@ -219,19 +255,10 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
         let trayMode = settings["trayMode"] as? Bool ?? true
         guard trayMode else { return }
         guard Date().timeIntervalSince(lastShownAt) > 0.25 else { return }
-        window.orderOut(nil)
-        pushVisibility(false)
-        windowDidHide()
+        hideManagedWindow()
     }
 
-    /// Window-local visibility push (PLAN.md Phase 6): the renderer pauses
-    /// its tickers and deferred renders while the panel is ordered out, and
-    /// does one catch-up render when it reappears.
-    private func pushVisibility(_ visible: Bool) {
-        bridge.pushLocal("window:visibility", ["visible": visible])
-    }
-
-    /// Hook for subclasses after an auto-hide (not an explicit close).
+    /// Hook for subclasses after a managed hide (auto-hide / tray / close).
     func windowDidHide() {}
 
     // MARK: - Teardown (PLAN.md Phase 5)
@@ -240,7 +267,7 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
     /// tray click reopens it instantly (the dashboard overrides this and
     /// tears its WebView down to reclaim memory).
     func bridgeDidRequestClose(_ bridge: Bridge) {
-        window?.orderOut(nil)
+        hideManagedWindow()
     }
 
     /// Release everything this controller owns: notification observers,
@@ -250,6 +277,8 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
     func tearDown() {
         for observer in autoHideObservers { NotificationCenter.default.removeObserver(observer) }
         autoHideObservers.removeAll()
+        for observer in visibilityObservers { NotificationCenter.default.removeObserver(observer) }
+        visibilityObservers.removeAll()
         if let settingsObserver { NotificationCenter.default.removeObserver(settingsObserver); self.settingsObserver = nil }
         if let moveObserver { NotificationCenter.default.removeObserver(moveObserver); self.moveObserver = nil }
         idleTeardownItem?.cancel()
@@ -266,6 +295,9 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         webView.evaluateJavaScript("window.__tmOnLoad && window.__tmOnLoad()", completionHandler: nil)
+        // A visibility push sent before the page finished loading is lost;
+        // re-sync the current native state now (review round Phase 5).
+        visibility.resync()
         dumpPageStateIfDiagnostics()
     }
 
