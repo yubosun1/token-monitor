@@ -255,8 +255,9 @@ final class MainViewController: NSViewController, TotalBarDelegate, WindowHostCo
 
     func openSettings() {
         if settingsVC == nil {
-            // task5 替换为真实 SettingsViewController。
-            settingsVC = PlaceholderViewController(label: "设置（开发中）")
+            let s = SettingsViewController()
+            s.onClose = { [weak self] in self?.dismissOverlay() }
+            settingsVC = s
         }
         guard let settingsVC else { return }
         present(settingsVC)

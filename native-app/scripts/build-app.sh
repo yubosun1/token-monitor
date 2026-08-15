@@ -6,8 +6,6 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 APP_DIR="$ROOT/native-app"
 BUNDLE="$ROOT/dist/Token Monitor.app"
 
-"$APP_DIR/scripts/stage-www.sh"
-
 # Redirect SwiftPM's temp/module caches into the workspace (the DSH file
 # sandbox blocks writes to /var/folders) and disable SwiftPM's own
 # sandbox-exec (it cannot nest inside the harness sandbox).
@@ -22,8 +20,7 @@ rm -rf "$BUNDLE"
 mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
 
 cp "$APP_DIR/.build/release/TokenMonitor" "$BUNDLE/Contents/MacOS/TokenMonitor"
-cp -R "$APP_DIR/build/www" "$BUNDLE/Contents/Resources/www"
-cp "$APP_DIR/Resources/tokenMonitorBridge.js" "$BUNDLE/Contents/Resources/tokenMonitorBridge.js"
+# 原生 AppKit UI：不再打包渲染层 www/ 与 bridge.js（WKWebView 已移除）。
 cp "$ROOT/assets/icons/tray-token-monitor.png" "$BUNDLE/Contents/Resources/tray-token-monitor.png"
 cp "$ROOT/assets/icon.png" "$BUNDLE/Contents/Resources/icon.png"
 

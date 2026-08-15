@@ -270,9 +270,8 @@ final class DashboardViewWindowController: GlassWindowController {
     override var idleTeardownDelay: TimeInterval { 60 }
 
     init() {
-        // 占位：task6 替换为 DashboardViewController。
         super.init(boundsKey: "dashboardBounds", defaultSize: NSSize(width: 920, height: 720),
-                   contentController: PlaceholderViewController(label: "Dashboard（开发中）"))
+                   contentController: DashboardViewController())
         restoreBounds()
         startBoundsTracking()
         enableAutoHideOnResign()
