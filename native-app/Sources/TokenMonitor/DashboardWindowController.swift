@@ -246,8 +246,7 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
           });
         })()
         """
-        webView.evaluateJavaScript(probe) { [weak self] result, error in
-            guard let self else { return }
+        webView.evaluateJavaScript(probe) { result, error in
             if let error {
                 NSLog("[diag] page probe failed: %@", String(describing: error))
             } else if let string = result as? String {

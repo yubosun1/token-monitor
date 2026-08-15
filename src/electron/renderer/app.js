@@ -2827,7 +2827,10 @@ function subscriptionWriteErrorKey(error) {
 function renderSubscriptionOrphanNotice() {
   const notice = els.subscriptionOrphanNotice;
   if (!notice) return;
-  const orphans = state.settings?.subscriptionsOrphaned || [];
+  // Defensive: pre-native builds could persist the legacy dict shape
+  // {"hubUrl": "", "records": []}; only an array is countable.
+  const raw = state.settings?.subscriptionsOrphaned;
+  const orphans = Array.isArray(raw) ? raw : [];
   notice.classList.toggle('hidden', orphans.length === 0);
   if (orphans.length === 0) return;
   if (els.subscriptionOrphanText) {

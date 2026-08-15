@@ -23,6 +23,7 @@ final class SettingsStore {
             lock.lock(); defer { lock.unlock() }
             values.merge(json) { _, new in new }
             migrateLegacyDefaultsIfNeeded()
+            normalizeOrphanedSubscriptions()
         }
     }
 
@@ -38,6 +39,18 @@ final class SettingsStore {
             values["heatmapMetric"] = "tokens"
         }
         values["settingsSchemaVersion"] = 1
+        persist(values)
+    }
+
+    /// The pre-native format of `subscriptionsOrphaned` was a dict
+    /// (`["hubUrl": "", "records": [...]]`); the renderer reads it as an array
+    /// (`orphans.length`), so a persisted dict made the orphan notice render
+    /// unconditionally. Normalize on every load — unlike the schema-version
+    /// migration this is unconditional, because any pre-fix build can write the
+    /// legacy shape back at any time.
+    private func normalizeOrphanedSubscriptions() {
+        guard let orphaned = values["subscriptionsOrphaned"], !(orphaned is [Any]) else { return }
+        values["subscriptionsOrphaned"] = [Any]()
         persist(values)
     }
 
