@@ -15,7 +15,6 @@ const BRAND_VENDOR_COLORS = { ...charts.clientColors };
 
 const els = {
   body: document.body,
-  themeToggle: document.getElementById('themeToggle'),
   refreshBtn: document.getElementById('refreshBtn'),
   closeBtn: document.getElementById('closeBtn'),
   tabs: Array.from(document.querySelectorAll('.dash-tab')),
@@ -217,7 +216,6 @@ function applyAppearance(settings) {
   applyReduceMotionPreference(settings?.reduceMotion);
   applyThemeColors(settings?.themeColors);
   applyVendorColorOverrides(settings?.vendorColors);
-  els.body.classList.toggle('flat', state.flat);
 }
 
 function applyThemeColors(overrides) {
@@ -623,7 +621,6 @@ async function boot() {
   if (settings.currencyRatesEffective && window.TokenMonitorCurrency?.configureRates) {
     window.TokenMonitorCurrency.configureRates(settings.currencyRatesEffective);
   }
-  state.flat = settings.dashboardFlat === true;
   // Tokens is the dashboard default. A persisted heatmapMetric only applies when
   // it was explicitly chosen in the current UI (heatmapMetricExplicit) — the
   // legacy "cost" default inherited from the Electron settings is treated as unset.
@@ -713,7 +710,6 @@ els.heatmapMetricBtns.forEach((b) => b.addEventListener('click', () => {
   // flag is set, so the legacy "cost" default is never re-applied on launch.
   window.tokenMonitor.updateSettings({ heatmapMetric: state.heatmapMetric, heatmapMetricExplicit: true });
 }));
-els.themeToggle.addEventListener('click', () => { state.flat = !state.flat; els.body.classList.toggle('flat', state.flat); window.tokenMonitor.updateSettings({ dashboardFlat: state.flat }); });
 els.refreshBtn.addEventListener('click', refresh);
 els.closeBtn.addEventListener('click', () => window.tokenMonitor.dashboard.close());
 

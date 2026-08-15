@@ -23,7 +23,6 @@ body {
   flex-direction: column;
   overflow: hidden;
 }
-body.flat { background: rgb(var(--glass-rgb)); }
 
 .dash-header {
   -webkit-app-region: drag;
@@ -127,8 +126,10 @@ body.flat { background: rgb(var(--glass-rgb)); }
 .dash-breakdown-col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .dash-breakdown-title { font-size: 12px; font-weight: 600; opacity: 0.6; margin-bottom: 2px; text-transform: uppercase; letter-spacing: 0.04em; }
 .dash-bd-row { display: flex; align-items: center; gap: 12px; font-size: 12px; padding: 2px 0; }
-.dash-bd-name { flex: 0 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; opacity: 0.9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.dash-bd-bar-bg { flex: 1 1 160px; min-width: 40px; height: 4px; background: rgba(var(--overlay-rgb), 0.06); border-radius: 2px; overflow: hidden; }
+.dash-bd-name { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; opacity: 0.9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Fixed-width bar column so every progress bar shares the same start x and
+   width — names flex in the remaining space and truncate with ellipsis. */
+.dash-bd-bar-bg { flex: 0 0 160px; height: 4px; background: rgba(var(--overlay-rgb), 0.06); border-radius: 2px; overflow: hidden; }
 .dash-bd-bar-fill { width: 100%; height: 100%; border-radius: 2px; transform: scaleX(var(--bar-scale, 0)); transform-origin: left center; }
 .dash-bd-val { flex: none; font-variant-numeric: tabular-nums; opacity: 0.8; text-align: right; }
 .dash-bd-pct { flex: none; width: 42px; font-variant-numeric: tabular-nums; opacity: 0.55; text-align: right; }

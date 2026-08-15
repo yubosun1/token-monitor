@@ -6677,9 +6677,10 @@ function applyAppearanceSettings(settings) {
   // Only full settings objects carry themeColors; glass/zoom preview patches
   // omit it, so we must not wipe theme overrides mid-slider-drag.
   if (settings && 'themeColors' in settings) applyThemeColors(settings.themeColors);
-  // appearanceMode (dark/light/auto) is the theme control in the native build;
-  // it takes precedence over any legacy themeColors patch.
-  applyAppearanceMode(settings?.appearanceMode ?? state.settings?.appearanceMode);
+  // The native build ships dark-only: appearance switching was removed, so the
+  // theme is always pinned to the dark "default" preset regardless of any
+  // legacy appearanceMode value left in stored settings.
+  applyAppearanceMode('dark');
   els.liveDot.style.display = (settings?.showLiveDot !== false) ? '' : 'none';
   els.shell.classList.toggle('desktop-mode', settings?.windowBehavior === 'desktop');
   els.shell.classList.toggle('title-icon-only', settings?.titleIconOnly === true);
@@ -7533,8 +7534,6 @@ function syncSettingsForm() {
   if (els.windowsBackdropInput) els.windowsBackdropInput.value = windowsGlassApi.normalizeWindowsBackdropMode(state.settings.windowsBackdrop);
   const reduceMotion = motionPreferenceApi.normalize(state.settings.reduceMotion);
   for (const input of els.reduceMotionInputs || []) input.checked = input.value === reduceMotion;
-  const appearanceMode = ['dark', 'light', 'auto'].includes(state.settings?.appearanceMode) ? state.settings.appearanceMode : 'dark';
-  for (const input of document.querySelectorAll('input[name="appearanceMode"]')) input.checked = input.value === appearanceMode;
   els.liveDotInput.checked = state.settings.showLiveDot !== false;
   els.toolIconsInput.checked = state.settings.showToolIcons !== false;
   els.titleIconInput.checked = state.settings.titleIconOnly === true;
@@ -10293,18 +10292,6 @@ els.showTrayProviderBadgeInput.addEventListener('change', () => {
 els.windowToggleShortcutValue?.addEventListener('click', startWindowShortcutRecording);
 els.windowToggleShortcutClearButton?.addEventListener('click', () => setWindowToggleShortcut('').catch(() => {}));
 els.startAtLoginInput?.addEventListener('change', () => saveSettings({ startAtLogin: els.startAtLoginInput.checked }));
-for (const input of document.querySelectorAll('input[name="appearanceMode"]')) {
-  input.addEventListener('change', () => {
-    if (!input.checked) return;
-    state.settings.appearanceMode = input.value;
-    applyAppearanceMode(input.value);
-    saveSettings({ appearanceMode: input.value });
-  });
-}
-// In "auto" mode, react to system light/dark switches at runtime.
-window.matchMedia?.('(prefers-color-scheme: light)')?.addEventListener?.('change', () => {
-  if ((state.settings?.appearanceMode || 'dark') === 'auto') applyAppearanceMode('auto');
-});
 els.automaticAppUpdatesInput?.addEventListener('change', () => saveSettings({ automaticAppUpdates: els.automaticAppUpdatesInput.checked }));
 els.glassInput.addEventListener('change', saveAppearanceFromControls);
 els.blurInput.addEventListener('change', saveAppearanceFromControls);
