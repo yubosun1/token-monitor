@@ -1036,6 +1036,110 @@ func runCollectorStateTests() {
         checkEqual(world.tickKinds.count, 2, "T13b exactly one follow-up tick")
         checkEqual(world.tickKinds.last, .fullForced, "T13b strongest request wins")
     }
+
+    // T12: pricing honors the 6h TTL in a long-running app. Within the TTL
+    // nothing re-resolves; past the TTL exactly one resolve runs per model
+    // and tick (shared across clients), costs re-derive from cached rows;
+    // an expired lookup failure keeps the last-known-good price with a
+    // bounded retry floor instead of zeroing costs.
+    do {
+        let world = FakeCollectorWorld(
+            now: shanghaiDate(2026, 8, 15, 12, 0),
+            settings: stateSettings(clients: "proma,hanako")
+        )
+        world.pricingByModel["model-a"] = fakePricing(0.001, 0.002)
+        world.rowsByClient["proma"] = [
+            stateRow(client: "proma", session: "s1", model: "model-a", input: 100, output: 50, startedAt: "2026-08-15T10:00:00+08:00")
+        ]
+        world.rowsByClient["hanako"] = [
+            stateRow(client: "hanako", session: "h1", model: "model-a", input: 200, output: 100, startedAt: "2026-08-15T11:00:00+08:00")
+        ]
+        let (collector, queue) = world.makeCollector()
+        collector.requestRefresh(.full, reason: .startup)
+        world.waitIdle(collector, queue)
+        checkEqual(world.pricingLookups["model-a"] ?? 0, 1, "T12 one lookup per tick for a model shared by clients")
+        checkClose(UsageCore.doubleValue(world.period(collector, "today")["costUsd"]), 0.6, "T12 initial costs")
+        checkEqual(world.rawReads["proma"] ?? 0, 1, "T12 one raw read at startup")
+
+        // Within the TTL another full adds no resolve lookup.
+        world.now = world.now.addingTimeInterval(3600)
+        collector.requestRefresh(.full, reason: .manual)
+        world.waitIdle(collector, queue)
+        checkEqual(world.pricingLookups["model-a"] ?? 0, 1, "T12 cached pricing within TTL does not resolve")
+
+        // Past 6h: the runner returns an updated price. Exactly one resolve
+        // runs; costs re-derive from cached rows without a raw re-read.
+        world.now = world.now.addingTimeInterval(6 * 3600 + 60)
+        world.pricingByModel["model-a"] = fakePricing(0.002, 0.004)
+        collector.requestRefresh(.full, reason: .manual)
+        world.waitIdle(collector, queue)
+        checkEqual(world.pricingLookups["model-a"] ?? 0, 2, "T12 expired pricing resolved once")
+        checkEqual(world.pricingLookupPolicies["model-a"], .resolve, "T12 expired resolve uses resolve policy")
+        checkEqual(world.rawReads["proma"] ?? 0, 1, "T12 expiry re-derives from cached rows")
+        checkClose(UsageCore.doubleValue(world.period(collector, "today")["costUsd"]), 1.2, "T12 updated costs after expiry")
+
+        // Expired lookup failure: last-known-good pricing survives with a
+        // bounded retry floor; costs are never zeroed.
+        world.pricingByModel["model-a"] = nil
+        world.now = world.now.addingTimeInterval(7 * 3600)
+        collector.requestRefresh(.full, reason: .manual)
+        world.waitIdle(collector, queue)
+        checkEqual(world.pricingLookups["model-a"] ?? 0, 3, "T12 expired resolve attempted once on failure")
+        checkClose(UsageCore.doubleValue(world.period(collector, "today")["costUsd"]), 1.2, "T12 failed expiry keeps last-known-good costs")
+        collector.requestRefresh(.full, reason: .manual)
+        world.waitIdle(collector, queue)
+        checkEqual(world.pricingLookups["model-a"] ?? 0, 3, "T12 expiry failure respects the retry floor")
+
+        world.pricingByModel["model-a"] = fakePricing(0.003, 0.006)
+        world.now = world.now.addingTimeInterval(301)
+        collector.requestRefresh(.full, reason: .manual)
+        world.waitIdle(collector, queue)
+        checkEqual(world.pricingLookups["model-a"] ?? 0, 4, "T12 expiry retried after the floor")
+        checkClose(UsageCore.doubleValue(world.period(collector, "today")["costUsd"]), 1.8, "T12 recovered costs")
+    }
+
+    // T14: the custom pricing sidecar syncs only on the first tick and when
+    // the setting actually changes; a change also invalidates the pricing
+    // generation through the real settings-change notification path.
+    do {
+        let world = FakeCollectorWorld(
+            now: shanghaiDate(2026, 8, 15, 12, 0),
+            settings: stateSettings(clients: "proma")
+        )
+        world.rowsByClient["proma"] = [
+            stateRow(client: "proma", session: "s1", model: "model-a", input: 100, output: 50, startedAt: "2026-08-15T10:00:00+08:00")
+        ]
+        world.pricingByModel["model-a"] = fakePricing(0.001, 0.002)
+        world.settings["customModelPricing"] = [
+            ["modelId": "custom-a", "inputPerM": 1.5, "outputPerM": 3.0]
+        ]
+        let (collector, queue) = world.makeCollector()
+        collector.start()
+        world.waitIdle(collector, queue)
+        checkEqual(world.customPricingSyncCalls, 1, "T14 startup syncs the sidecar exactly once")
+        checkEqual(world.pricingLookups["model-a"] ?? 0, 1, "T14 pricing resolved once at startup")
+
+        // Ordinary ticks with the same setting never re-sync.
+        collector.requestRefresh(.cheap, reason: .timer)
+        world.waitIdle(collector, queue)
+        collector.requestRefresh(.full, reason: .manual)
+        world.waitIdle(collector, queue)
+        checkEqual(world.customPricingSyncCalls, 1, "T14 unchanged setting does not re-sync")
+
+        // An actual change (through the real notification the settings
+        // store posts) syncs exactly once more and invalidates pricing.
+        world.settings["customModelPricing"] = [
+            ["modelId": "custom-a", "inputPerM": 2.0, "outputPerM": 3.0]
+        ]
+        NotificationCenter.default.post(
+            name: SettingsStore.changedNotification,
+            object: nil,
+            userInfo: ["keys": ["customModelPricing"]]
+        )
+        world.waitIdle(collector, queue)
+        checkEqual(world.customPricingSyncCalls, 2, "T14 changed setting syncs exactly once more")
+        checkEqual(world.pricingLookups["model-a"] ?? 0, 2, "T14 pricing generation invalidated and re-resolved")
+    }
 }
 
 // MARK: - Managed visibility tests (review round Phase 5)
