@@ -66,9 +66,24 @@ enum HistoryCore {
         }
     }
 
+    /// Local "today" key for the daily window. Day keys are local-day
+    /// scoped everywhere else (adapter contributions, tokscale graph with
+    /// its pinned bucket timezone, the renderer's heatmap cells), so the
+    /// fallback must be local too: ISO8601DateFormatter formats in UTC,
+    /// which cut the current local day out of the daily window between
+    /// local midnight and 08:00 (UTC+8) — the dashboard's activity view
+    /// showed today as 0 during that window.
+    static func localTodayKey() -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: Date())
+    }
+
     static func normalizeHistory(days input: [Day], todayKey: String? = nil, capDays: Int = 370, totalActiveTimeMsOverride: Double? = nil) -> JSON {
         let full = input.sorted { $0.date < $1.date }
-        let today = String((todayKey ?? ISO8601DateFormatter().string(from: Date())).prefix(10))
+        let today = String((todayKey ?? localTodayKey()).prefix(10))
 
         let count = max(0, capDays)
         let startKey = dayKeyAddDays(today, delta: -(count - 1))

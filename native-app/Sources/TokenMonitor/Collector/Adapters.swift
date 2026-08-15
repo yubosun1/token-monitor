@@ -635,7 +635,7 @@ enum Adapters {
                 let turn = data["turn"] as? Int ?? 0
                 let step = data["step"] as? Int ?? 0
                 if chunkType == "usage", let usage = chunk["usage"] as? JSON {
-                    let event: JSON = ["usage": usage, "turn": turn, "step": step]
+                    let event: JSON = ["usage": usage, "turn": turn, "step": step, "time": time]
                     usageEvents.append(event)
                 } else if chunkType == "finish" {
                     if let model = (chunk["replayState"] as? JSON)?["model"] as? String {
@@ -656,7 +656,15 @@ enum Adapters {
             let output = UsageCore.doubleValue(usage["outputTokens"])
             let cacheRead = UsageCore.doubleValue(usage["cacheReadTokens"])
             let cacheWrite = UsageCore.doubleValue(usage["cacheWriteTokens"])
-            let createdAt = headerCreatedAt > 0 ? headerCreatedAt : lastTime
+            // Attribute each usage event to its own timestamp (not the
+            // session header's createdAt): a session that spans local
+            // midnight must contribute to the day its tokens were actually
+            // spent, so "today" includes every session active today
+            // (periodRows filters on startedAt; proma/hanako rows already
+            // carry per-message times). Fall back to the header time when
+            // the event line has none.
+            let eventTime = UsageCore.doubleValue(event["time"])
+            let createdAt = eventTime > 0 ? eventTime : (headerCreatedAt > 0 ? headerCreatedAt : lastTime)
             rows.append(UsageCore.UsageRow(
                 client: "dsh",
                 sessionId: sessionId,

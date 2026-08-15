@@ -746,7 +746,7 @@ final class Collector {
         let pushed = previous == nil || contentSignature(stats) != contentSignature(previous!)
         if pushed {
             let pushSpan = PerfDiag.span("push-stats")
-            environment.push("stats:push", stats)
+            environment.push("stats:push", BridgeCore.shared.statsPushPayload(stats))
             pushSpan.end()
             PerfDiag.log(String(format: "push stats:push id=%d", id))
             PerfDiag.dump(stats, name: String(format: "stats-%03d.json", id))
@@ -791,7 +791,7 @@ final class Collector {
             self.stateLock.lock()
             self.statsCache = stats
             self.stateLock.unlock()
-            self.environment.push("stats:push", stats)
+            self.environment.push("stats:push", BridgeCore.shared.statsPushPayload(stats))
         }
     }
 

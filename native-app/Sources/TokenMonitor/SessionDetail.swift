@@ -427,7 +427,7 @@ enum SessionDetailCore {
                 let turn = payload["turn"] as? Int ?? 0
                 let step = payload["step"] as? Int ?? 0
                 if chunkType == "usage", let usage = chunk["usage"] as? JSON {
-                    usageEvents.append(["usage": usage, "turn": turn, "step": step])
+                    usageEvents.append(["usage": usage, "turn": turn, "step": step, "time": time])
                 }
             default:
                 break
@@ -438,7 +438,12 @@ enum SessionDetailCore {
             guard let usage = event["usage"] as? JSON else { continue }
             let turn = event["turn"] as? Int ?? 0
             let step = event["step"] as? Int ?? 0
-            var e = Event(kind: .turn, timestampMs: headerCreatedAt > 0 ? headerCreatedAt : lastTime)
+            // Use the usage event's own timestamp so a session spanning
+            // local midnight shows its turns on the day they happened (the
+            // popup's period filter keys off turn timestamps).
+            let eventTime = UsageCore.doubleValue(event["time"])
+            let createdAt = eventTime > 0 ? eventTime : (headerCreatedAt > 0 ? headerCreatedAt : lastTime)
+            var e = Event(kind: .turn, timestampMs: createdAt)
             e.tokens = Tokens(
                 input: num(usage["inputTokens"]),
                 output: num(usage["outputTokens"]),

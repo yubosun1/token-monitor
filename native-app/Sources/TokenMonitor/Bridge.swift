@@ -48,6 +48,24 @@ final class BridgeCore {
         for pusher in snapshot { pusher(event, payload) }
     }
 
+    /// Envelope for stats pushes, matching the wire contract the renderer
+    /// was written against (the Electron main process sent
+    /// `{ event: 'stats', data: { type, reason, stats, at } }` — see
+    /// app.js `onStatsPush`, which only accepts `payload.data.stats`).
+    /// Pushing the bare stats dict made every live push invisible to the
+    /// widget: it stayed on whatever `stats:get` returned at page load.
+    func statsPushPayload(_ stats: [String: Any]) -> [String: Any] {
+        return [
+            "event": "stats",
+            "data": [
+                "type": "stats",
+                "reason": "local",
+                "stats": stats,
+                "at": ISO8601DateFormatter().string(from: Date())
+            ]
+        ]
+    }
+
     /// Settings as the renderer may see them: credentials are stripped and the
     /// UI-facing credential state is injected. `deepseekApiKeyConfigured` is
     /// what the renderer's `renderDeepseekStatus` reads; `deepseekApiKeySource`
@@ -219,7 +237,7 @@ final class BridgeCore {
             let list = Subscriptions.normalizeSubscriptions(args.first)
             settings.update(["subscriptions": list, "subscriptionsCacheHub": ""])
             push("settings:push", rendererSettingsSnapshot())
-            push("stats:push", Collector.shared.latestStats() ?? emptyStats())
+            push("stats:push", BridgeCore.shared.statsPushPayload(Collector.shared.latestStats() ?? emptyStats()))
             return rendererSettingsSnapshot()
 
         case "subscriptions:adoptOrphans", "subscriptions:discardOrphans":
@@ -306,7 +324,7 @@ final class BridgeCore {
         switch method {
         case "window:contentReady":
             push("settings:push", rendererSettingsSnapshot())
-            push("stats:push", Collector.shared.latestStats() ?? emptyStats())
+            push("stats:push", BridgeCore.shared.statsPushPayload(Collector.shared.latestStats() ?? emptyStats()))
         case "window:viewState", "setViewState":
             if let patch = args.first as? [String: Any] {
                 let current = settings.snapshot()["lastViewState"] as? [String: Any] ?? [:]
