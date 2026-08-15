@@ -38,7 +38,6 @@ final class Collector {
     private var lastFullTickAt = Date.distantPast
     private var cachedTokscale: [String: [String: Any]]?
     private var cachedHistory: [String: Any]?
-    private var cachedAdapterRows: [String: [UsageCore.UsageRow]] = [:]
     private var cachedPricing: [String: TokscalePricing] = [:]
     private var cachedPeriods: (today: [String: Any], month: [String: Any], allTime: [String: Any])?
     private var cachedClients: [String] = []
@@ -274,8 +273,6 @@ final class Collector {
             PerfDiag.log(String(format: "source %@: changed (%d files), recomputed", client, fp.files.count))
             span.end()
         }
-        cachedAdapterRows = adapterRows
-
         // Merge the adapter contributions only when one of them changed.
         if adapterChanged {
             let span = PerfDiag.span("aggregate-adapter-periods")

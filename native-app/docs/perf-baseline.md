@@ -1,5 +1,7 @@
 # Phase 0 性能基线（优化前）
 
+> 优化后的数字与逐阶段变化见 perf-delivery-record.md。
+
 记录日期：2026-08-15。测量方式：`scripts/perf-baseline.sh`（diag/tray 模式），
 应用自身通过 `TOKEN_MONITOR_DIAG` 上报 [perf] 阶段耗时、getrusage CPU 与 task_info footprint；
 实例数与 WebKit 子进程数由脚本 pgrep 采样，另取一次外部 `/usr/bin/footprint` 快照。
