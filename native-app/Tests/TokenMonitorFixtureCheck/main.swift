@@ -720,6 +720,25 @@ func runCollectorStateTests() {
         checkEqual(world.tokscaleFingerprintChecks, 2, "T6 cadence reset: no per-15s full check")
     }
 
+    // T9: startup runs the cheap tick first, then the full tick — the
+    // first stats push must stay cheap (cheap-first startup).
+    do {
+        let world = FakeCollectorWorld(
+            now: shanghaiDate(2026, 8, 15, 12, 0),
+            settings: stateSettings(clients: "proma")
+        )
+        world.rowsByClient["proma"] = [
+            stateRow(client: "proma", session: "s1", model: "model-a", input: 100, output: 50, startedAt: "2026-08-15T10:00:00+08:00")
+        ]
+        let (collector, queue) = world.makeCollector()
+        collector.requestRefresh(.cheap, reason: .startup)
+        collector.requestRefresh(.full, reason: .startup)
+        world.waitIdle(collector, queue)
+        checkEqual(world.tickKinds.count, 2, "T9 startup executes two ticks")
+        checkEqual(world.tickKinds.first, .cheap, "T9 startup cheap runs first")
+        checkEqual(world.tickKinds.last, .full, "T9 startup full follows the cheap tick")
+    }
+
     // T7: requests arriving during a long tick coalesce into exactly one
     // necessary follow-up refresh (a full), settings change not lost.
     do {

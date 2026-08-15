@@ -18,6 +18,12 @@ enum RefreshKind: Int {
     case fullForced = 3 // diagnostic: bypass fingerprint reuse entirely
 }
 
+/// One pending refresh request (coordination state).
+struct RefreshRequest {
+    var kind: RefreshKind
+    var reason: RefreshReason
+}
+
 /// Injectable seams for the collector (review-round Phase 0). Production
 /// uses `live`; the fixture/state tests substitute fakes for file scanning,
 /// tokscale runs, pricing lookups, settings and the clock, and assert call
@@ -99,7 +105,7 @@ final class Collector {
     // Coordination state (short lock only).
     private let coordLock = NSLock()
     private var workerRunning = false
-    private var pendingRefresh: (kind: RefreshKind, reason: RefreshReason)?
+    private var pendingQueue: [RefreshRequest] = []
     private var pendingInvalidations = CollectorInvalidations()
 
     private var timer: Timer?
@@ -292,17 +298,39 @@ final class Collector {
 
     // MARK: - Coalescing pump (review round Phase 4)
 
-    /// Any thread. Merges into the pending slot under the short
+    /// Any thread. Merges into the pending queue under the short
     /// coordination lock immediately — no waiting for a running tick.
+    ///
+    /// Merge rules:
+    ///  - the very first startup cheap tick is never merged with: the
+    ///    startup full request queues behind it so the first stats push
+    ///    stays cheap (cheap-first startup);
+    ///  - otherwise a request is dropped when an equally strong or stronger
+    ///    request is already queued, and replaces the weakest queued
+    ///    request otherwise, so bursts collapse to one necessary refresh.
     func requestRefresh(_ kind: RefreshKind, reason: RefreshReason) {
         coordLock.lock()
         var spawnWorker = false
-        if var pending = pendingRefresh {
-            if kind.rawValue > pending.kind.rawValue {
-                pendingRefresh = (kind, reason)
-            }
+        if pendingQueue.isEmpty {
+            pendingQueue.append(RefreshRequest(kind: kind, reason: reason))
         } else {
-            pendingRefresh = (kind, reason)
+            let firstStartupCheap = pendingQueue.count == 1
+                && pendingQueue[0].kind == .cheap
+                && pendingQueue[0].reason == .startup
+                && statsCache == nil
+            if firstStartupCheap {
+                // Queue behind the first startup cheap unless something at
+                // least as strong is already queued behind it.
+                if !pendingQueue.dropFirst().contains(where: { $0.kind.rawValue >= kind.rawValue }) {
+                    pendingQueue.append(RefreshRequest(kind: kind, reason: reason))
+                }
+            } else if pendingQueue.contains(where: { $0.kind.rawValue >= kind.rawValue }) {
+                // Covered by an existing queued request: drop.
+            } else if let index = pendingQueue.firstIndex(where: { $0.kind.rawValue < kind.rawValue }) {
+                pendingQueue[index] = RefreshRequest(kind: kind, reason: reason)
+            } else {
+                pendingQueue.append(RefreshRequest(kind: kind, reason: reason))
+            }
         }
         if !workerRunning {
             spawnWorker = true
@@ -328,12 +356,12 @@ final class Collector {
         coordLock.unlock()
         while true {
             coordLock.lock()
-            guard let pending = pendingRefresh else {
+            guard let pending = pendingQueue.first else {
                 workerRunning = false
                 coordLock.unlock()
                 return
             }
-            pendingRefresh = nil
+            pendingQueue.removeFirst()
             let invalidations = pendingInvalidations
             pendingInvalidations = CollectorInvalidations()
             coordLock.unlock()
