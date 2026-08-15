@@ -119,6 +119,25 @@ struct TokscaleGraph: Decodable {
         let intensity: Int?
         let tokenBreakdown: Breakdown?
         let clients: [ClientContribution]?
+        let activeTimeMs: Double?
+
+        enum CodingKeys: String, CodingKey {
+            case date, totals, intensity, tokenBreakdown, clients, activeTimeMs, active_time_ms
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            date = try c.decode(String.self, forKey: .date)
+            totals = try c.decodeIfPresent(Totals.self, forKey: .totals)
+            intensity = try c.decodeIfPresent(Int.self, forKey: .intensity)
+            tokenBreakdown = try c.decodeIfPresent(Breakdown.self, forKey: .tokenBreakdown)
+            clients = try c.decodeIfPresent([ClientContribution].self, forKey: .clients)
+            activeTimeMs = try c.decodeIfPresent(Double.self, forKey: .activeTimeMs)
+                ?? c.decodeIfPresent(Double.self, forKey: .active_time_ms)
+        }
+    }
+    struct TimeMetrics: Decodable {
+        let totalActiveTimeMs: Double?
     }
     struct Meta: Decodable {
         let generatedAt: String?
@@ -133,13 +152,15 @@ struct TokscaleGraph: Decodable {
 
     let meta: Meta?
     let summary: Summary?
+    let timeMetrics: TimeMetrics?
     let contributions: [Contribution]
 
-    enum CodingKeys: String, CodingKey { case meta, summary, contributions }
+    enum CodingKeys: String, CodingKey { case meta, summary, contributions, timeMetrics, time_metrics }
 
-    init(meta: Meta?, summary: Summary?, contributions: [Contribution]) {
+    init(meta: Meta?, summary: Summary?, timeMetrics: TimeMetrics?, contributions: [Contribution]) {
         self.meta = meta
         self.summary = summary
+        self.timeMetrics = timeMetrics
         self.contributions = contributions
     }
 
@@ -147,6 +168,8 @@ struct TokscaleGraph: Decodable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         meta = try c.decodeIfPresent(Meta.self, forKey: .meta)
         summary = try c.decodeIfPresent(Summary.self, forKey: .summary)
+        timeMetrics = try c.decodeIfPresent(TimeMetrics.self, forKey: .timeMetrics)
+            ?? c.decodeIfPresent(TimeMetrics.self, forKey: .time_metrics)
         contributions = (try? c.decode([Contribution].self, forKey: .contributions)) ?? []
     }
 }

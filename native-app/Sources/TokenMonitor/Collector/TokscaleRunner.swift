@@ -80,13 +80,13 @@ final class TokscaleRunner {
     }
 
     func graph(clients: [String]) throws -> TokscaleGraph {
-        guard !clients.isEmpty else { return TokscaleGraph(meta: nil, summary: nil, contributions: []) }
+        guard !clients.isEmpty else { return TokscaleGraph(meta: nil, summary: nil, timeMetrics: nil, contributions: []) }
         let result = try run(["graph", "--client", clients.joined(separator: ","), "--no-spinner"])
         guard result.exitCode == 0 else {
             throw CollectorError.tokscaleFailed("graph exit \(result.exitCode)")
         }
         guard let start = result.stdout.firstIndex(of: "{") else {
-            return TokscaleGraph(meta: nil, summary: nil, contributions: [])
+            return TokscaleGraph(meta: nil, summary: nil, timeMetrics: nil, contributions: [])
         }
         return try JSONDecoder().decode(TokscaleGraph.self, from: Data(String(result.stdout[start...]).utf8))
     }

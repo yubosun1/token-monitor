@@ -5,7 +5,7 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   if (root) root.TokenMonitorHomeModulePreferences = api;
 })(typeof window !== 'undefined' ? window : null, function createHomeModulePreferencesApi() {
-  const DEFAULT_HOME_MODULE_ORDER = 'limits,tool,device,model,trends';
+  const DEFAULT_HOME_MODULE_ORDER = 'limits,tool,model,trends';
 
   function optionIds(options) {
     return (options || []).map((option) => String(option?.id || '').trim().toLowerCase()).filter(Boolean);
@@ -76,7 +76,7 @@
   function defaultHomeModulePreferences() {
     return {
       homeModuleOrder: DEFAULT_HOME_MODULE_ORDER,
-      hiddenHomeModules: 'tool,device'
+      hiddenHomeModules: 'tool'
     };
   }
 

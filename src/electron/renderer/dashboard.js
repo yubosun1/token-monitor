@@ -26,6 +26,7 @@ const els = {
   chart: document.getElementById('dashChart'),
   legend: document.getElementById('dashLegend'),
   heatmap: document.getElementById('dashHeatmap'),
+  heatmapLegend: document.getElementById('dashHeatmapLegend'),
   cards: document.getElementById('dashCards'),
   empty: document.getElementById('dashEmpty'),
   tooltip: document.getElementById('dashTooltip'),
@@ -39,7 +40,7 @@ const state = {
   tab: 'activity', range: '30', stackBy: 'client', mode: 'bars', flat: false,
   locale: 'en', currency: 'USD', compactTokenUnits: 'western', history: null, chartModel: null,
   chartKind: 'bars', motion: 'none', reduceMotion: 'system',
-  heatmapMetric: 'cost'
+  heatmapMetric: 'tokens'
 };
 
 const DATA_MOTION_MS = 800;
@@ -480,8 +481,30 @@ function renderActivity() {
   }
   const hideHeatmapForEntry = !prefersReducedMotion()
     && (state.motion === 'entry' || els.heatmap.classList.contains('is-motion-pending'));
+  // Scale legend: label each brightness level with the real amount it covers, so
+  // in cost mode (or any skewed distribution) cell brightness reads as a concrete
+  // value. Accent today's level on both the legend and the grid as a reference.
+  const metricField = state.heatmapMetric === 'cost' ? 'cost' : 'tokens';
+  const metricRows = state.history?.daily || [];
+  const metricMax = Math.max(0, ...metricRows.map((row) => Number(row[metricField]) || 0));
+  let todayLevel = null;
+  let todayValue = null;
+  if (metricMax > 0) {
+    const today = metricRows.find((row) => String(row.date).slice(0, 10) === todayKey());
+    todayValue = Number(today?.[metricField]) || 0;
+    todayLevel = charts.heatmapLevelForValue(todayValue, metricMax);
+    els.heatmapLegend.innerHTML = charts.heatmapLevelLegend({
+      maxValue: metricMax,
+      metric: state.heatmapMetric,
+      format: state.heatmapMetric === 'cost' ? formatCostCompact : formatCompact,
+      accentLevel: todayLevel,
+      accentValue: todayValue
+    });
+  } else {
+    els.heatmapLegend.innerHTML = '';
+  }
   els.heatmap.innerHTML = heat.cells.length
-    ? charts.heatmapSvg(heat, { monthLabel: (m) => monthLabel(m.label), initialHidden: hideHeatmapForEntry })
+    ? charts.heatmapSvg(heat, { monthLabel: (m) => monthLabel(m.label), initialHidden: hideHeatmapForEntry, accentLevel: todayLevel })
     : '';
   animateHeatmapEntry();
   state.dayMap = new Map((state.history?.daily || []).map((d) => [String(d.date).slice(0, 10), { tokens: Number(d.tokens || 0), cost: Number(d.cost || 0) }]));
@@ -602,7 +625,7 @@ async function boot() {
     window.TokenMonitorCurrency.configureRates(settings.currencyRatesEffective);
   }
   state.flat = settings.dashboardFlat === true;
-  state.heatmapMetric = settings.heatmapMetric || 'cost';
+  state.heatmapMetric = settings.heatmapMetric || 'tokens';
   applyAppearance(settings);
   applyTranslations();
   populateRangeSelect();
@@ -644,7 +667,7 @@ window.tokenMonitor.onSettingsPush?.((next) => {
     applyReduceMotionPreference(reduceMotion);
     needsRender = true;
   }
-  const nextMetric = next.heatmapMetric || 'cost';
+  const nextMetric = next.heatmapMetric || 'tokens';
   if (state.heatmapMetric !== nextMetric) {
     state.heatmapMetric = nextMetric;
     needsRender = true;

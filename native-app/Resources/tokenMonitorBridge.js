@@ -204,7 +204,7 @@
     if (e.button !== 0) return;
     var el = e.target;
     if (!(el instanceof Element)) return;
-    if (!el.closest('.titlebar')) return;
+    if (!el.closest('.titlebar') && !el.closest('.dash-header')) return;
     if (el.closest('button, input, select, a, .tabs, .window-actions, .actions-hotspot, .no-drag')) return;
     send('window:dragStart');
   }, true);

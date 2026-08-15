@@ -128,7 +128,9 @@ final class BridgeCore {
                 "platform": "darwin",
                 "osName": "macOS",
                 "osVersion": "\(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)",
-                "userDataPath": settings.fileURL.deletingLastPathComponent().path
+                "userDataPath": settings.fileURL.deletingLastPathComponent().path,
+                "loginItemSupported": true,
+                "loginItemOpenAtLogin": SMAppService.mainApp.status == .enabled
             ]
 
         case "stream:status", "getStreamStatus":
@@ -211,7 +213,7 @@ final class BridgeCore {
 
         case "subscriptions:adoptOrphans", "subscriptions:discardOrphans":
             // Local mode has no hub: orphans are a hub-join artifact.
-            settings.update(["subscriptionsOrphaned": ["hubUrl": "", "records": [Any]()]])
+            settings.update(["subscriptionsOrphaned": [Any]()])
             return ["ok": true]
 
         case "appUpdate:getState":

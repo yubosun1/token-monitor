@@ -403,5 +403,8 @@ final class DashboardViewWindowController: GlassWindowController {
         loadPage("dashboard")
         restoreBounds()
         startBoundsTracking()
+        // Dashboard follows the same focus behavior as the widget popover:
+        // hide when the app loses key/active status.
+        enableAutoHideOnResign()
     }
 }

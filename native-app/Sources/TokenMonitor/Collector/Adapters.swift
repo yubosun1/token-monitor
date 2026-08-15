@@ -21,6 +21,7 @@ enum Adapters {
         let reasoning: Int
         let cost: Double
         let messages: Int
+        let activeTimeMs: Double
     }
 
     // MARK: - Shared helpers (ported from promaUsage.js)
@@ -64,7 +65,11 @@ enum Adapters {
 
     static func jsonlFiles(root: String, recursive: Bool) -> [URL] {
         let url = URL(fileURLWithPath: root)
-        let key = "list|(root)|(recursive)"
+        // Key MUST include the actual root + recursive flag: the stamp check
+        // below is only valid within one (root, recursive) pair, and a literal
+        // key made every adapter's directory listing miss on every tick,
+        // re-enumerating thousands of JSONL files each 15s refresh.
+        let key = "list|\(root)|\(recursive)"
         if let stamp = fileStamp(url) {
             fileCacheLock.lock()
             if let cached = fileListCache[key], cached.stamp.0 == stamp.0, cached.stamp.1 == stamp.1 {
@@ -205,6 +210,12 @@ enum Adapters {
             guard !date.isEmpty else { continue }
             let modelId = (row.model ?? "unknown").trimmingCharacters(in: .whitespaces).lowercased()
             let cost = estimatedRowCost(row: row, pricingByModel: pricingByModel)
+            // Estimated session active time: wall-clock span of the row, clamped
+            // to non-negative and capped at 8h so long-lived sessions don't
+            // inflate a single day's active time.
+            let started = UsageCore.timestampMs(row.startedAt)
+            let ended = UsageCore.timestampMs(row.lastUsedAt)
+            let activeTimeMs = max(0, min(ended - started, 8 * 60 * 60 * 1000))
             out.append(HistoryContribution(
                 date: date,
                 client: client,
@@ -215,7 +226,8 @@ enum Adapters {
                 cacheWrite: max(0, Int(row.cacheWrite.rounded())),
                 reasoning: max(0, Int(row.reasoning.rounded())),
                 cost: cost ?? 0,
-                messages: 1
+                messages: 1,
+                activeTimeMs: activeTimeMs
             ))
         }
         return out

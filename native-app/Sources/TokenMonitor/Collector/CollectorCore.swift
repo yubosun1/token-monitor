@@ -247,9 +247,11 @@ final class Collector {
 
     private func buildHistory(clients: [String], tokscaleClients: [String], adapterRows: [String: [UsageCore.UsageRow]], pricing: [String: TokscalePricing], now: Date) -> [String: Any] {
         var days: [HistoryCore.Day] = []
+        var totalActiveTimeOverride: Double? = nil
         if !tokscaleClients.isEmpty {
             if let graph = try? TokscaleRunner.shared.graph(clients: tokscaleClients) {
                 days = HistoryCore.parseTokscaleGraph(graph)
+                totalActiveTimeOverride = graph.timeMetrics?.totalActiveTimeMs
             }
         }
         var contributions: [Adapters.HistoryContribution] = []
@@ -257,7 +259,7 @@ final class Collector {
             contributions += Adapters.historyContributions(rows: adapterRows[client] ?? [], client: client, pricingByModel: pricing)
         }
         HistoryCore.mergeAdapterContributions(contributions, into: &days)
-        return HistoryCore.normalizeHistory(days: days, todayKey: nil)
+        return HistoryCore.normalizeHistory(days: days, todayKey: nil, totalActiveTimeMsOverride: totalActiveTimeOverride)
     }
 
     private func buildStats(settings: [String: Any], clients: [String], today: [String: Any], month: [String: Any], allTime: [String: Any], history: [String: Any]?, collectedAt: Date) -> [String: Any] {

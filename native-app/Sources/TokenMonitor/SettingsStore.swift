@@ -22,7 +22,23 @@ final class SettingsStore {
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             lock.lock(); defer { lock.unlock() }
             values.merge(json) { _, new in new }
+            migrateLegacyDefaultsIfNeeded()
         }
+    }
+
+    /// One-time migration for settings whose defaults changed after the first
+    /// native build. `heatmapMetric` used to default to "cost" (the inherited
+    /// Electron default); the home activity heatmap now keys brightness off
+    /// token usage, so a persisted "cost" written before that change reads as
+    /// unset. Guarded by `settingsSchemaVersion` so it runs exactly once and
+    /// never overrides a deliberate later choice.
+    private func migrateLegacyDefaultsIfNeeded() {
+        guard (values["settingsSchemaVersion"] as? Int ?? 0) < 1 else { return }
+        if (values["heatmapMetric"] as? String) == "cost" {
+            values["heatmapMetric"] = "tokens"
+        }
+        values["settingsSchemaVersion"] = 1
+        persist(values)
     }
 
     static func defaults() -> [String: Any] {
@@ -30,7 +46,9 @@ final class SettingsStore {
             // Window
             "windowBehavior": "floating",
             "alwaysOnTop": true,
-            // Fixed default appearance (no theme switching in the native app)
+            // Fixed default appearance; the renderer maps appearanceMode
+            // (dark/light/auto) onto its theme presets.
+            "appearanceMode": "dark",
             "glassOpacity": 68,
             "glassBlur": 32,
             "systemGlass": true,
@@ -64,7 +82,7 @@ final class SettingsStore {
             "opencodeLocalLimitsEnabled": false,
             // Subscriptions
             "subscriptions": [Any](),
-            "subscriptionsOrphaned": ["hubUrl": "", "records": [Any]()],
+            "subscriptionsOrphaned": [Any](),
             "subscriptionsCacheHub": "",
             // UI
             "showLiveDot": true,
@@ -73,18 +91,18 @@ final class SettingsStore {
             "showCompactTotalTokens": false,
             "compactTokenUnits": "western",
             "tokenRateMode": "speed",
-            "heatmapMetric": "cost",
+            "heatmapMetric": "tokens",
             "homeActiveDaysWindow": "all",
             "showHomeLimitBars": false,
             "showHomeLimitProviderNames": false,
-            "homeModuleOrder": "limits,tool,device,model,trends",
-            "hiddenHomeModules": "device",
+            "homeModuleOrder": "limits,tool,model,trends",
+            "hiddenHomeModules": "tool",
             "viewDisplayOrder": "",
-            "hiddenViews": "device",
+            "hiddenViews": "status",
             "lastViewState": ["period": "today", "breakdown": "tool"],
             // Misc
             "deviceId": "macbook-pro-local",
-            "language": "auto",
+            "language": "zh-CN",
             "currency": "USD",
             "currencyRates": [String: Any](),
             "startAtLogin": true,

@@ -100,6 +100,25 @@ body.flat { background: rgb(var(--glass-rgb)); }
 .heat.lvl-2 { fill: rgba(120, 190, 255, 0.45); }
 .heat.lvl-3 { fill: rgba(150, 210, 255, 0.8); }
 .heat.lvl-4 { fill: rgba(180, 230, 255, 1); }
+/* Ring every cell whose brightness level matches the accent (today's) level, so
+   the scale legend and the grid cross-reference: same level ⇒ same visual cue. */
+.heat.lvl-highlight { stroke: rgba(var(--line-rgb), 0.85); stroke-width: 1.2px; }
+
+/* Value-labelled scale for the heatmap: each swatch's colour equals the cell
+   colour at that level, and the label shows the real amount the level covers,
+   so brightness maps to a concrete value (tokens or cost). */
+.dash-heatmap-legend { flex: none; display: flex; align-items: center; justify-content: flex-end; min-height: 18px; }
+.heat-lvl-legend { display: inline-flex; align-items: center; gap: 3px; flex-wrap: wrap; }
+.heat-lvl-item { display: inline-flex; align-items: center; gap: 4px; padding: 2px 5px; border-radius: 5px; }
+.heat-lvl-item.is-accent { background: rgba(var(--overlay-rgb), 0.1); }
+.heat-lvl-swatch { width: 10px; height: 10px; border-radius: 2px; flex: none; box-shadow: inset 0 0 0 1px rgba(var(--overlay-rgb), 0.18); }
+.heat-lvl-swatch.lvl-0 { background: rgba(var(--overlay-rgb), 0.05); }
+.heat-lvl-swatch.lvl-1 { background: rgba(90, 170, 255, 0.18); }
+.heat-lvl-swatch.lvl-2 { background: rgba(120, 190, 255, 0.45); }
+.heat-lvl-swatch.lvl-3 { background: rgba(150, 210, 255, 0.8); }
+.heat-lvl-swatch.lvl-4 { background: rgba(180, 230, 255, 1); }
+.heat-lvl-label { font-size: 10px; opacity: 0.62; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.heat-lvl-item.is-accent .heat-lvl-label { opacity: 1; font-weight: 600; }
 
 .dash-cards { flex: none; display: grid; grid-template-columns: repeat(var(--stat-count, 8), minmax(0, 1fr)); overflow: hidden; border: 1px solid rgba(var(--overlay-rgb), 0.08); border-radius: 12px; background: rgba(var(--overlay-rgb), 0.03); }
 .dash-card { min-width: 0; display: flex; flex-direction: column; gap: 5px; padding: 14px clamp(12px, 1.35vw, 18px); border-right: 1px solid rgba(var(--overlay-rgb), 0.06); }
@@ -111,8 +130,8 @@ body.flat { background: rgb(var(--glass-rgb)); }
 .dash-breakdown-col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .dash-breakdown-title { font-size: 12px; font-weight: 600; opacity: 0.6; margin-bottom: 2px; text-transform: uppercase; letter-spacing: 0.04em; }
 .dash-bd-row { display: flex; align-items: center; gap: 12px; font-size: 12px; padding: 2px 0; }
-.dash-bd-name { flex: none; width: 110px; display: flex; align-items: center; gap: 8px; opacity: 0.9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.dash-bd-bar-bg { flex: 1; height: 4px; background: rgba(var(--overlay-rgb), 0.06); border-radius: 2px; overflow: hidden; }
+.dash-bd-name { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; opacity: 0.9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dash-bd-bar-bg { flex: 0 1 160px; min-width: 40px; height: 4px; background: rgba(var(--overlay-rgb), 0.06); border-radius: 2px; overflow: hidden; }
 .dash-bd-bar-fill { width: 100%; height: 100%; border-radius: 2px; transform: scaleX(var(--bar-scale, 0)); transform-origin: left center; }
 .dash-bd-val { flex: none; font-variant-numeric: tabular-nums; opacity: 0.8; text-align: right; }
 .dash-bd-pct { flex: none; width: 42px; font-variant-numeric: tabular-nums; opacity: 0.55; text-align: right; }

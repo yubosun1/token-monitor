@@ -22,6 +22,7 @@ enum HistoryCore {
             let date = String(row.date.prefix(10))
             guard !date.isEmpty else { continue }
             var day = Day(date: date)
+            day.activeTimeMs = row.activeTimeMs ?? 0
             for client in row.clients ?? [] {
                 let clientId = client.client ?? "unknown"
                 let model = client.modelId ?? "unknown"
@@ -65,13 +66,13 @@ enum HistoryCore {
         }
     }
 
-    static func normalizeHistory(days input: [Day], todayKey: String? = nil, capDays: Int = 370) -> JSON {
+    static func normalizeHistory(days input: [Day], todayKey: String? = nil, capDays: Int = 370, totalActiveTimeMsOverride: Double? = nil) -> JSON {
         let full = input.sorted { $0.date < $1.date }
         let today = String((todayKey ?? ISO8601DateFormatter().string(from: Date())).prefix(10))
 
         let count = max(0, capDays)
         let startKey = dayKeyAddDays(today, delta: -(count - 1))
-        var dailyDays = count == 0 ? [] : full.filter { day in
+        let dailyDays = count == 0 ? [] : full.filter { day in
             let key = String(day.date.prefix(10))
             return key >= startKey && key <= today
         }
@@ -138,7 +139,7 @@ enum HistoryCore {
         let messages = full.reduce(0.0) { $0 + $1.messages }
         let activeDays = full.reduce(0.0) { $0 + ($1.tokens > 0 ? 1 : 0) }
         let peakDayTokens = full.reduce(0.0) { max($0, $1.tokens) }
-        let activeTimeMs = full.reduce(0.0) { $0 + $1.activeTimeMs }
+        let activeTimeMs = totalActiveTimeMsOverride ?? full.reduce(0.0) { $0 + $1.activeTimeMs }
         let streaks = computeStreaks(full, todayKey: today)
 
         let summary: JSON = [

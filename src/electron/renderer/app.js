@@ -26,10 +26,6 @@ function osIconFor(platform) {
 
 function iconKindFor(rowData, breakdown) {
   if (!toolIconsEnabled(state.settings?.showToolIcons)) return { kind: 'dot' };
-  if (breakdown === 'device') {
-    const os = osIconFor(rowData.platform);
-    return os ? { kind: 'icon', iconClass: `row-icon-os-${os}` } : { kind: 'dot' };
-  }
   if (breakdown === 'model') {
     const vendor = modelVendorFor(rowData.key);
     return vendor && clientsWithIcon.has(vendor)
@@ -121,13 +117,11 @@ const {
   shouldAnimateBreakdownRows,
   toolIconsEnabled
 } = breakdownRenderPolicyApi;
-const deviceBreakdownApi = window.TokenMonitorDeviceBreakdown;
 const projectRowsApi = window.TokenMonitorProjectRows;
 const sessionDetailApi = window.TokenMonitorSessionDetail;
 const windowShortcutApi = window.TokenMonitorWindowShortcut;
 const LIMIT_REFRESH_OPTIONS = [60000, 120000, 300000, 900000, 1800000];
 const WINDOW_BEHAVIOR_VALUES = ['floating', 'normal', 'desktop'];
-const WINDOW_BEHAVIOR_ICONS = { floating: '⇧', normal: '○', desktop: '⇩' };
 const LIMIT_SOURCE_LABELS = { oauth: 'OAuth', cli: 'CLI', web: 'Web', rpc: 'RPC', local: 'Local', api: 'API' };
 const LIMIT_CAPABILITY_TAG_KEYS = {
   Auto: 'settings.limits.capability.auto',
@@ -171,14 +165,11 @@ const LIMIT_CAPABILITY_TAG_KEYS = {
   'Not set up': 'settings.limits.status.notSetUp',
   Error: 'settings.limits.status.error'
 };
-const deviceAccent = '#73bdf5';
-const deviceStaleColor = '#8c97a7';
-const baseBreakdownOrder = ['tool', 'device', 'model', 'project', 'session'];
+const baseBreakdownOrder = ['tool', 'model', 'project', 'session'];
 const VIEW_DISPLAY_OPTIONS = [
   { id: 'home', labelKey: 'views.home' },
   { id: 'tool', labelKey: 'views.tool' },
   { id: 'status', labelKey: 'views.status' },
-  { id: 'device', labelKey: 'views.device' },
   { id: 'model', labelKey: 'views.model' },
   { id: 'project', labelKey: 'views.project' },
   { id: 'session', labelKey: 'views.session' },
@@ -190,7 +181,6 @@ const viewBreakdownValues = new Set(['home', ...baseBreakdownOrder, 'status', 'l
 const HOME_MODULE_OPTIONS = [
   { id: 'limits', labelKey: 'home.limits', viewId: 'limits' },
   { id: 'tool', labelKey: 'home.tools', viewId: 'tool' },
-  { id: 'device', labelKey: 'home.devices', viewId: 'device' },
   { id: 'model', labelKey: 'home.models', viewId: 'model' },
   { id: 'trends', labelKey: 'home.activity', viewId: 'trends' }
 ];
@@ -200,7 +190,6 @@ const VIEW_ICON_CLASSES = {
   home: 'view-icon-home',
   tool: 'view-icon-tool',
   status: 'view-icon-status',
-  device: 'view-icon-device',
   model: 'view-icon-model',
   project: 'view-icon-project',
   session: 'view-icon-session',
@@ -219,7 +208,7 @@ const TOKEN_MONITOR_ISSUES_URL = `${TOKEN_MONITOR_REPOSITORY_URL}/issues/new/cho
 const TOKEN_MONITOR_WEBSITE_URL = 'https://javis-ai.com/token-monitor/';
 const TOKEN_MONITOR_WSL_SQLITE_GUIDE_URL = `${TOKEN_MONITOR_REPOSITORY_URL}/blob/main/docs/wsl-sqlite-setup.md`;
 const serviceStatusProviderPreferencesApi = window.TokenMonitorServiceStatusProviderPreferences;
-const SETTINGS_SECTION_IDS = ['general', 'main', 'window', 'appearance', 'tools', 'limits', 'subscriptions', 'sync'];
+const SETTINGS_SECTION_IDS = ['general', 'main', 'appearance', 'tools', 'limits', 'subscriptions', 'sync'];
 const REFRESH_BUTTON_FEEDBACK_MS = 700;
 const CODEX_PENDING_ACTIVE_GRACE_MS = 30000;
 const initialFloatingBubble = window.__TOKEN_MONITOR_INITIAL_FLOATING_BUBBLE__ || { collapsed: false, side: null };
@@ -1581,87 +1570,7 @@ function rowTemplate(rowData) {
   return row;
 }
 
-function renderDeviceAccordion(accordionInner, deviceDetail) {
-  const signature = JSON.stringify([
-    toolIconsEnabled(state.settings?.showToolIcons),
-    deviceDetail.emptyText,
-    deviceDetail.metaParts,
-    deviceDetail.tools.map((tool) => [
-      tool.key,
-      tool.value,
-      Math.round(tool.percent),
-      tool.color,
-      tool.models.map((model) => [model.key, model.value])
-    ])
-  ]);
-  if (accordionInner.dataset.signature === signature) return;
-
-  const content = document.createElement('div');
-  content.className = 'accordion-content device-breakdown';
-  if (deviceDetail.tools.length === 0) {
-    const empty = document.createElement('div');
-    empty.className = 'device-breakdown-empty';
-    empty.textContent = deviceDetail.emptyText;
-    content.append(empty);
-  } else {
-    for (const tool of deviceDetail.tools) {
-      const toolGroup = document.createElement('div');
-      toolGroup.className = 'device-tool';
-      const head = document.createElement('div');
-      head.className = 'device-tool-head';
-      const label = document.createElement('div');
-      label.className = 'device-tool-label';
-      const mark = document.createElement('span');
-      if (toolIconsEnabled(state.settings?.showToolIcons) && clientsWithIcon.has(tool.client)) {
-        mark.className = `device-tool-mark row-icon row-icon-${tool.client}`;
-      } else {
-        mark.className = 'device-tool-mark dot';
-        mark.style.background = tool.color;
-      }
-      const name = document.createElement('span');
-      name.className = 'device-tool-name';
-      name.textContent = tool.name;
-      const percent = document.createElement('span');
-      percent.className = 'accordion-pct';
-      percent.textContent = `${Math.round(tool.percent)}%`;
-      label.append(mark, name, percent);
-      const metrics = document.createElement('span');
-      metrics.className = 'device-tool-metrics';
-      metrics.textContent = formatNumber(tool.value);
-      head.append(label, metrics);
-      toolGroup.append(head);
-
-      if (tool.models.length > 0) {
-        const modelList = document.createElement('div');
-        modelList.className = 'device-model-list';
-        for (const model of tool.models) {
-          const modelRow = document.createElement('div');
-          modelRow.className = 'device-model-row';
-          const modelName = document.createElement('span');
-          modelName.className = 'device-model-name';
-          modelName.textContent = model.name;
-          const modelValue = document.createElement('span');
-          modelValue.className = 'device-model-value';
-          modelValue.textContent = formatCompact(model.value);
-          modelRow.append(modelName, modelValue);
-          modelList.append(modelRow);
-        }
-        toolGroup.append(modelList);
-      }
-      content.append(toolGroup);
-    }
-  }
-  if (deviceDetail.metaParts.length > 0) {
-    const meta = document.createElement('div');
-    meta.className = 'device-meta';
-    meta.textContent = deviceDetail.metaParts.join(' · ');
-    content.append(meta);
-  }
-  accordionInner.replaceChildren(content);
-  accordionInner.dataset.signature = signature;
-}
-
-function updateRow(row, { name, subtitle, detail, value, cost, max, color, barBackground, accordionRows, deviceDetail, stale, platform, local, client, kind, cacheReadTokens, outputTokens, tokenDataUnavailable, sessionDetailAvailable }) {
+function updateRow(row, { name, subtitle, detail, value, cost, max, color, barBackground, accordionRows, stale, platform, local, client, kind, cacheReadTokens, outputTokens, tokenDataUnavailable, sessionDetailAvailable }) {
   const width = rowWidth(value, max);
   const isExpanded = row.classList.contains('expanded');
   row.className = `row${kind ? ` ${kind}-row` : ''}${stale ? ' stale' : ''}${local ? ' local' : ''}`;
@@ -1714,11 +1623,7 @@ function updateRow(row, { name, subtitle, detail, value, cost, max, color, barBa
   applyBarScale(fill, width / 100);
 
   const accordionInner = row.querySelector('.row-accordion-inner');
-  if (deviceDetail) {
-    renderDeviceAccordion(accordionInner, deviceDetail);
-    row.classList.add('has-accordion');
-    if (isExpanded) row.classList.add('expanded');
-  } else if (Array.isArray(accordionRows) && accordionRows.length > 0) {
+  if (Array.isArray(accordionRows) && accordionRows.length > 0) {
     const accordionSignature = JSON.stringify(accordionRows.map((tool) => [tool.name, tool.value, Math.round(tool.percent), tool.color]));
     if (accordionInner.dataset.signature !== accordionSignature) {
       const content = document.createElement('div');
@@ -1861,73 +1766,10 @@ function renderRows(rows, { incompleteHint = '' } = {}) {
   if (liveMotionSnapshot) animateBreakdownFrom(liveMotionSnapshot, { duration: 600 });
 }
 
-function deviceLabel(device) {
-  return device.deviceId || device.hostname || 'device';
-}
-
-function deviceColor(stale) {
-  return stale ? deviceStaleColor : deviceAccent;
-}
-
-function deviceRuntimeLabel(value) {
-  if (value === 'electron-widget') return t('devices.runtime.widget');
-  if (value === 'headless-agent') return t('devices.runtime.agent');
-  return String(value || '');
-}
-
-function deviceSyncedLabel(value) {
-  const date = value ? new Date(value) : null;
-  if (!date || Number.isNaN(date.getTime())) return '';
-  const diffMs = Math.max(0, Date.now() - date.getTime());
-  let age;
-  if (diffMs < 45_000) age = t('settings.age.justNow');
-  else {
-    const minutes = Math.round(diffMs / 60000);
-    if (minutes < 60) age = t('settings.age.minutesAgo', { minutes });
-    else {
-      const hours = Math.round(minutes / 60);
-      age = hours < 24
-        ? t('settings.age.hoursAgo', { hours })
-        : t('settings.age.daysAgo', { days: Math.round(hours / 24) });
-    }
-  }
-  return t('devices.synced', { age });
-}
-
 function stableColor(value, colors) {
   let hash = 0;
   for (const char of String(value || '')) hash = ((hash << 5) - hash + char.charCodeAt(0)) | 0;
   return colors[Math.abs(hash) % colors.length];
-}
-
-function deviceRowsForPeriod() {
-  const localId = state.settings?.deviceId || '';
-  return (state.stats?.devices || []).map((device) => {
-    const breakdown = deviceBreakdownApi.deviceBreakdownForPeriod(device, state.period, {
-      clientLabels,
-      clientColors,
-      fallbackColor: clientColors.default
-    });
-    const period = device.periods?.[state.period] || {};
-    const runtime = deviceRuntimeLabel(device.agentRuntime);
-    const version = device.agentVersion ? `${runtime ? `${runtime} ` : ''}v${device.agentVersion}` : runtime;
-    const metaParts = [deviceBreakdownApi.devicePlatformLabel(device.platform, device.osName, device.osVersion), version, deviceSyncedLabel(device.updatedAt)].filter(Boolean);
-    return {
-      key: device.deviceId,
-      name: deviceLabel(device),
-      value: breakdown.totalTokens,
-      cost: Number(period.costUsd || 0),
-      color: deviceColor(Boolean(device.stale)),
-      stale: Boolean(device.stale),
-      platform: device.platform || '',
-      local: Boolean(localId) && device.deviceId === localId,
-      deviceDetail: {
-        ...breakdown,
-        emptyText: breakdown.totalTokens > 0 ? t('devices.detailsUnavailable') : t('home.noTools'),
-        metaParts
-      }
-    };
-  }).sort((a, b) => b.value - a.value);
 }
 
 function toolRowsForPeriod(period) {
@@ -1937,7 +1779,8 @@ function toolRowsForPeriod(period) {
     return clientDisplayPreferencesApi.applyClientDisplayPreferences(usageSortedRows, state.settings?.clientDisplayOrder, state.settings?.hiddenClients, KNOWN_CLIENTS, state.settings?.pinnedClients);
   }
   if (Number(period?.totalTokens || 0) === 0) return [];
-  return deviceRowsForPeriod();
+  // No per-client rows and no device view in the native build: nothing to fall back to.
+  return [];
 }
 
 function modelRowsForPeriod(period) {
@@ -1985,7 +1828,6 @@ function projectRowsForPeriod(period) {
 }
 
 function rowsForPeriod(period) {
-  if (state.breakdown === 'device') return deviceRowsForPeriod();
   if (state.breakdown === 'model') return modelRowsForPeriod(period);
   if (state.breakdown === 'session') return sessionRowsForPeriod(period);
   if (state.breakdown === 'project') return projectRowsForPeriod(period);
@@ -5992,50 +5834,6 @@ function renderHomeToolModule(period) {
   return module;
 }
 
-function renderHomeDeviceModule() {
-  const { module, body } = homeModuleShell('device', t('home.devices'), 'device');
-  const rows = homeOverviewApi.homeDeviceRows(state.stats?.devices || [], {
-    localDeviceId: state.settings?.deviceId || '',
-    period: state.period,
-    limit: 4
-  });
-  if (rows.length === 0) {
-    const empty = document.createElement('div');
-    empty.className = 'home-module-empty';
-    empty.textContent = t('home.noDevices');
-    body.append(empty);
-    return module;
-  }
-  for (const row of rows) {
-    const item = document.createElement('div');
-    item.className = 'home-list-row home-device-row';
-    if (row.isStale) {
-      item.classList.add('is-stale');
-      item.title = t('home.staleDevice');
-    }
-    const mark = document.createElement('span');
-    applyHomeListMark(mark, iconKindFor({ platform: row.platform }, 'device'), row.isStale ? deviceStaleColor : deviceAccent);
-    const label = document.createElement('span');
-    label.className = 'home-list-name home-device-label';
-    const name = document.createElement('span');
-    name.className = 'home-device-name';
-    name.textContent = row.name;
-    label.append(name);
-    if (row.isLocal) {
-      const badge = document.createElement('span');
-      badge.className = 'home-device-badge';
-      badge.textContent = 'you';
-      label.append(badge);
-    }
-    const value = document.createElement('span');
-    value.className = 'home-list-value';
-    value.textContent = formatCompact(row.value);
-    item.append(mark, label, value);
-    body.append(item);
-  }
-  return module;
-}
-
 function dailyWithHeatIntensity(daily) {
   return window.TokenMonitorUsageCharts.computeHeatmapIntensities(daily);
 }
@@ -6361,7 +6159,7 @@ function renderHomeTrendsModule() {
   const todayPeriod = state.stats?.periods?.today;
   const points = homeOverviewApi.patchDailyToday(rawDaily, today, Number(todayPeriod?.totalTokens || 0), Number(todayPeriod?.costUsd || 0));
   const activityLayout = homeOverviewApi.homeActivityHeatmapLayout();
-  const heatMetric = state.settings?.heatmapMetric || 'cost';
+  const heatMetric = state.settings?.heatmapMetric || 'tokens';
   const intensityField = heatMetric === 'cost' ? 'costIntensity' : 'tokenIntensity';
   const intensityPoints = dailyWithHeatIntensity(points).map((p) => ({
     ...p,
@@ -6473,7 +6271,6 @@ function renderHome() {
   const nodes = moduleIds.map((id) => {
     if (id === 'limits') return renderHomeLimitModule();
     if (id === 'tool') return renderHomeToolModule(period);
-    if (id === 'device') return renderHomeDeviceModule();
     if (id === 'model') return renderHomeModelModule(period);
     return renderHomeTrendsModule();
   });
@@ -6870,6 +6667,9 @@ function applyAppearanceSettings(settings) {
   // Only full settings objects carry themeColors; glass/zoom preview patches
   // omit it, so we must not wipe theme overrides mid-slider-drag.
   if (settings && 'themeColors' in settings) applyThemeColors(settings.themeColors);
+  // appearanceMode (dark/light/auto) is the theme control in the native build;
+  // it takes precedence over any legacy themeColors patch.
+  applyAppearanceMode(settings?.appearanceMode ?? state.settings?.appearanceMode);
   els.liveDot.style.display = (settings?.showLiveDot !== false) ? '' : 'none';
   els.shell.classList.toggle('desktop-mode', settings?.windowBehavior === 'desktop');
   els.shell.classList.toggle('title-icon-only', settings?.titleIconOnly === true);
@@ -6936,6 +6736,26 @@ function applyThemeColors(overrides) {
     else root.removeProperty(name);
   }
   renderFloatingBubbleContent();
+}
+
+// Map the appearanceMode setting (dark/light/auto) onto a theme preset.
+// dark  -> the default graphite preset (also the stylesheet's :root values)
+// light -> the porcelain preset (light base; themeCssVarEntries flips the
+//          overlay/border system to dark-on-light)
+// auto  -> follow the system colour scheme via prefers-color-scheme
+function applyAppearanceMode(mode) {
+  const resolved = mode === 'light'
+    ? 'porcelain'
+    : mode === 'auto'
+      ? (window.matchMedia?.('(prefers-color-scheme: light)')?.matches ? 'porcelain' : 'default')
+      : 'default';
+  const preset = themePresetsApi.THEME_PRESETS.find((entry) => entry.id === resolved);
+  if (!preset) return;
+  const next = {};
+  for (const key of themePresetsApi.INTERFACE_COLOR_KEYS) {
+    if (preset.colors[key] !== themePresetsApi.DEFAULT_THEME[key]) next[key] = preset.colors[key];
+  }
+  applyThemeColors(next);
 }
 
 function applyVendorColorOverrides(overrides) {
@@ -7178,30 +6998,6 @@ async function commitVendorColors(overrides) {
   buildAppearanceColorControls();
   renderSettingsSummaries();
   await saveSettings({ vendorColors: overrides });
-}
-
-function currentWindowBehavior(source = state.settings) {
-  if (WINDOW_BEHAVIOR_VALUES.includes(source?.windowBehavior)) return source.windowBehavior;
-  return source?.alwaysOnTop ? 'floating' : 'normal';
-}
-
-function nextWindowBehavior(mode) {
-  const index = WINDOW_BEHAVIOR_VALUES.indexOf(mode);
-  return WINDOW_BEHAVIOR_VALUES[(index + 1) % WINDOW_BEHAVIOR_VALUES.length] || 'floating';
-}
-
-function syncWindowBehaviorControls() {
-  const mode = currentWindowBehavior();
-  const next = nextWindowBehavior(mode);
-  els.windowBehaviorInput.value = mode;
-  els.pinButton.textContent = WINDOW_BEHAVIOR_ICONS[mode] || WINDOW_BEHAVIOR_ICONS.normal;
-  els.pinButton.classList.toggle('active', mode !== 'normal');
-  const title = t('settings.windowBehavior.buttonTitle', {
-    current: t(`settings.windowBehavior.${mode}`),
-    next: t(`settings.windowBehavior.${next}`)
-  });
-  els.pinButton.title = title;
-  els.pinButton.setAttribute('aria-label', title);
 }
 
 function syncWindowShortcutStatus() {
@@ -7727,6 +7523,8 @@ function syncSettingsForm() {
   if (els.windowsBackdropInput) els.windowsBackdropInput.value = windowsGlassApi.normalizeWindowsBackdropMode(state.settings.windowsBackdrop);
   const reduceMotion = motionPreferenceApi.normalize(state.settings.reduceMotion);
   for (const input of els.reduceMotionInputs || []) input.checked = input.value === reduceMotion;
+  const appearanceMode = ['dark', 'light', 'auto'].includes(state.settings?.appearanceMode) ? state.settings.appearanceMode : 'dark';
+  for (const input of document.querySelectorAll('input[name="appearanceMode"]')) input.checked = input.value === appearanceMode;
   els.liveDotInput.checked = state.settings.showLiveDot !== false;
   els.toolIconsInput.checked = state.settings.showToolIcons !== false;
   els.titleIconInput.checked = state.settings.titleIconOnly === true;
@@ -7740,7 +7538,6 @@ function syncSettingsForm() {
   );
   els.swapSettingsRefreshInput.checked = state.settings.settingsInTitlebar === true;
   els.discordRpcInput.checked = Boolean(state.settings.discordRpcEnabled);
-  syncWindowBehaviorControls();
   els.floatingBubbleInput.checked = state.settings.floatingBubbleEnabled === true;
   const floatingBubbleTrigger = state.settings.floatingBubbleTrigger === 'hover' ? 'hover' : 'click';
   for (const input of els.floatingBubbleTriggerInputs || []) input.checked = input.value === floatingBubbleTrigger;
@@ -8472,7 +8269,7 @@ function renderHomeActivitySettings() {
   heatmapOptions.className = 'inline-options';
   heatmapOptions.setAttribute('role', 'radiogroup');
   heatmapOptions.setAttribute('aria-label', heatmapLabel.textContent);
-  const currentMetric = state.settings?.heatmapMetric || 'cost';
+  const currentMetric = state.settings?.heatmapMetric || 'tokens';
   for (const metric of ['tokens', 'cost']) {
     const option = document.createElement('label');
     option.className = 'inline-option';
@@ -10123,9 +9920,6 @@ els.breakdown.addEventListener('click', (event) => {
   });
 });
 
-els.pinButton.addEventListener('click', () => {
-  saveSettings({ windowBehavior: nextWindowBehavior(currentWindowBehavior()) });
-});
 els.settingsButton.addEventListener('click', (event) => {
   if (state.viewSwitcherOpen) setViewSwitcherOpen(false);
   els.settingsPanel.classList.toggle('hidden');
@@ -10443,7 +10237,6 @@ els.swapSettingsRefreshInput.addEventListener('change', () => {
   void saveAppearanceFromControls();
 });
 els.discordRpcInput.addEventListener('change', saveAppearanceFromControls);
-els.windowBehaviorInput.addEventListener('change', () => saveSettings({ windowBehavior: els.windowBehaviorInput.value }));
 els.floatingBubbleInput.addEventListener('change', () => {
   state.settings.floatingBubbleEnabled = els.floatingBubbleInput.checked;
   els.floatingBubbleOptions?.classList.toggle('hidden', !els.floatingBubbleInput.checked);
@@ -10490,6 +10283,18 @@ els.showTrayProviderBadgeInput.addEventListener('change', () => {
 els.windowToggleShortcutValue?.addEventListener('click', startWindowShortcutRecording);
 els.windowToggleShortcutClearButton?.addEventListener('click', () => setWindowToggleShortcut('').catch(() => {}));
 els.startAtLoginInput?.addEventListener('change', () => saveSettings({ startAtLogin: els.startAtLoginInput.checked }));
+for (const input of document.querySelectorAll('input[name="appearanceMode"]')) {
+  input.addEventListener('change', () => {
+    if (!input.checked) return;
+    state.settings.appearanceMode = input.value;
+    applyAppearanceMode(input.value);
+    saveSettings({ appearanceMode: input.value });
+  });
+}
+// In "auto" mode, react to system light/dark switches at runtime.
+window.matchMedia?.('(prefers-color-scheme: light)')?.addEventListener?.('change', () => {
+  if ((state.settings?.appearanceMode || 'dark') === 'auto') applyAppearanceMode('auto');
+});
 els.automaticAppUpdatesInput?.addEventListener('change', () => saveSettings({ automaticAppUpdates: els.automaticAppUpdatesInput.checked }));
 els.glassInput.addEventListener('change', saveAppearanceFromControls);
 els.blurInput.addEventListener('change', saveAppearanceFromControls);
@@ -10641,7 +10446,7 @@ window.tokenMonitor.onSettingsPush?.((next) => {
   applyEffectiveCurrencyRates();
   preserveSettingsPanelScroll(syncSettingsForm);
   maybeUpdateBarsIcon();
-  if ((prevMetric || 'cost') !== (next.heatmapMetric || 'cost')) {
+  if ((prevMetric || 'tokens') !== (next.heatmapMetric || 'tokens')) {
     render();
   } else if (
     prevLanguage !== next.language

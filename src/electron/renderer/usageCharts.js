@@ -519,8 +519,41 @@
     return `<svg class="dash-chart" viewBox="0 0 ${model.width} ${model.height}" width="100%" height="100%">${grid}${parts}</svg>`;
   }
 
+  // Brightness level for a single value against a scale max, mirroring
+  // heatmapIntensity so the legend and the cells always agree.
+  function heatmapLevelForValue(value, max) {
+    return heatmapIntensity(value, max);
+  }
+
+  // Value-labelled 5-swatch scale for a heatmap. `maxValue` is the largest value
+  // in the active metric; each swatch shows the real amount its level covers, so
+  // cell brightness reads as a concrete number (in cost mode especially, where a
+  // single big day can compress the rest of the grid into the dim levels).
+  // `accentLevel`/`accentValue` (optional) mark one level — e.g. today's — with a
+  // ring and its actual formatted value so the reader can cross-reference.
+  function heatmapLevelLegend(options) {
+    const o = Object.assign(
+      { maxValue: 0, metric: 'tokens', format: (v) => String(v), accentLevel: null, accentValue: null },
+      options || {}
+    );
+    const max = Math.max(0, n(o.maxValue));
+    const accent = Number(o.accentLevel);
+    const accentLevel = Number.isInteger(accent) && accent >= 0 && accent <= 4 ? accent : null;
+    const items = [0, 1, 2, 3, 4].map((level) => {
+      const isAccent = accentLevel !== null && accentLevel === level;
+      const accentOn = isAccent && o.accentValue !== null && o.accentValue !== undefined;
+      const label = level === 4
+        ? o.format(max)
+        : level === 0 ? '0' : `≤ ${o.format(max * level / 4)}`;
+      const shown = accentOn ? o.format(o.accentValue) : label;
+      const title = accentOn ? ` title="${escapeXml(shown)}"` : '';
+      return `<span class="heat-lvl-item${isAccent ? ' is-accent' : ''}"${title}><span class="heat-lvl-swatch lvl-${level}" aria-hidden="true"></span><span class="heat-lvl-label">${escapeXml(shown)}</span></span>`;
+    }).join('');
+    return `<div class="heat-lvl-legend" role="img" aria-label="${escapeXml(o.metric)} scale">${items}</div>`;
+  }
+
   function heatmapSvg(model, options) {
-    const o = Object.assign({ titleOf: () => '', monthLabel: (m) => m.label, radius: 3, glowFilterId: '', spotlightId: '', spotlightRadius: 86, initialHidden: false }, options || {});
+    const o = Object.assign({ titleOf: () => '', monthLabel: (m) => m.label, radius: 3, glowFilterId: '', spotlightId: '', spotlightRadius: 86, initialHidden: false, accentLevel: null }, options || {});
     const botPad = 16;
     const pitch = (model.cell || 11) + (model.gap || 2);
     const glowFilterId = String(o.glowFilterId || '');
@@ -537,7 +570,12 @@
     }
     const defs = defsParts.length ? `<defs>${defsParts.join('')}</defs>` : '';
     const initialVisibility = o.initialHidden ? ' data-motion-hidden="true" opacity="0"' : '';
-    const cellAttrs = (c) => `class="heat lvl-${c.intensity}" data-d="${escapeXml(c.date)}" data-t="${svgRound(c.tokens || 0)}" data-cost="${svgRound(c.cost || 0)}" x="${svgRound(c.x)}" y="${svgRound(c.y)}" width="${svgRound(c.size)}" height="${svgRound(c.size)}" rx="${svgRound(Math.max(0, Number(o.radius) || 0))}"${initialVisibility}`;
+    const accentLevel = Number(o.accentLevel);
+    const accent = Number.isInteger(accentLevel) && accentLevel >= 0 && accentLevel <= 4 ? accentLevel : null;
+    const cellAttrs = (c) => {
+      const isAccent = accent !== null && c.intensity === accent;
+      return `class="heat lvl-${c.intensity}${isAccent ? ' lvl-highlight' : ''}" data-d="${escapeXml(c.date)}" data-t="${svgRound(c.tokens || 0)}" data-cost="${svgRound(c.cost || 0)}"${isAccent ? ' data-bright="1"' : ''} x="${svgRound(c.x)}" y="${svgRound(c.y)}" width="${svgRound(c.size)}" height="${svgRound(c.size)}" rx="${svgRound(Math.max(0, Number(o.radius) || 0))}"${initialVisibility}`;
+    };
     const cells = (model.cells || []).map((c) =>
       `<rect ${cellAttrs(c)}>${o.titleOf(c) ? `<title>${escapeXml(o.titleOf(c))}</title>` : ''}</rect>`
     ).join('');
@@ -612,6 +650,6 @@
     areaLineChart, areaLineSvg,
     selectPreviewSeries, patchTodayBar, sparklineSvg,
     clientColors, fallbackModelColors, modelVendorFor, modelColor, clampDaily,
-    barsChartSvg, candleChartSvg, heatmapSvg, statsCardsHtml, statCardColumnWidths
+    barsChartSvg, candleChartSvg, heatmapSvg, heatmapLevelLegend, heatmapLevelForValue, statsCardsHtml, statCardColumnWidths
   };
 });

@@ -1,11 +1,14 @@
 import AppKit
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, BridgeDelegate {
     private var statusItem: NSStatusItem?
     private var mainWindowController: DashboardWindowController?
     private var dashboardWindowController: DashboardViewWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // The renderer opens the dashboard from the Activity/Trends modules
+        // via window.tokenMonitor.openDashboard() → dashboard:open → delegate.
+        BridgeCore.shared.delegate = self
         buildStatusItem()
         // Global toggle hotkey (Carbon; works while the LSUIElement app is in
         // the background, like the Electron globalShortcut it replaces).
@@ -89,6 +92,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         dashboardWindowController?.showWindow(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    // MARK: - BridgeDelegate
+
+    func bridge(_ bridge: BridgeCore, didRequestOpenDashboard: Bool) {
+        openDashboard()
     }
 
     @objc private func quit() {
