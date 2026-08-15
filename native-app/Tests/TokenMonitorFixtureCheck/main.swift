@@ -475,6 +475,14 @@ final class FakeCollectorWorld {
     var statsPushes: Int {
         pushes.filter { ($0["event"] as? String) == "stats:push" }.count
     }
+    // tickKinds/tickReasons are appended on the worker queue and read by the
+    // main thread; mid-tick assertions (while the worker is blocked) use the
+    // locked snapshot so the test itself stays race-free under TSan.
+    private let observerLock = NSLock()
+    func tickKindSnapshot() -> [RefreshKind] {
+        observerLock.lock(); defer { observerLock.unlock() }
+        return tickKinds
+    }
     var tickKinds: [RefreshKind] = []
     var tickReasons: [RefreshReason] = []
     var rawReads: [String: Int] = [:]
@@ -534,8 +542,10 @@ final class FakeCollectorWorld {
                 self.customPricingSyncCalls += 1
             },
             tickObserver: { kind, reason in
+                self.observerLock.lock()
                 self.tickKinds.append(kind)
                 self.tickReasons.append(reason)
+                self.observerLock.unlock()
             }
         )
         return (Collector(environment: env, workerQueue: queue), queue)
@@ -771,7 +781,7 @@ func runCollectorStateTests() {
         for _ in 0..<10 { collector.requestRefresh(.cheap, reason: .timer) }
         for _ in 0..<3 { collector.requestRefresh(.full, reason: .manual) }
         collector.requestRefresh(.full, reason: .settingsChange)
-        checkEqual(world.tickKinds.count, 1, "T7 blocked tick is the only running tick")
+        checkEqual(world.tickKindSnapshot().count, 1, "T7 blocked tick is the only running tick")
         gate.signal()
         world.waitIdle(collector, queue)
         checkEqual(world.tickKinds.count, 2, "T7 exactly one follow-up tick after the burst")
@@ -995,7 +1005,7 @@ func runCollectorStateTests() {
         collector.requestRefresh(.full, reason: .manual)
         Thread.sleep(forTimeInterval: 0.2)
         for _ in 0..<10 { collector.requestRefresh(.cheap, reason: .timer) }
-        checkEqual(world.tickKinds.count, 1, "T13 blocked full is the only running tick")
+        checkEqual(world.tickKindSnapshot().count, 1, "T13 blocked full is the only running tick")
         gate.signal()
         world.waitIdle(collector, queue)
         checkEqual(world.tickKinds.count, 1, "T13 timer cheaps during a running full are dropped")
@@ -1020,7 +1030,7 @@ func runCollectorStateTests() {
         collector.requestRefresh(.full, reason: .settingsChange)
         collector.requestRefresh(.full, reason: .manual)
         collector.requestRefresh(.fullForced, reason: .manual)
-        checkEqual(world.tickKinds.count, 1, "T13b blocked tick is the only running tick")
+        checkEqual(world.tickKindSnapshot().count, 1, "T13b blocked tick is the only running tick")
         gate.signal()
         world.waitIdle(collector, queue)
         checkEqual(world.tickKinds.count, 2, "T13b exactly one follow-up tick")

@@ -107,6 +107,12 @@ final class Collector {
     private var workerRunning = false
     private var pendingQueue: [RefreshRequest] = []
     private var pendingInvalidations = CollectorInvalidations()
+    /// True once the very first tick published stats (cheap-first startup
+    /// gate). Owned by coordLock — read in requestRefresh and written when a
+    /// tick commits its stats. requestRefresh must NOT read statsCache here:
+    /// that cache belongs to stateLock and crossing the two locks is a data
+    /// race (round-4 Phase 2.1).
+    private var hasCompletedInitialStats = false
 
     private var timer: Timer?
     private var settingsObserver: NSObjectProtocol?
@@ -319,7 +325,7 @@ final class Collector {
             let firstStartupCheap = pendingQueue.count == 1
                 && pendingQueue[0].kind == .cheap
                 && pendingQueue[0].reason == .startup
-                && statsCache == nil
+                && !hasCompletedInitialStats
             if firstStartupCheap {
                 // Queue behind the first startup cheap unless something at
                 // least as strong is already queued behind it.
@@ -398,7 +404,26 @@ final class Collector {
 
         let settings = environment.settings()
         let clients = enabledClients(settings)
-        guard !clients.isEmpty else { return }
+        // Round-4 Phase 2.2: an empty client set must not just return and
+        // leave stale UI — it produces one legal empty wire shape below and
+        // drops every client cache so re-enabling starts clean. Partial
+        // disables remove only the disabled clients' caches: unreachable
+        // rows must not stay pinned forever.
+        if clients.isEmpty {
+            rawSnapshots.removeAll()
+            derivedSnapshots.removeAll()
+            mergedAdapterPeriods = nil
+            Adapters.dropClientCaches(Set(adapterClientIds))
+        } else {
+            let disabledAdapters = adapterClientIds.filter { !clients.contains($0) }
+            if !disabledAdapters.isEmpty {
+                for client in disabledAdapters {
+                    rawSnapshots.removeValue(forKey: client)
+                    derivedSnapshots.removeValue(forKey: client)
+                }
+                Adapters.dropClientCaches(Set(disabledAdapters))
+            }
+        }
 
         environment.customPricingSync(settings)
 
@@ -668,6 +693,9 @@ final class Collector {
         let previous = statsCache
         statsCache = stats
         stateLock.unlock()
+        coordLock.lock()
+        hasCompletedInitialStats = true
+        coordLock.unlock()
         let pushed = previous == nil || contentSignature(stats) != contentSignature(previous!)
         if pushed {
             let pushSpan = PerfDiag.span("push-stats")

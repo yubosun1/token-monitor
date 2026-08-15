@@ -48,6 +48,22 @@ enum Adapters {
         return (mtime, size)
     }
 
+    /// Drop memoized parse and file-list entries for adapter clients that
+    /// are no longer enabled (round-4 Phase 2.2). Only touches the in-memory
+    /// caches — it never reads user data — so a disabled client's rows cannot
+    /// stay reachable forever.
+    static func dropClientCaches(_ disabled: Set<String>) {
+        guard !disabled.isEmpty else { return }
+        fileCacheLock.lock()
+        parseCache = parseCache.filter { key, _ in
+            !disabled.contains { client in key.hasPrefix(client + "|") }
+        }
+        fileListCache = fileListCache.filter { key, _ in
+            !disabled.contains { client in key.hasPrefix("list|" + client + "|") }
+        }
+        fileCacheLock.unlock()
+    }
+
     private static func cachedValue<T>(_ key: String, stamp: (Date, Int), compute: () -> T) -> T {
         fileCacheLock.lock()
         if let cached = parseCache[key], cached.stamp.0 == stamp.0, cached.stamp.1 == stamp.1,
@@ -63,13 +79,14 @@ enum Adapters {
         return value
     }
 
-    static func jsonlFiles(root: String, recursive: Bool) -> [URL] {
+    static func jsonlFiles(root: String, recursive: Bool, client: String) -> [URL] {
         let url = URL(fileURLWithPath: root)
-        // Key MUST include the actual root + recursive flag: the stamp check
-        // below is only valid within one (root, recursive) pair, and a literal
-        // key made every adapter's directory listing miss on every tick,
-        // re-enumerating thousands of JSONL files each 15s refresh.
-        let key = "list|\(root)|\(recursive)"
+        // Key MUST include the actual root + recursive flag + client: the
+        // stamp check below is only valid within one (root, recursive) pair,
+        // a literal key made every adapter's directory listing miss on every
+        // tick, and the client segment lets a disabled client's listing be
+        // pruned (round-4 Phase 2.2).
+        let key = "list|\(client)|\(root)|\(recursive)"
         if let stamp = fileStamp(url) {
             fileCacheLock.lock()
             if let cached = fileListCache[key], cached.stamp.0 == stamp.0, cached.stamp.1 == stamp.1 {
@@ -265,7 +282,7 @@ enum Adapters {
     static func collectPromaRows() -> [UsageCore.UsageRow] {
         let sourceId = sourceNamespace(promaRoot)
         var rows: [UsageCore.UsageRow] = []
-        for file in jsonlFiles(root: promaRoot, recursive: false) {
+        for file in jsonlFiles(root: promaRoot, recursive: false, client: "proma") {
             rows.append(contentsOf: promaFileRows(file, sourceId: sourceId))
         }
         return sortRows(rows)
@@ -360,7 +377,7 @@ enum Adapters {
         var seenMessageIds = Set<String>()
         for root in hanakoRoots {
             let sourceId = sourceNamespace(root)
-            for file in jsonlFiles(root: root, recursive: true) {
+            for file in jsonlFiles(root: root, recursive: true, client: "hanako") {
                 let parsed = hanakoFileRows(file, sourceId: sourceId)
                 // Cross-file (and cross-root) message dedupe over cached rows.
                 for i in 0..<parsed.rows.count {
