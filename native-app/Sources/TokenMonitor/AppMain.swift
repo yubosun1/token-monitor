@@ -13,10 +13,23 @@ public func runTokenMonitorApp() {
     PerfDiag.log(String(format: "process launched pid=%d", getpid()))
     PerfDiag.cpuMark("launch")
 
+    // Single-instance ownership (PLAN.md Phase 1) must be settled before
+    // any status item, window, WebView or collector is created. A losing
+    // second launch asks the running instance to surface its window and
+    // exits without touching AppKit or starting any background work.
+    guard SingleInstanceCoordinator.shared.acquire() else {
+        SingleInstanceCoordinator.shared.notifyExistingInstance()
+        return
+    }
+
     let app = NSApplication.shared
     let delegate = AppDelegate()
     app.delegate = delegate
     app.setActivationPolicy(.accessory)
     app.run()
+
+    // Normal termination path: release ownership so the next launch wins
+    // the flock immediately (crash/force-quit releases it via the kernel).
+    SingleInstanceCoordinator.shared.release()
 }
 

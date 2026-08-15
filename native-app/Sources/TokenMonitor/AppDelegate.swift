@@ -4,8 +4,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, BridgeDelegate {
     private var statusItem: NSStatusItem?
     private var mainWindowController: DashboardWindowController?
     private var dashboardWindowController: DashboardViewWindowController?
+    private var showMainWindowObserver: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // A second launch that lost the single-instance lock asks us to
+        // surface the main window (PLAN.md Phase 1).
+        let center = DistributedNotificationCenter.default()
+        showMainWindowObserver = center.addObserver(
+            forName: SingleInstanceCoordinator.showMainWindowNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.showMainWindow(center: false)
+        }
         // The renderer opens the dashboard from the Activity/Trends modules
         // via window.tokenMonitor.openDashboard() → dashboard:open → delegate.
         BridgeCore.shared.delegate = self
@@ -29,6 +40,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, BridgeDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         ShortcutController.shared.stop()
+        SingleInstanceCoordinator.shared.release()
+        if let showMainWindowObserver {
+            DistributedNotificationCenter.default().removeObserver(showMainWindowObserver)
+        }
     }
 
     // MARK: - Status item
