@@ -1,6 +1,6 @@
 import AppKit
 
-final class AppDelegate: NSObject, NSApplicationDelegate, BridgeDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var mainWindowController: DashboardWindowController?
     private var dashboardWindowController: DashboardViewWindowController?
@@ -13,9 +13,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, BridgeDelegate {
         SingleInstanceCoordinator.shared.installShowCallback { [weak self] in
             self?.showMainWindow(center: false)
         }
-        // The renderer opens the dashboard from the Activity/Trends modules
-        // via window.tokenMonitor.openDashboard() → dashboard:open → delegate.
-        BridgeCore.shared.delegate = self
         buildStatusItem()
         // Global toggle hotkey (Carbon; works while the LSUIElement app is in
         // the background, like the Electron globalShortcut it replaces).
@@ -133,8 +130,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, BridgeDelegate {
                     NSLog("[diag] lifecycle probe: dashboard controller missing, aborting")
                     return
                 }
-                // Same path the renderer close button takes.
-                controller.bridgeDidRequestClose(controller.bridge)
+                // Same path the native close button takes.
+                controller.hostRequestClose()
                 self.dashboardWindowController = nil
                 PerfDiag.footprintMark(String(format: "lifecycle-cycle-%02d", cycles))
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2) { cycle() }
@@ -204,9 +201,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, BridgeDelegate {
 
     @objc private func openSettings() {
         showMainWindow(center: false)
-        // Queued until the page finished loading: right after an idle
-        // teardown the rebuilt page is not ready yet (round-4 Phase 6).
-        mainWindowController?.pushLocalWhenLoaded("settings:open", NSNull())
+        (mainWindowController?.contentController as? SettingsHost)?.openSettings()
     }
 
     @objc private func openDashboard() {
@@ -224,11 +219,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, BridgeDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    // MARK: - BridgeDelegate
-
-    func bridge(_ bridge: BridgeCore, didRequestOpenDashboard: Bool) {
-        openDashboard()
-    }
+    // MARK: - BridgeDelegate (removed with WebView IPC)
 
     @objc private func quit() {
         NSApp.terminate(nil)
@@ -239,12 +230,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, BridgeDelegate {
     private func ensureMainWindow() {
         if mainWindowController == nil {
             let controller = DashboardWindowController()
-            // Once the long-hidden window tears its WebView down, drop the
-            // strong reference so the controller, window and WebView are
-            // released; the next tray/hotkey/settings request rebuilds them
-            // from scratch (round-4 Phase 6).
+            // Once the long-hidden window tears its content down, drop the
+            // strong reference so the controller and window are released;
+            // the next tray/hotkey/settings request rebuilds them.
             controller.onTeardown = { [weak self] in
                 self?.mainWindowController = nil
+            }
+            // Main window's "open dashboard" button routes here (replaces
+            // the old dashboard:open IPC).
+            controller.onOpenDashboard = { [weak self] in
+                self?.openDashboard()
             }
             mainWindowController = controller
         }
