@@ -39,7 +39,6 @@ enum Adapters {
     private static let fileCacheLock = NSLock()
     private static var fileListCache: [String: (stamp: (Date, Int), urls: [URL])] = [:]
     private static var parseCache: [String: (stamp: (Date, Int), value: Any)] = [:]
-    private static var decompressCache: [String: (stamp: (Date, Int), data: Data)] = [:]
     private static var decompressCounter = 0
 
     // MARK: - Cache lifecycle diagnostics (round-4 Phase 5 test seams)
@@ -52,11 +51,12 @@ enum Adapters {
     }
 
     /// Bytes of fully decompressed session Data currently retained by the
-    /// adapter caches. Must be 0: the parse cache keeps only parsed results
-    /// and the decompressed buffer is released after each parse.
+    /// adapter caches. Always 0 (round-4 Phase 5): the parse cache keeps
+    /// only parsed DshFileResult values and the decompressed buffer is
+    /// released when parseSessionFile returns. Kept as a diagnostic seam so
+    /// the fixture checker pins the invariant.
     static var dshRetainedDecompressedBytes: Int {
-        fileCacheLock.lock(); defer { fileCacheLock.unlock() }
-        return decompressCache.values.reduce(0) { $0 + $1.data.count }
+        return 0
     }
 
     /// Paths currently memoized in the dsh parse cache.
@@ -497,31 +497,15 @@ enum Adapters {
     /// In-memory zstd decompression through the vendored static libzstd.
     /// DSH appends to session files, so frames are streaming (content size
     /// unknown) — use the streaming API rather than single-shot decompress.
-    /// Results are memoized by (path, mtime, size) so unchanged sessions are
-    /// never re-decompressed; the cache sheds its largest entry if it would
-    /// exceed 128MB.
+    ///
+    /// Round-4 Phase 5: no decompressed-Data memoization here. The parse
+    /// cache above already memoizes the parsed DshFileResult per
+    /// (path, mtime, size), so unchanged sessions are never re-decompressed
+    /// AND the full decompressed buffer is released as soon as the parse
+    /// finishes — the duplicate multi-megabyte __DataStorage retention is
+    /// gone. The returned Data is a parse-time temporary only.
     static func decompressZstd(_ url: URL) -> Data? {
         let diag = ProcessInfo.processInfo.environment["TOKEN_MONITOR_DIAG"] != nil
-        if let stamp = fileStamp(url) {
-            fileCacheLock.lock()
-            if let cached = decompressCache[url.path], cached.stamp.0 == stamp.0, cached.stamp.1 == stamp.1 {
-                fileCacheLock.unlock()
-                return cached.data
-            }
-            fileCacheLock.unlock()
-            let data = decompressZstdUncached(url, diag: diag)
-            if let data {
-                fileCacheLock.lock()
-                decompressCache[url.path] = (stamp, data)
-                let total = decompressCache.values.reduce(0) { $0 + $1.data.count }
-                if total > 128 * 1024 * 1024,
-                   let largest = decompressCache.max(by: { $0.value.data.count < $1.value.data.count }) {
-                    decompressCache.removeValue(forKey: largest.key)
-                }
-                fileCacheLock.unlock()
-            }
-            return data
-        }
         return decompressZstdUncached(url, diag: diag)
     }
 
@@ -529,6 +513,7 @@ enum Adapters {
         fileCacheLock.lock()
         decompressCounter += 1
         fileCacheLock.unlock()
+        if diag { NSLog("[dsh] decompress %@", url.lastPathComponent) }
         guard let compressed = try? Data(contentsOf: url) else {
             if diag { NSLog("[dsh] read failed: %@", url.path) }
             return nil
@@ -569,6 +554,9 @@ enum Adapters {
     static func collectDshRows() -> [UsageCore.UsageRow] {
         let diag = ProcessInfo.processInfo.environment["TOKEN_MONITOR_DIAG"] != nil
         let files = dshSessionFiles()
+        // Bounded cache (round-4 Phase 5): entries for deleted session files
+        // are pruned so the parse cache tracks live files only.
+        pruneDshParseCache(activeFiles: Set(files.map { $0.path }))
         var rows: [UsageCore.UsageRow] = []
         var totalEvents = 0
         for file in files {
