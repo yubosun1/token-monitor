@@ -43,7 +43,9 @@ let package = Package(
         ),
         .executableTarget(
             name: "TokenMonitorFixtureCheck",
-            dependencies: ["TokenMonitorCore"],
+            // CZstd directly: the fixture checker compresses its own
+            // temporary session.jsonl.zstd fixtures (round-4 Phase 5).
+            dependencies: ["TokenMonitorCore", "CZstd"],
             path: "Tests/TokenMonitorFixtureCheck",
             resources: [.copy("Fixtures")],
             swiftSettings: [.swiftLanguageMode(.v5)]

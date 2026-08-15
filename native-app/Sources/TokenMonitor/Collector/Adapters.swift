@@ -40,6 +40,39 @@ enum Adapters {
     private static var fileListCache: [String: (stamp: (Date, Int), urls: [URL])] = [:]
     private static var parseCache: [String: (stamp: (Date, Int), value: Any)] = [:]
     private static var decompressCache: [String: (stamp: (Date, Int), data: Data)] = [:]
+    private static var decompressCounter = 0
+
+    // MARK: - Cache lifecycle diagnostics (round-4 Phase 5 test seams)
+
+    /// How many real zstd decompressions ran (any path). The fixture checker
+    /// asserts unchanged files never re-decompress.
+    static var dshDecompressCount: Int {
+        fileCacheLock.lock(); defer { fileCacheLock.unlock() }
+        return decompressCounter
+    }
+
+    /// Bytes of fully decompressed session Data currently retained by the
+    /// adapter caches. Must be 0: the parse cache keeps only parsed results
+    /// and the decompressed buffer is released after each parse.
+    static var dshRetainedDecompressedBytes: Int {
+        fileCacheLock.lock(); defer { fileCacheLock.unlock() }
+        return decompressCache.values.reduce(0) { $0 + $1.data.count }
+    }
+
+    /// Paths currently memoized in the dsh parse cache.
+    static func dshParseCachePaths() -> Set<String> {
+        fileCacheLock.lock(); defer { fileCacheLock.unlock() }
+        return Set(parseCache.keys.filter { $0.hasPrefix("dsh|") }.map { String($0.dropFirst(4)) })
+    }
+
+    /// Drop dsh parse entries whose file is no longer in the active set
+    /// (deleted sessions), so the cache stays bounded by live files.
+    static func pruneDshParseCache(activeFiles: Set<String>) {
+        fileCacheLock.lock(); defer { fileCacheLock.unlock() }
+        parseCache = parseCache.filter { key, _ in
+            !key.hasPrefix("dsh|") || activeFiles.contains(String(key.dropFirst(4)))
+        }
+    }
 
     private static func fileStamp(_ url: URL) -> (mtime: Date, size: Int)? {
         guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
@@ -493,6 +526,9 @@ enum Adapters {
     }
 
     private static func decompressZstdUncached(_ url: URL, diag: Bool) -> Data? {
+        fileCacheLock.lock()
+        decompressCounter += 1
+        fileCacheLock.unlock()
         guard let compressed = try? Data(contentsOf: url) else {
             if diag { NSLog("[dsh] read failed: %@", url.path) }
             return nil
@@ -536,7 +572,7 @@ enum Adapters {
         var rows: [UsageCore.UsageRow] = []
         var totalEvents = 0
         for file in files {
-            let parsed = dshFileRows(file)
+            let parsed = cachedSessionFileRows(file)
             totalEvents += parsed.events
             rows.append(contentsOf: parsed.rows)
         }
@@ -546,23 +582,25 @@ enum Adapters {
         return sortRows(rows)
     }
 
-    private struct DshFileResult {
+    struct DshFileResult {
         var rows: [UsageCore.UsageRow] = []
         var events = 0
     }
 
     /// Parse one session.jsonl.zstd into usage rows, memoized by
     /// (path, mtime, size) — unchanged sessions skip decompress + parse.
-    private static func dshFileRows(_ file: URL) -> DshFileResult {
+    /// Internal (not private) so the fixture checker can drive one file at a
+    /// time on temporary zstd fixtures without touching real user sessions.
+    static func cachedSessionFileRows(_ file: URL) -> DshFileResult {
         if let stamp = fileStamp(file) {
             return cachedValue("dsh|\(file.path)", stamp: stamp) {
-                parseDshFile(file)
+                parseSessionFile(file)
             }
         }
-        return parseDshFile(file)
+        return parseSessionFile(file)
     }
 
-    private static func parseDshFile(_ file: URL) -> DshFileResult {
+    private static func parseSessionFile(_ file: URL) -> DshFileResult {
         let diag = ProcessInfo.processInfo.environment["TOKEN_MONITOR_DIAG"] != nil
         guard let data = decompressZstd(file) else {
             if diag { NSLog("[dsh] decompress failed: %@", file.path) }

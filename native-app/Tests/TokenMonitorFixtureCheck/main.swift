@@ -1,4 +1,5 @@
 import Foundation
+import CZstd
 @testable import TokenMonitorCore
 
 // TokenMonitorFixtureCheck: fixed-input aggregation fixture checker
@@ -1144,6 +1145,76 @@ func runCollectorStateTests() {
     }
 }
 
+// MARK: - DSH cache lifecycle tests (round-4 Phase 5)
+
+func compressZstd(_ text: String) -> Data {
+    let input = Array(text.utf8)
+    let bound = ZSTD_compressBound(input.count)
+    var dst = [UInt8](repeating: 0, count: bound)
+    let written = input.withUnsafeBytes { (src: UnsafeRawBufferPointer) -> Int in
+        dst.withUnsafeMutableBytes { (out: UnsafeMutableRawBufferPointer) -> Int in
+            ZSTD_compress(out.baseAddress, bound, src.baseAddress, src.count, Int32(1))
+        }
+    }
+    guard written > 0 else { return Data() }
+    return Data(dst.prefix(written))
+}
+
+func dshSessionLines(_ input: Int) -> String {
+    return "{\"type\":\"session\",\"seq\":0,\"createdAt\":\"2026-08-15T10:00:00+08:00\"}\n"
+        + "{\"type\":\"request/header\",\"seq\":1,\"time\":\"2026-08-15T10:00:05+08:00\",\"data\":{\"header\":{\"config\":{\"model\":\"deepseek-chat\"}}}}\n"
+        + "{\"type\":\"assistant/chunk\",\"seq\":2,\"time\":\"2026-08-15T10:00:10+08:00\",\"data\":{\"turn\":1,\"step\":1,\"chunk\":{\"type\":\"usage\",\"usage\":{\"inputTokens\":\(input),\"outputTokens\":50,\"cacheReadTokens\":0,\"cacheWriteTokens\":0}}}}\n"
+}
+
+func runDshCacheTests() {
+    let fm = FileManager.default
+    let dir = fm.temporaryDirectory.appendingPathComponent("tm-dsh-\(UUID().uuidString)")
+    let s1 = dir.appendingPathComponent("session-1")
+    let s2 = dir.appendingPathComponent("session-2")
+    try! fm.createDirectory(at: s1, withIntermediateDirectories: true)
+    try! fm.createDirectory(at: s2, withIntermediateDirectories: true)
+    defer { try? fm.removeItem(at: dir) }
+    let f1 = s1.appendingPathComponent("session.jsonl.zstd")
+    let f2 = s2.appendingPathComponent("session.jsonl.zstd")
+    try! compressZstd(dshSessionLines(100)).write(to: f1)
+    try! compressZstd(dshSessionLines(300)).write(to: f2)
+
+    // T15a: the first parse decompresses once; the second parse hits the
+    // parse cache and never decompresses again.
+    let c0 = Adapters.dshDecompressCount
+    let r1 = Adapters.cachedSessionFileRows(f1)
+    checkEqual(r1.events, 1, "T15 one usage event parsed")
+    checkEqual(r1.rows.count, 1, "T15 one row parsed")
+    checkEqual(r1.rows.first?.input ?? 0, 100, "T15 input tokens parsed")
+    checkEqual(r1.rows.first?.output ?? 0, 50, "T15 output tokens parsed")
+    checkEqual(Adapters.dshDecompressCount - c0, 1, "T15 first parse decompresses once")
+    let r2 = Adapters.cachedSessionFileRows(f1)
+    checkEqual(r2.rows.count, 1, "T15 second parse returns cached rows")
+    checkEqual(Adapters.dshDecompressCount - c0, 1, "T15 cache hit does not re-decompress")
+
+    // T15b: the fully decompressed Data must not be retained long-term.
+    checkEqual(Adapters.dshRetainedDecompressedBytes, 0, "T15 decompressed Data not retained")
+
+    // T15c: a stamp change re-decompresses only that file and replaces its
+    // entry instead of keeping a historical version.
+    try! compressZstd(dshSessionLines(100) + "{\"type\":\"session\",\"seq\":9,\"createdAt\":\"2026-08-15T11:00:00+08:00\"}\n").write(to: f1)
+    let r3 = Adapters.cachedSessionFileRows(f1)
+    checkEqual(r3.rows.first?.input ?? 0, 100, "T15 replaced file still parses")
+    checkEqual(Adapters.dshDecompressCount - c0, 2, "T15 stamp change re-decompresses once")
+    checkEqual(Adapters.dshParseCachePaths().count, 1, "T15 changed file entry replaced, not duplicated")
+
+    // T15d: the second file joins the cache.
+    _ = Adapters.cachedSessionFileRows(f2)
+    checkEqual(Adapters.dshParseCachePaths().count, 2, "T15 both files cached")
+
+    // T15e: a deleted file's entry is pruned; disabling dsh clears all.
+    try! fm.removeItem(at: s2)
+    Adapters.pruneDshParseCache(activeFiles: [f1.path])
+    checkEqual(Adapters.dshParseCachePaths(), Set([f1.path]), "T15 deleted file entry pruned")
+    Adapters.dropClientCaches(["dsh"])
+    checkEqual(Adapters.dshParseCachePaths().isEmpty, true, "T15 disabled dsh clears the parse cache")
+}
+
 // MARK: - Managed visibility tests (review round Phase 5)
 
 func runVisibilityTests() {
@@ -1234,6 +1305,7 @@ func runSingleInstanceTests() {
 
 runChecks()
 runCollectorStateTests()
+runDshCacheTests()
 runVisibilityTests()
 runSingleInstanceTests()
 print("fixture checks: \(checkCount) checks, \(failureCount) failures")
