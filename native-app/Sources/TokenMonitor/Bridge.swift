@@ -326,13 +326,14 @@ final class BridgeCore {
             NSLog("[renderer] %@ (%@:%d) %@", message, file, line, detail)
         case "window:minimize":
             window?.miniaturize(nil)
-        case "window:close":
+        case "window:close", "dashboard:close":
+            // Fallback when the per-window Bridge did not intercept the
+            // close (it normally does, to route through the owning
+            // controller's close semantics).
             window?.orderOut(nil)
-        case "dashboard:ready", "dashboard:minimize", "dashboard:close":
+        case "dashboard:ready", "dashboard:minimize":
             if method == "dashboard:minimize" {
                 window?.miniaturize(nil)
-            } else if method == "dashboard:close" {
-                window?.orderOut(nil)
             }
         default:
             break
@@ -394,6 +395,12 @@ protocol BridgeDelegate: AnyObject {
     func bridge(_ bridge: BridgeCore, didRequestOpenDashboard: Bool)
 }
 
+/// Window-level lifecycle events from the renderer (close buttons), handled
+/// by the owning window controller (PLAN.md Phase 5: close vs hide).
+protocol WindowLifecycleDelegate: AnyObject {
+    func bridgeDidRequestClose(_ bridge: Bridge)
+}
+
 // MARK: - Per-window bridge router
 
 /// One instance per web view; registers the `bridge` message handler and
@@ -402,6 +409,7 @@ final class Bridge: NSObject, WKScriptMessageHandler {
     weak var webView: WKWebView?
     weak var window: NSWindow?
     weak var dragController: WindowDragController?
+    weak var lifecycleDelegate: WindowLifecycleDelegate?
 
     private let core = BridgeCore.shared
     private var unregisterPusher: (() -> Void)?
@@ -421,6 +429,18 @@ final class Bridge: NSObject, WKScriptMessageHandler {
         }
     }
 
+    /// Tear this bridge down before its web view is released (PLAN.md
+    /// Phase 5): unregister the pusher, remove the script message handler
+    /// and drop the window/webView references so pushes and invokes stop.
+    func detach() {
+        unregisterPusher?()
+        unregisterPusher = nil
+        webView?.configuration.userContentController.removeScriptMessageHandler(forName: "bridge")
+        webView = nil
+        window = nil
+        dragController = nil
+    }
+
     func userContentController(_ userContentController: WKUserContentController,
                                didReceive message: WKScriptMessage) {
         guard message.name == "bridge",
@@ -430,6 +450,15 @@ final class Bridge: NSObject, WKScriptMessageHandler {
 
         if method == "window:dragStart" {
             dragController?.beginDrag()
+            return
+        }
+
+        // Close semantics live with the owning window controller (PLAN.md
+        // Phase 5): the main widget hides, the dashboard tears down its
+        // WebView. Intercept before the shared core handler so the decision
+        // is per-window.
+        if method == "window:close" || method == "dashboard:close" {
+            lifecycleDelegate?.bridgeDidRequestClose(self)
             return
         }
 

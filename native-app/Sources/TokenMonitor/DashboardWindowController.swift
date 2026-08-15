@@ -14,7 +14,7 @@ final class GlassPanel: NSPanel {
 
 /// Base window controller: transparent HUD-vibrancy panel hosting a
 /// transparent WKWebView, with titlebar drag and bounds persistence.
-class GlassWindowController: NSWindowController, WindowDragController, WKNavigationDelegate {
+class GlassWindowController: NSWindowController, WindowDragController, WKNavigationDelegate, WindowLifecycleDelegate {
     let bridge = Bridge()
     private(set) var webView: WKWebView!
     private let boundsKey: String
@@ -87,10 +87,12 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
         panel.contentView = container
         bridge.attach(to: webView, window: panel)
         bridge.dragController = self
+        bridge.lifecycleDelegate = self
     }
 
     func loadPage(_ name: String) {
-        guard let www = Bundle.main.url(forResource: name, withExtension: "html", subdirectory: "www") else {
+        guard let webView,
+              let www = Bundle.main.url(forResource: name, withExtension: "html", subdirectory: "www") else {
             NSLog("[window] missing www/%@.html in bundle", name)
             return
         }
@@ -100,6 +102,7 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
     // MARK: - Bounds persistence
 
     private var settingsObserver: NSObjectProtocol?
+    private var moveObserver: NSObjectProtocol?
 
     func restoreBounds() {
         guard let window else { return }
@@ -142,7 +145,10 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
             if diagBounds { NSLog("[diag] bounds resize frame=%@", NSStringFromRect(window.frame)) }
             self?.saveBounds()
         }
-        center.addObserver(forName: NSWindow.didMoveNotification, object: window, queue: .main) { [weak self] _ in
+        // Store the move observer's token too: an unstored token deallocates
+        // immediately, which silently unregisters the observer (the
+        // block-based API unregisters when the token is released).
+        moveObserver = center.addObserver(forName: NSWindow.didMoveNotification, object: window, queue: .main) { [weak self] _ in
             if diagBounds { NSLog("[diag] bounds move frame=%@", NSStringFromRect(window.frame)) }
             self?.saveBounds()
         }
@@ -213,7 +219,41 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
         guard trayMode else { return }
         guard Date().timeIntervalSince(lastShownAt) > 0.25 else { return }
         window.orderOut(nil)
+        windowDidHide()
     }
+
+    /// Hook for subclasses after an auto-hide (not an explicit close).
+    func windowDidHide() {}
+
+    // MARK: - Teardown (PLAN.md Phase 5)
+
+    /// Default close semantics: the main widget only hides, so a hotkey or
+    /// tray click reopens it instantly (the dashboard overrides this and
+    /// tears its WebView down to reclaim memory).
+    func bridgeDidRequestClose(_ bridge: Bridge) {
+        window?.orderOut(nil)
+    }
+
+    /// Release everything this controller owns: notification observers,
+    /// bridge pusher + script handler, navigation, the WebView and the
+    /// window. Callers (AppDelegate) drop their strong reference right
+    /// after, which deallocates the controller and its WebView.
+    func tearDown() {
+        for observer in autoHideObservers { NotificationCenter.default.removeObserver(observer) }
+        autoHideObservers.removeAll()
+        if let settingsObserver { NotificationCenter.default.removeObserver(settingsObserver); self.settingsObserver = nil }
+        if let moveObserver { NotificationCenter.default.removeObserver(moveObserver); self.moveObserver = nil }
+        idleTeardownItem?.cancel()
+        idleTeardownItem = nil
+        bridge.detach()
+        webView?.stopLoading()
+        webView?.navigationDelegate = nil
+        webView?.removeFromSuperview()
+        webView = nil
+        window?.close()
+    }
+
+    var idleTeardownItem: DispatchWorkItem?
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         webView.evaluateJavaScript("window.__tmOnLoad && window.__tmOnLoad()", completionHandler: nil)
@@ -434,7 +474,21 @@ final class DashboardWindowController: GlassWindowController {
 }
 
 /// The separate Usage Dashboard window (dashboard.html — charts/heatmap).
+///
+/// Lifecycle (PLAN.md Phase 5): the dashboard's WebView is a significant
+/// chunk of memory, so unlike the main widget it is torn down when closed.
+/// An explicit close tears down immediately; an auto-hide (focus loss) keeps
+/// the controller alive for a short idle window for instant reopen, then
+/// tears down. Reopening always rebuilds the controller from scratch: the
+/// dashboard page fetches settings and history itself on boot, so state is
+/// restored without any native replay.
 final class DashboardViewWindowController: GlassWindowController {
+    /// Called once the teardown finished; AppDelegate drops its reference.
+    var onTeardown: (() -> Void)?
+
+    /// Auto-hide keeps the window in memory this long before teardown.
+    private let idleTeardownDelay: TimeInterval = 60
+
     init() {
         super.init(boundsKey: "dashboardBounds", defaultSize: NSSize(width: 920, height: 720))
         loadPage("dashboard")
@@ -443,5 +497,32 @@ final class DashboardViewWindowController: GlassWindowController {
         // Dashboard follows the same focus behavior as the widget popover:
         // hide when the app loses key/active status.
         enableAutoHideOnResign()
+    }
+
+    override func bridgeDidRequestClose(_ bridge: Bridge) {
+        tearDown()
+        onTeardown?()
+    }
+
+    override func showWindow(_ sender: Any?) {
+        idleTeardownItem?.cancel()
+        idleTeardownItem = nil
+        super.showWindow(sender)
+    }
+
+    override func windowDidHide() {
+        scheduleIdleTeardown()
+    }
+
+    private func scheduleIdleTeardown() {
+        idleTeardownItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.idleTeardownItem = nil
+            self.tearDown()
+            self.onTeardown?()
+        }
+        idleTeardownItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + idleTeardownDelay, execute: item)
     }
 }

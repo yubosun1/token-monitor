@@ -105,7 +105,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, BridgeDelegate {
 
     @objc private func openDashboard() {
         if dashboardWindowController == nil {
-            dashboardWindowController = DashboardViewWindowController()
+            let controller = DashboardViewWindowController()
+            // Drop the strong reference once the dashboard tears its WebView
+            // down (PLAN.md Phase 5), so repeated open/close cycles release
+            // the controller, window and WebView instead of accumulating.
+            controller.onTeardown = { [weak self] in
+                self?.dashboardWindowController = nil
+            }
+            dashboardWindowController = controller
         }
         dashboardWindowController?.showWindow(nil)
         NSApp.activate(ignoringOtherApps: true)
