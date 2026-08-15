@@ -10,8 +10,10 @@ enum WindowLifecycleConstants {
     /// The main widget tears its WebView down after being hidden this long.
     /// Short hides keep the WebView alive for instant tray/hotkey reopen;
     /// past this the ~60MB WebContent/GPU/Networking processes are reclaimed
-    /// and the next show rebuilds the window from scratch.
-    static let mainWindowIdleTeardownDelay: TimeInterval = 600
+    /// and the next show rebuilds the window from scratch (~0.2s).
+    /// Tuned for memory: 120s reclaims the WebContent process far sooner than
+    /// the original 600s, at the cost of a brief rebuild on reopen after 2min.
+    static let mainWindowIdleTeardownDelay: TimeInterval = 120
 }
 
 /// Borderless floating panel with the HUD vibrancy the Electron version used
