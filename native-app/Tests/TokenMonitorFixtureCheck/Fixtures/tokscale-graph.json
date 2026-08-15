@@ -1,0 +1,83 @@
+{
+  "meta": {
+    "generatedAt": "2026-08-15T15:00:00Z",
+    "version": "4.13.0"
+  },
+  "summary": {
+    "totalTokens": 3000,
+    "totalCost": 8.5,
+    "totalDays": 2,
+    "activeDays": 2
+  },
+  "timeMetrics": {
+    "totalActiveTimeMs": 10800000
+  },
+  "contributions": [
+    {
+      "date": "2026-08-14",
+      "totals": {
+        "tokens": 1200,
+        "cost": 3,
+        "messages": 4
+      },
+      "intensity": 3,
+      "tokenBreakdown": {
+        "input": 200,
+        "output": 1000,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "reasoning": 0
+      },
+      "clients": [
+        {
+          "client": "claude",
+          "modelId": "model-t1",
+          "providerId": "anthropic",
+          "tokens": {
+            "input": 200,
+            "output": 1000,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "reasoning": 0
+          },
+          "cost": 3,
+          "messages": 4
+        }
+      ],
+      "activeTimeMs": 3600000
+    },
+    {
+      "date": "2026-08-15",
+      "totals": {
+        "tokens": 1800,
+        "cost": 5.5,
+        "messages": 6
+      },
+      "intensity": 4,
+      "tokenBreakdown": {
+        "input": 300,
+        "output": 1500,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "reasoning": 0
+      },
+      "clients": [
+        {
+          "client": "codex",
+          "modelId": "model-t2",
+          "providerId": "custom",
+          "tokens": {
+            "input": 300,
+            "output": 1500,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "reasoning": 0
+          },
+          "cost": 5.5,
+          "messages": 6
+        }
+      ],
+      "activeTimeMs": 7200000
+    }
+  ]
+}

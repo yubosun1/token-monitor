@@ -1,6 +1,15 @@
 import Foundation
 import AppKit
 
+/// Why a refresh started. Recorded per refresh in the diag log and in the
+/// fixture dump sidecar so every expensive tick can be attributed.
+enum RefreshReason: String {
+    case startup
+    case timer
+    case manual
+    case settingsChange
+}
+
 /// Usage collector: tokscale (claude/codex/opencode/workbuddy) + the local
 /// proma/hanako/dsh adapters, assembled into the exact aggregate stats shape
 /// the Electron version's renderer consumes. Timer-driven: local adapters
@@ -26,6 +35,14 @@ final class Collector {
 
     private let tokscaleClientIds = Set(["claude", "codex", "opencode", "workbuddy"])
 
+    private var refreshIdCounter = 0
+
+    /// Monotonic per-process refresh ID (diag attribution only).
+    private func nextRefreshId() -> Int {
+        refreshIdCounter += 1
+        return refreshIdCounter
+    }
+
     func start() {
         guard timer == nil else { return }
         let interval = refreshInterval()
@@ -33,11 +50,11 @@ final class Collector {
         // queue (the initial full tick and refreshNow() use the same queue),
         // so scanning, parsing and the stats push never block the main thread.
         let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
-            self?.queue.async { [weak self] in self?.tick(full: false) }
+            self?.queue.async { [weak self] in self?.tick(full: false, reason: .timer) }
         }
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
-        queue.async { [weak self] in self?.tick(full: true) }
+        queue.async { [weak self] in self?.tick(full: true, reason: .startup) }
     }
 
     private func refreshInterval() -> TimeInterval {
@@ -51,7 +68,7 @@ final class Collector {
     }
 
     func refreshNow() {
-        queue.async { [weak self] in self?.tick(full: true) }
+        queue.async { [weak self] in self?.tick(full: true, reason: .manual) }
     }
 
     func latestStats() -> [String: Any]? {
@@ -66,10 +83,14 @@ final class Collector {
 
     // MARK: - Ticks
 
-    private func tick(full: Bool) {
+    private func tick(full: Bool, reason: RefreshReason) {
         guard !collecting else { return }
         collecting = true
         defer { collecting = false }
+
+        let id = nextRefreshId()
+        PerfDiag.cpuMark(String(format: "tick-begin id=%d", id))
+        PerfDiag.log(String(format: "refresh id=%d reason=%@ full=%@", id, reason.rawValue, full ? "yes" : "no"))
 
         let settings = core.settings.snapshot()
         let clients = enabledClients(settings)
@@ -80,15 +101,18 @@ final class Collector {
         let fullTick = full || Date().timeIntervalSince(lastFullTickAt) >= fullInterval()
         let collectedAt = Date()
 
-        // Local adapters: cheap, refresh every tick.
+        // Local adapters: cheap, refresh every tick. Each adapter is timed
+        // separately so a slow source is identifiable in the diag log.
         var adapterRows: [String: [UsageCore.UsageRow]] = [:]
         for client in ["proma", "hanako", "dsh"] where clients.contains(client) {
+            let span = PerfDiag.span("adapter-" + client)
             switch client {
             case "proma": adapterRows["proma"] = Adapters.collectPromaRows()
             case "hanako": adapterRows["hanako"] = Adapters.collectHanakoRows()
             case "dsh": adapterRows["dsh"] = Adapters.collectDshRows()
             default: break
             }
+            span.end()
         }
         cachedAdapterRows = adapterRows
 
@@ -103,30 +127,37 @@ final class Collector {
         // tokscale clients: full scan at most every collectionIntervalMs.
         let tokscaleClients = clients.filter { tokscaleClientIds.contains($0) }
         if fullTick {
+            let span = PerfDiag.span("tokscale-periods")
             if let periods = scanTokscalePeriods(clients: tokscaleClients, settings: settings, now: collectedAt) {
                 cachedTokscale = periods
                 lastFullTickAt = Date()
             }
+            span.end()
         }
 
         let tokscalePeriods = cachedTokscale ?? ["today": UsageCore.emptyPeriod(), "month": UsageCore.emptyPeriod(), "allTime": UsageCore.emptyPeriod()]
 
+        let aggregateSpan = PerfDiag.span("aggregate-periods")
         let adapterPeriods = adapterPeriodsFor(clients: clients, rowsByClient: adapterRows, pricing: pricing, now: collectedAt, allTimeSince: allTimeSinceMs(settings))
 
         let today = UsageCore.mergePeriods([tokscalePeriods["today"] ?? UsageCore.emptyPeriod()] + adapterPeriods.map { $0["today"] ?? UsageCore.emptyPeriod() })
         let month = UsageCore.mergePeriods([tokscalePeriods["month"] ?? UsageCore.emptyPeriod()] + adapterPeriods.map { $0["month"] ?? UsageCore.emptyPeriod() })
         let allTime = UsageCore.mergePeriods([tokscalePeriods["allTime"] ?? UsageCore.emptyPeriod()] + adapterPeriods.map { $0["allTime"] ?? UsageCore.emptyPeriod() })
+        aggregateSpan.end()
 
         // History: graph scan on full ticks, adapter contributions every tick.
         if fullTick {
+            let span = PerfDiag.span("history")
             let built = buildHistory(clients: clients, tokscaleClients: tokscaleClients, adapterRows: adapterRows, pricing: pricing, now: collectedAt)
             stateLock.lock()
             cachedHistory = built
             stateLock.unlock()
+            span.end()
             core.push("dashboard:historyChanged", NSNull())
         }
         let history = cachedHistory
 
+        let statsSpan = PerfDiag.span("build-stats")
         let stats = buildStats(
             settings: settings,
             clients: clients,
@@ -136,6 +167,7 @@ final class Collector {
             history: history,
             collectedAt: collectedAt
         )
+        statsSpan.end()
 
         cachedPeriods = (today, month, allTime)
         cachedClients = clients
@@ -147,18 +179,33 @@ final class Collector {
         let previous = statsCache
         statsCache = stats
         stateLock.unlock()
-        if previous == nil || contentSignature(stats) != contentSignature(previous!) {
+        let pushed = previous == nil || contentSignature(stats) != contentSignature(previous!)
+        if pushed {
+            let pushSpan = PerfDiag.span("push-stats")
             core.push("stats:push", stats)
+            pushSpan.end()
+            PerfDiag.log(String(format: "push stats:push id=%d", id))
+            // Fixture dumps for before/after comparison (diag runs only).
+            PerfDiag.dump(stats, name: String(format: "stats-%03d.json", id))
+            PerfDiag.dump([
+                "refreshId": id,
+                "reason": reason.rawValue,
+                "full": fullTick,
+                "collectedAtMs": collectedAt.timeIntervalSince1970 * 1000,
+                "clients": clients
+            ], name: String(format: "meta-%03d.json", id))
         }
 
-        if ProcessInfo.processInfo.environment["TOKEN_MONITOR_DIAG"] != nil {
+        PerfDiag.log({
             let t = today["totalTokens"] as? Int ?? 0
             let m = month["totalTokens"] as? Int ?? 0
             let a = allTime["totalTokens"] as? Int ?? 0
             let clients = (allTime["clients"] as? [String: Any] ?? [:]).mapValues { $0 }
             let costs = (allTime["clientCosts"] as? [String: Any] ?? [:]).mapValues { $0 }
-            NSLog("[diag] collected: today=%d month=%d allTime=%d allTimeClients=%@ costs=%@", t, m, a, clients.description, costs.description)
-        }
+            return String(format: "collected id=%d today=%d month=%d allTime=%d allTimeClients=%@ costs=%@", id, t, m, a, clients.description, costs.description)
+        }())
+        PerfDiag.cpuMark(String(format: "tick-end id=%d", id))
+        PerfDiag.footprintMark(String(format: "post-tick id=%d", id))
     }
 
     /// Re-wrap the last collected periods with the current settings/limits and

@@ -1,0 +1,3 @@
+import TokenMonitorCore
+
+runTokenMonitorApp()

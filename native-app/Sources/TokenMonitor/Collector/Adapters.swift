@@ -132,22 +132,30 @@ enum Adapters {
         return cost
     }
 
-    static func localDateKey(_ timestampMs: Double) -> String {
+    /// Local date key for a timestamp. The timeZone parameter exists for the
+    /// fixture tests (PLAN.md Phase 0 boundary coverage); the app always uses
+    /// the current time zone.
+    static func localDateKey(_ timestampMs: Double, timeZone: TimeZone = .current) -> String {
         guard timestampMs > 0 else { return "" }
         let date = Date(timeIntervalSince1970: timestampMs / 1000)
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = timeZone
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter.string(from: date)
     }
 
-    static func localDayStart(_ date: Date) -> Double {
-        Calendar.current.startOfDay(for: date).timeIntervalSince1970 * 1000
+    static func localDayStart(_ date: Date, timeZone: TimeZone = .current) -> Double {
+        var calendar = Calendar.current
+        calendar.timeZone = timeZone
+        return calendar.startOfDay(for: date).timeIntervalSince1970 * 1000
     }
 
-    static func localMonthStart(_ date: Date) -> Double {
-        let comps = Calendar.current.dateComponents([.year, .month], from: date)
-        let start = Calendar.current.date(from: comps) ?? date
+    static func localMonthStart(_ date: Date, timeZone: TimeZone = .current) -> Double {
+        var calendar = Calendar.current
+        calendar.timeZone = timeZone
+        let comps = calendar.dateComponents([.year, .month], from: date)
+        let start = calendar.date(from: comps) ?? date
         return start.timeIntervalSince1970 * 1000
     }
 
@@ -167,7 +175,7 @@ enum Adapters {
 
     /// Build tokscale-entry-shaped rows per (session, model), mirroring
     /// buildTokscaleJson + extractUsageFromTokscale's input.
-    static func periodRows(rows: [UsageCore.UsageRow], sinceMs: Double, client: String, includeUndated: Bool) -> [UsageCore.UsageRow] {
+    static func periodRows(rows: [UsageCore.UsageRow], sinceMs: Double, client: String, includeUndated: Bool, timeZone: TimeZone = .current) -> [UsageCore.UsageRow] {
         var filtered = rows.filter { row in
             let createdAt = UsageCore.timestampMs(row.startedAt.isEmpty ? row.lastUsedAt : row.startedAt)
             // startedAt is the row's createdAt for adapters; see adapter row builders.
@@ -176,6 +184,10 @@ enum Adapters {
         }
         // Aggregate by session+model, summing token components; the adapters
         // emit one row per message, matching the JS buildTokscaleJson grouping.
+        // Iterate grouped.values in sorted-key order: Swift Dictionary.values
+        // order is randomized per process, and the floating-point cost/token
+        // sums in extractPeriod are order-sensitive at the last ulp, so the
+        // grouped rows must be ordered deterministically.
         var grouped: [String: UsageCore.UsageRow] = [:]
         for row in filtered {
             let key = "\(row.sessionId ?? "unknown")\u{0}\(row.model ?? "")"
@@ -198,15 +210,15 @@ enum Adapters {
                 grouped[key] = copy
             }
         }
-        filtered = Array(grouped.values)
+        filtered = grouped.keys.sorted().compactMap { grouped[$0] }
         return filtered
     }
 
-    static func historyContributions(rows: [UsageCore.UsageRow], client: String, pricingByModel: [String: TokscalePricing]) -> [HistoryContribution] {
+    static func historyContributions(rows: [UsageCore.UsageRow], client: String, pricingByModel: [String: TokscalePricing], timeZone: TimeZone = .current) -> [HistoryContribution] {
         var out: [HistoryContribution] = []
         for row in rows {
             // Row createdAt lives in startedAt for adapters.
-            let date = localDateKey(UsageCore.timestampMs(row.startedAt))
+            let date = localDateKey(UsageCore.timestampMs(row.startedAt), timeZone: timeZone)
             guard !date.isEmpty else { continue }
             let modelId = (row.model ?? "unknown").trimmingCharacters(in: .whitespaces).lowercased()
             let cost = estimatedRowCost(row: row, pricingByModel: pricingByModel)
@@ -233,6 +245,19 @@ enum Adapters {
         return out
     }
 
+    /// Deterministic ordering for collected rows: Dictionary-backed parse
+    /// caches return rows in randomized per-process order, and floating-point
+    /// aggregation is order-sensitive at the last ulp. Sort by (client,
+    /// session, model, startedAt) so period and history sums are stable
+    /// across processes and refreshes.
+    static func sortRows(_ rows: [UsageCore.UsageRow]) -> [UsageCore.UsageRow] {
+        return rows.sorted {
+            let a = ($0.client ?? "", $0.sessionId ?? "", $0.model ?? "", $0.startedAt, $0.lastUsedAt)
+            let b = ($1.client ?? "", $1.sessionId ?? "", $1.model ?? "", $1.startedAt, $1.lastUsedAt)
+            return a < b
+        }
+    }
+
     // MARK: - Proma (~/.proma/agent-sessions/*.jsonl)
 
     static let promaRoot = NSHomeDirectory() + "/.proma/agent-sessions"
@@ -243,7 +268,7 @@ enum Adapters {
         for file in jsonlFiles(root: promaRoot, recursive: false) {
             rows.append(contentsOf: promaFileRows(file, sourceId: sourceId))
         }
-        return rows
+        return sortRows(rows)
     }
 
     /// Parse one proma session file, memoized by (path, mtime, size).
@@ -348,7 +373,7 @@ enum Adapters {
                 }
             }
         }
-        return rows
+        return sortRows(rows)
     }
 
     /// Parse one hanako session/activity file, memoized by (path, mtime, size).
@@ -501,7 +526,7 @@ enum Adapters {
         if diag {
             NSLog("[dsh] files=%d usageEvents=%d rows=%d", files.count, totalEvents, rows.count)
         }
-        return rows
+        return sortRows(rows)
     }
 
     private struct DshFileResult {

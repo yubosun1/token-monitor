@@ -1,0 +1,57 @@
+{
+  "model-a": {
+    "modelId": "model-a",
+    "matchedKey": "model-a",
+    "source": "fixture",
+    "pricing": {
+      "inputCostPerToken": 0.001,
+      "outputCostPerToken": 0.002,
+      "cacheReadInputTokenCost": null,
+      "cacheCreationInputTokenCost": null
+    }
+  },
+  "model-b": {
+    "modelId": "model-b",
+    "matchedKey": "model-b",
+    "source": "fixture",
+    "pricing": {
+      "inputCostPerToken": 0.003,
+      "outputCostPerToken": 0.004,
+      "cacheReadInputTokenCost": null,
+      "cacheCreationInputTokenCost": null
+    }
+  },
+  "model-c": {
+    "modelId": "model-c",
+    "matchedKey": "model-c",
+    "source": "fixture",
+    "pricing": {
+      "inputCostPerToken": 0.005,
+      "outputCostPerToken": 0.006,
+      "cacheReadInputTokenCost": null,
+      "cacheCreationInputTokenCost": null
+    }
+  },
+  "model-d": {
+    "modelId": "model-d",
+    "matchedKey": "model-d",
+    "source": "fixture",
+    "pricing": {
+      "inputCostPerToken": 0.007,
+      "outputCostPerToken": 0.008,
+      "cacheReadInputTokenCost": null,
+      "cacheCreationInputTokenCost": null
+    }
+  },
+  "model-e": {
+    "modelId": "model-e",
+    "matchedKey": "model-e",
+    "source": "fixture",
+    "pricing": {
+      "inputCostPerToken": 0.009,
+      "outputCostPerToken": 0.01,
+      "cacheReadInputTokenCost": null,
+      "cacheCreationInputTokenCost": null
+    }
+  }
+}

@@ -14,7 +14,9 @@ BUNDLE="$ROOT/dist/Token Monitor.app"
 export TMPDIR="$APP_DIR/.tmp"
 export SWIFTPM_MODULECACHE_OVERRIDE="$APP_DIR/.cache"
 mkdir -p "$TMPDIR" "$SWIFTPM_MODULECACHE_OVERRIDE"
-swift build -c release --package-path "$APP_DIR" --disable-sandbox
+# Build only the app product: the fixture checker needs a debug build with
+# -enable-testing (see Package.swift), which a release build does not do.
+swift build -c release --product TokenMonitor --package-path "$APP_DIR" --disable-sandbox
 
 rm -rf "$BUNDLE"
 mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"

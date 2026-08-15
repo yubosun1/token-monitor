@@ -9,6 +9,10 @@ final class TokscaleRunner {
     private var pricingCache: [String: (pricing: TokscalePricing, fetchedAt: Date)] = [:]
     private let pricingCacheTTL: TimeInterval = 6 * 60 * 60
 
+    /// Monotonic spawn counter (diag attribution: how many tokscale
+    /// processes one refresh started).
+    private var spawnCount = 0
+
     private func binaryURL() -> URL? {
         if let bundled = Bundle.main.url(forResource: "tokscale", withExtension: nil), FileManager.default.isExecutableFile(atPath: bundled.path) {
             return bundled
@@ -47,14 +51,25 @@ final class TokscaleRunner {
         }
         DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: timeoutWorkItem)
 
+        let started = Date()
         try process.run()
         let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
         let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         timeoutWorkItem.cancel()
+        let elapsedMs = Date().timeIntervalSince(started) * 1000
 
         let stdout = String(data: outData, encoding: .utf8) ?? ""
         let stderr = String(data: errData, encoding: .utf8) ?? ""
+
+        if PerfDiag.enabled {
+            lock.lock()
+            spawnCount += 1
+            let n = spawnCount
+            lock.unlock()
+            PerfDiag.log(String(format: "tokscale spawn #%d pid=%d args=%@ wallMs=%.1f exit=%d",
+                                n, process.processIdentifier, args.joined(separator: " "), elapsedMs, process.terminationStatus))
+        }
         return Result(stdout: stdout, stderr: stderr, exitCode: process.terminationStatus)
     }
 

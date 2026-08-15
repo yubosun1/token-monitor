@@ -20,16 +20,33 @@ let package = Package(
             sources: ["dummy.c"],
             publicHeadersPath: "include"
         ),
-        .executableTarget(
-            name: "TokenMonitor",
+        // Split into a library + thin executable so the fixture checker can
+        // exercise the aggregation code without linking the app entry point.
+        // -enable-testing is debug-only: the Release app build is unaffected.
+        .target(
+            name: "TokenMonitorCore",
             dependencies: ["CZstd"],
             path: "Sources/TokenMonitor",
-            // v5 language mode keeps AppKit/WKWebView delegate conformance
-            // friction-free; the app is single-threaded UI + a few timers.
-            swiftSettings: [.swiftLanguageMode(.v5)],
+            swiftSettings: [
+                .swiftLanguageMode(.v5),
+                .unsafeFlags(["-enable-testing"], .when(configuration: .debug))
+            ],
             linkerSettings: [
                 .unsafeFlags([vendorZstdLib])
             ]
+        ),
+        .executableTarget(
+            name: "TokenMonitor",
+            dependencies: ["TokenMonitorCore"],
+            path: "Sources/TokenMonitorMain",
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        .executableTarget(
+            name: "TokenMonitorFixtureCheck",
+            dependencies: ["TokenMonitorCore"],
+            path: "Tests/TokenMonitorFixtureCheck",
+            resources: [.copy("Fixtures")],
+            swiftSettings: [.swiftLanguageMode(.v5)]
         )
     ]
 )

@@ -1,0 +1,149 @@
+{
+  "comment": "tokscale --json entries per period, matching the real CLI output shape (no per-entry timestamps; startedAt/lastUsedAt absent). The collector runs three separate scans, so each period has its own entry list.",
+  "today": [
+    {
+      "client": "claude",
+      "mergedClients": null,
+      "sessionId": "session-c1",
+      "model": "model-t1",
+      "provider": "anthropic",
+      "input": 2648,
+      "output": 47665,
+      "cacheRead": 15250739,
+      "cacheWrite": 192154,
+      "reasoning": 0,
+      "messageCount": 132,
+      "cost": 10.031197,
+      "performance": {
+        "msPer1KTokens": 111.132,
+        "totalDurationMs": 1721792,
+        "timedTokens": 15493206,
+        "sampleCount": 132,
+        "tokenCoverage": 1
+      }
+    },
+    {
+      "client": "codex",
+      "mergedClients": null,
+      "sessionId": "session-c2",
+      "model": "model-t2",
+      "provider": "custom",
+      "input": 3138107,
+      "output": 154210,
+      "cacheRead": 22996608,
+      "cacheWrite": 0,
+      "reasoning": 26740,
+      "messageCount": 167,
+      "cost": 32.617339,
+      "performance": {
+        "msPer1KTokens": null,
+        "totalDurationMs": 0,
+        "timedTokens": 0,
+        "sampleCount": 0,
+        "tokenCoverage": 0
+      }
+    }
+  ],
+  "month": [
+    {
+      "client": "claude",
+      "mergedClients": null,
+      "sessionId": "session-c1",
+      "model": "model-t1",
+      "provider": "anthropic",
+      "input": 2648,
+      "output": 47665,
+      "cacheRead": 15250739,
+      "cacheWrite": 192154,
+      "reasoning": 0,
+      "messageCount": 132,
+      "cost": 10.031197,
+      "performance": {
+        "msPer1KTokens": 111.132,
+        "totalDurationMs": 1721792,
+        "timedTokens": 15493206,
+        "sampleCount": 132,
+        "tokenCoverage": 1
+      }
+    },
+    {
+      "client": "codex",
+      "mergedClients": null,
+      "sessionId": "session-c2",
+      "model": "model-t2",
+      "provider": "custom",
+      "input": 3138107,
+      "output": 154210,
+      "cacheRead": 22996608,
+      "cacheWrite": 0,
+      "reasoning": 26740,
+      "messageCount": 167,
+      "cost": 32.617339,
+      "performance": {
+        "msPer1KTokens": null,
+        "totalDurationMs": 0,
+        "timedTokens": 0,
+        "sampleCount": 0,
+        "tokenCoverage": 0
+      }
+    }
+  ],
+  "allTime": [
+    {
+      "client": "claude",
+      "mergedClients": null,
+      "sessionId": "session-c1",
+      "model": "model-t1",
+      "provider": "anthropic",
+      "input": 2648,
+      "output": 47665,
+      "cacheRead": 15250739,
+      "cacheWrite": 192154,
+      "reasoning": 0,
+      "messageCount": 132,
+      "cost": 10.031197,
+      "performance": {
+        "msPer1KTokens": 111.132,
+        "totalDurationMs": 1721792,
+        "timedTokens": 15493206,
+        "sampleCount": 132,
+        "tokenCoverage": 1
+      }
+    },
+    {
+      "client": "codex",
+      "mergedClients": null,
+      "sessionId": "session-c2",
+      "model": "model-t2",
+      "provider": "custom",
+      "input": 3138107,
+      "output": 154210,
+      "cacheRead": 22996608,
+      "cacheWrite": 0,
+      "reasoning": 26740,
+      "messageCount": 167,
+      "cost": 32.617339,
+      "performance": {
+        "msPer1KTokens": null,
+        "totalDurationMs": 0,
+        "timedTokens": 0,
+        "sampleCount": 0,
+        "tokenCoverage": 0
+      }
+    },
+    {
+      "client": "claude",
+      "mergedClients": null,
+      "sessionId": "session-c3",
+      "model": "model-t3",
+      "provider": "anthropic",
+      "input": 100,
+      "output": 200,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "reasoning": 0,
+      "messageCount": 2,
+      "cost": 0.25
+    }
+  ]
+}
