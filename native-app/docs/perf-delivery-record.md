@@ -26,6 +26,8 @@
   fingerprint unchanged, reusing snapshot (no subprocess)，0 spawn。
 - 120s 观察窗内 tokscale spawn 总数：优化前每 5min 一个 full tick 6 次；
   优化后同窗口 4 次（仅数据变化时的首个 full tick）。
+- 设置热更新运行时验证：refreshMs 15000 → 8000 后 timer 重建为 8.0s，
+  后续 tick 严格 8s 一次（修复了进程内 Int 写入被 as? Double 读取丢弃的问题）。
 
 ## 统计 fixture 一致性
 
