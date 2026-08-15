@@ -1269,6 +1269,77 @@ func runVisibilityTests() {
     }
 }
 
+// MARK: - Idle teardown scheduler tests (round-4 Phase 6)
+
+func runIdleTeardownTests() {
+    // V5: repeated hides supersede to exactly one pending teardown; the
+    // superseded scheduled fire is a no-op and the winner fires once.
+    do {
+        var scheduled: [(TimeInterval, () -> Void)] = []
+        let scheduler = IdleTeardownScheduler { delay, fire in
+            scheduled.append((delay, fire))
+        }
+        var fired = 0
+        scheduler.schedule(delay: 600) { fired += 1 }
+        scheduler.schedule(delay: 600) { fired += 1 }
+        checkEqual(scheduled.count, 2, "V5 each hide schedules one work")
+        check(scheduler.hasPending, "V5 one pending teardown after repeated hides")
+        scheduled[0].1()
+        checkEqual(fired, 0, "V5 superseded work does not fire")
+        scheduled[1].1()
+        checkEqual(fired, 1, "V5 current work fires once")
+        check(!scheduler.hasPending, "V5 pending cleared after fire")
+        scheduled[1].1()
+        checkEqual(fired, 1, "V5 work never double-fires")
+    }
+    // V6: a show inside the delay cancels the pending teardown; the stale
+    // scheduled fire is a no-op.
+    do {
+        var scheduled: [(TimeInterval, () -> Void)] = []
+        let scheduler = IdleTeardownScheduler { delay, fire in
+            scheduled.append((delay, fire))
+        }
+        var fired = 0
+        scheduler.schedule(delay: 600) { fired += 1 }
+        scheduler.cancel()
+        check(!scheduler.hasPending, "V6 cancel clears the pending teardown")
+        scheduled[0].1()
+        checkEqual(fired, 0, "V6 cancelled teardown never fires")
+    }
+    // V7: a hide timeout fires the teardown exactly once, and the scheduler
+    // is reusable afterwards.
+    do {
+        var scheduled: [(TimeInterval, () -> Void)] = []
+        let scheduler = IdleTeardownScheduler { delay, fire in
+            scheduled.append((delay, fire))
+        }
+        var fired = 0
+        scheduler.schedule(delay: 600) { fired += 1 }
+        scheduled[0].1()
+        checkEqual(fired, 1, "V7 hide timeout fires once")
+        scheduler.schedule(delay: 600) { fired += 1 }
+        scheduled[1].1()
+        checkEqual(fired, 2, "V7 scheduler reusable after fire")
+    }
+    // V8: 20 hide/show cycles never accumulate live work items, and every
+    // stale scheduled fire stays a no-op.
+    do {
+        var scheduled: [(TimeInterval, () -> Void)] = []
+        let scheduler = IdleTeardownScheduler { delay, fire in
+            scheduled.append((delay, fire))
+        }
+        var fired = 0
+        for _ in 0..<20 {
+            scheduler.schedule(delay: 600) { fired += 1 }
+            scheduler.cancel()
+        }
+        check(!scheduler.hasPending, "V8 no live items after 20 hide/show cycles")
+        for (_, fire) in scheduled { fire() }
+        checkEqual(fired, 0, "V8 stale fires stay no-ops")
+        check(!scheduler.hasPending, "V8 still no live items")
+    }
+}
+
 // MARK: - Single-instance activation buffering tests (review round Phase 6)
 
 func runSingleInstanceTests() {
@@ -1307,6 +1378,7 @@ runChecks()
 runCollectorStateTests()
 runDshCacheTests()
 runVisibilityTests()
+runIdleTeardownTests()
 runSingleInstanceTests()
 print("fixture checks: \(checkCount) checks, \(failureCount) failures")
 if failureCount > 0 { exit(1) }

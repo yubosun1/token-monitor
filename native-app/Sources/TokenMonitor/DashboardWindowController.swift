@@ -5,6 +5,15 @@ protocol WindowDragController: AnyObject {
     func beginDrag()
 }
 
+/// Centralized window lifecycle constants (round-4 Phase 6).
+enum WindowLifecycleConstants {
+    /// The main widget tears its WebView down after being hidden this long.
+    /// Short hides keep the WebView alive for instant tray/hotkey reopen;
+    /// past this the ~60MB WebContent/GPU/Networking processes are reclaimed
+    /// and the next show rebuilds the window from scratch.
+    static let mainWindowIdleTeardownDelay: TimeInterval = 600
+}
+
 /// Borderless floating panel with the HUD vibrancy the Electron version used
 /// (`vibrancy: 'hud'`, visualEffectState active, always on top).
 final class GlassPanel: NSPanel {
@@ -106,13 +115,21 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
         guard let window, visibilityObservers.isEmpty else { return }
         let center = NotificationCenter.default
         // A minimized window is not visible to the user: pause the renderer
-        // like any other hide path.
+        // like any other hide path, and start the same idle-teardown clock
+        // every hide path shares (round-4 Phase 6). Deminiaturizing is a
+        // show: it cancels the pending teardown.
         visibilityObservers.append(center.addObserver(
             forName: NSWindow.didMiniaturizeNotification, object: window, queue: .main
-        ) { [weak self] _ in self?.visibility.hide() })
+        ) { [weak self] _ in
+            self?.visibility.hide()
+            self?.windowDidHide()
+        })
         visibilityObservers.append(center.addObserver(
             forName: NSWindow.didDeminiaturizeNotification, object: window, queue: .main
-        ) { [weak self] _ in self?.visibility.show() })
+        ) { [weak self] _ in
+            self?.idleTeardown.cancel()
+            self?.visibility.show()
+        })
     }
 
     /// Unified hide path: order out, notify the renderer once, then run the
@@ -240,9 +257,11 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
         ) { [weak self] _ in self?.autoHideIfNeeded() })
     }
 
-    /// Unified show path: display and notify the renderer once. Subclasses
-    /// override to cancel pending idle teardown first.
+    /// Unified show path: display, notify the renderer once, and cancel
+    /// any pending idle teardown — a show inside the delay reuses this
+    /// controller and its WebView (round-4 Phase 6).
     override func showWindow(_ sender: Any?) {
+        idleTeardown.cancel()
         lastShownAt = Date()
         visibility.show()
         super.showWindow(sender)
@@ -258,16 +277,47 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
         hideManagedWindow()
     }
 
-    /// Hook for subclasses after a managed hide (auto-hide / tray / close).
+    /// Hook for subclasses after a managed hide (auto-hide / tray / close
+    /// / miniaturize).
     func windowDidHide() {}
 
-    // MARK: - Teardown (PLAN.md Phase 5)
+    // MARK: - Teardown (PLAN.md Phase 5, round-4 Phase 6)
+
+    /// Idle teardown scheduler: a show cancels any pending teardown, a hide
+    /// (re)schedules one. The pure rules live in IdleTeardownScheduler
+    /// (unit-tested); this only wires the WebView work.
+    let idleTeardown = IdleTeardownScheduler()
+
+    /// How long a hidden window keeps its WebView before teardown. The main
+    /// widget uses the central default; the dashboard overrides it with its
+    /// shorter idle window. A diag-only env override shortens the delay so
+    /// lifecycle probes don't wait ten minutes.
+    var idleTeardownDelay: TimeInterval {
+        if let raw = ProcessInfo.processInfo.environment["TOKEN_MONITOR_MAIN_TEARDOWN_MS"],
+           let ms = Double(raw), ms > 0 {
+            return ms / 1000.0
+        }
+        return WindowLifecycleConstants.mainWindowIdleTeardownDelay
+    }
+
+    /// Called once the teardown finished; AppDelegate drops its reference.
+    var onTeardown: (() -> Void)?
 
     /// Default close semantics: the main widget only hides, so a hotkey or
     /// tray click reopens it instantly (the dashboard overrides this and
     /// tears its WebView down to reclaim memory).
     func bridgeDidRequestClose(_ bridge: Bridge) {
         hideManagedWindow()
+    }
+
+    /// (Re)schedule the idle teardown for a hide. Repeated hides supersede
+    /// instead of stacking; the fired work tears down exactly once.
+    func scheduleIdleTeardown() {
+        idleTeardown.schedule(delay: idleTeardownDelay) { [weak self] in
+            guard let self else { return }
+            self.tearDown()
+            self.onTeardown?()
+        }
     }
 
     /// Release everything this controller owns: notification observers,
@@ -281,8 +331,7 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
         visibilityObservers.removeAll()
         if let settingsObserver { NotificationCenter.default.removeObserver(settingsObserver); self.settingsObserver = nil }
         if let moveObserver { NotificationCenter.default.removeObserver(moveObserver); self.moveObserver = nil }
-        idleTeardownItem?.cancel()
-        idleTeardownItem = nil
+        idleTeardown.cancel()
         bridge.detach()
         webView?.stopLoading()
         webView?.navigationDelegate = nil
@@ -291,13 +340,40 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
         window?.close()
     }
 
-    var idleTeardownItem: DispatchWorkItem?
+    // MARK: - Pending local pushes (round-4 Phase 6)
+
+    private var pendingLocalPushes: [(String, Any)] = []
+    private var pageLoaded = false
+
+    /// Push a window-local event, queueing it until the page finished
+    /// loading: pushes issued right after a rebuild must not vanish into a
+    /// half-loaded web view (e.g. settings:open).
+    func pushLocalWhenLoaded(_ event: String, _ payload: Any) {
+        if pageLoaded {
+            bridge.pushLocal(event, payload)
+        } else {
+            pendingLocalPushes.append((event, payload))
+        }
+    }
+
+    /// Mark the page loaded and deliver queued local pushes in order.
+    func flushPendingLocalPushes() {
+        pageLoaded = true
+        let pending = pendingLocalPushes
+        pendingLocalPushes.removeAll()
+        for (event, payload) in pending {
+            bridge.pushLocal(event, payload)
+        }
+    }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         webView.evaluateJavaScript("window.__tmOnLoad && window.__tmOnLoad()", completionHandler: nil)
         // A visibility push sent before the page finished loading is lost;
         // re-sync the current native state now (review round Phase 5).
         visibility.resync()
+        // Deliver any local pushes queued while the page was loading, e.g.
+        // settings:open issued right after a rebuild (round-4 Phase 6).
+        flushPendingLocalPushes()
         dumpPageStateIfDiagnostics()
     }
 
@@ -377,8 +453,10 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
             }
         }
         // Dev aid: exercise the dashboard window so its own render errors
-        // surface in the same log.
-        if self is DashboardWindowController {
+        // surface in the same log. Skipped during the main lifecycle probe,
+        // whose auto-hide/teardown timing it would disturb.
+        if self is DashboardWindowController,
+           ProcessInfo.processInfo.environment["TOKEN_MONITOR_DIAG_MAIN_LIFECYCLE"] == nil {
             DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
                 guard let self, let webView = self.webView else { return }
                 webView.evaluateJavaScript("window.tokenMonitor && window.tokenMonitor.openDashboard()", completionHandler: nil)
@@ -502,6 +580,13 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
 
 /// Main widget window (index.html — the glass card with tabs, settings,
 /// session rows, limits and subscriptions).
+///
+/// Lifecycle (round-4 Phase 6): closing and tray/hotkey toggles hide the
+/// window as before, but a window hidden for the central idle delay tears
+/// its WebView down so the ~60MB WebContent process is reclaimed. A show
+/// inside the delay reuses the controller instantly; after the timeout the
+/// next show rebuilds it — the page pulls stats/settings/history/limits
+/// itself on boot via the bridge invokes, so no native replay is needed.
 final class DashboardWindowController: GlassWindowController {
     init() {
         super.init(boundsKey: "windowBounds", defaultSize: NSSize(width: 340, height: 650))
@@ -511,6 +596,12 @@ final class DashboardWindowController: GlassWindowController {
         // The widget popover hides when the app loses focus (trayMode);
         // the dashboard window stays put.
         enableAutoHideOnResign()
+    }
+
+    /// Every managed hide (tray/hotkey/close/auto-hide/miniaturize) starts
+    /// the idle-teardown clock; showWindow cancels it.
+    override func windowDidHide() {
+        scheduleIdleTeardown()
     }
 }
 
@@ -524,11 +615,10 @@ final class DashboardWindowController: GlassWindowController {
 /// dashboard page fetches settings and history itself on boot, so state is
 /// restored without any native replay.
 final class DashboardViewWindowController: GlassWindowController {
-    /// Called once the teardown finished; AppDelegate drops its reference.
-    var onTeardown: (() -> Void)?
-
-    /// Auto-hide keeps the window in memory this long before teardown.
-    private let idleTeardownDelay: TimeInterval = 60
+    /// Auto-hide keeps the window in memory this long before teardown
+    /// (unchanged from review round Phase 5; the main widget uses the
+    /// central 600s default instead).
+    override var idleTeardownDelay: TimeInterval { 60 }
 
     init() {
         super.init(boundsKey: "dashboardBounds", defaultSize: NSSize(width: 920, height: 720))
@@ -545,25 +635,7 @@ final class DashboardViewWindowController: GlassWindowController {
         onTeardown?()
     }
 
-    override func showWindow(_ sender: Any?) {
-        idleTeardownItem?.cancel()
-        idleTeardownItem = nil
-        super.showWindow(sender)
-    }
-
     override func windowDidHide() {
         scheduleIdleTeardown()
-    }
-
-    private func scheduleIdleTeardown() {
-        idleTeardownItem?.cancel()
-        let item = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            self.idleTeardownItem = nil
-            self.tearDown()
-            self.onTeardown?()
-        }
-        idleTeardownItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + idleTeardownDelay, execute: item)
     }
 }

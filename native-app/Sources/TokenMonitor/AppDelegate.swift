@@ -47,6 +47,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, BridgeDelegate {
                 NSLog("[diag] settings probe: refreshMs -> 8000 (expect 8s tick cadence)")
             }
         }
+        // Dev aid: TOKEN_MONITOR_DIAG_MAIN_LIFECYCLE=1 hides the main window,
+        // lets the idle teardown fire, then reopens it repeatedly, logging
+        // the footprint after each teardown and rebuild (round-4 Phase 6).
+        // Combine with TOKEN_MONITOR_MAIN_TEARDOWN_MS to shorten the delay.
+        if diag, ProcessInfo.processInfo.environment["TOKEN_MONITOR_DIAG_MAIN_LIFECYCLE"] != nil {
+            runMainWindowLifecycleProbe()
+        }
+    }
+
+    /// Diag-only: hide the main window (the same path the tray toggle takes),
+    /// wait for the idle teardown to fire, then rebuild — per cycle.
+    private func runMainWindowLifecycleProbe() {
+        let total = Int(ProcessInfo.processInfo.environment["TOKEN_MONITOR_DIAG_LIFECYCLE_CYCLES"] ?? "20") ?? 20
+        var cycles = 0
+        func cycle() {
+            guard cycles < total else {
+                NSLog("[diag] main lifecycle probe done (%d cycles)", total)
+                return
+            }
+            cycles += 1
+            guard let wc = mainWindowController else {
+                NSLog("[diag] main lifecycle probe: controller missing, aborting")
+                return
+            }
+            // An auto-hide may already have hidden the window (and started
+            // the teardown clock); only hide when still visible.
+            if let window = wc.window, window.isVisible {
+                PerfDiag.footprintMark(String(format: "main-lifecycle-%02d-hidden", cycles))
+                wc.hideManagedWindow()
+            }
+            // The teardown fires after the (diag-shortened) idle delay; poll
+            // once past it and log whether AppDelegate dropped the reference.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
+                guard let self else { return }
+                if self.mainWindowController == nil {
+                    NSLog("[diag] main lifecycle cycle %d: controller torn down", cycles)
+                } else {
+                    NSLog("[diag] main lifecycle cycle %d: controller still alive", cycles)
+                }
+                PerfDiag.footprintMark(String(format: "main-lifecycle-%02d-teardown", cycles))
+                self.showMainWindow(center: false)
+                NSApp.activate(ignoringOtherApps: true)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
+                    PerfDiag.footprintMark(String(format: "main-lifecycle-%02d-rebuilt", cycles))
+                    cycle()
+                }
+            }
+        }
+        // Wait for the startup scans to settle before the first cycle.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15, execute: cycle)
     }
 
     /// Diag-only: open the dashboard, close it (same path as the renderer
@@ -138,7 +188,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, BridgeDelegate {
 
     @objc private func openSettings() {
         showMainWindow(center: false)
-        mainWindowController?.bridge.pushLocal("settings:open", NSNull())
+        // Queued until the page finished loading: right after an idle
+        // teardown the rebuilt page is not ready yet (round-4 Phase 6).
+        mainWindowController?.pushLocalWhenLoaded("settings:open", NSNull())
     }
 
     @objc private func openDashboard() {
@@ -170,7 +222,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, BridgeDelegate {
 
     private func ensureMainWindow() {
         if mainWindowController == nil {
-            mainWindowController = DashboardWindowController()
+            let controller = DashboardWindowController()
+            // Once the long-hidden window tears its WebView down, drop the
+            // strong reference so the controller, window and WebView are
+            // released; the next tray/hotkey/settings request rebuilds them
+            // from scratch (round-4 Phase 6).
+            controller.onTeardown = { [weak self] in
+                self?.mainWindowController = nil
+            }
+            mainWindowController = controller
         }
     }
 

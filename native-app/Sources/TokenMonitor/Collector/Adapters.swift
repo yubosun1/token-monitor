@@ -513,7 +513,7 @@ enum Adapters {
         fileCacheLock.lock()
         decompressCounter += 1
         fileCacheLock.unlock()
-        if diag { NSLog("[dsh] decompress %@", url.lastPathComponent) }
+        if diag { NSLog("[dsh] decompress %@", url.path) }
         guard let compressed = try? Data(contentsOf: url) else {
             if diag { NSLog("[dsh] read failed: %@", url.path) }
             return nil
