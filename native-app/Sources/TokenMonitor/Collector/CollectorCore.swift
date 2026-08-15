@@ -127,8 +127,21 @@ final class Collector {
     // are internal (not private) so the fixture checker can assert cache
     // lifecycle directly; they are still written only by the worker queue.
     private var pricingGeneration = 0
-    private var cachedPricing: [String: TokscalePricing] = [:]
+    /// Per-model pricing cache: the resolved price plus the tick clock time
+    /// it was fetched. Expired entries re-resolve on full ticks (round-4
+    /// Phase 3.1) so a long-running app sees price changes; cheap ticks only
+    /// read the cache and never spawn.
+    // Internal (not private) so the fixture checker can assert TTL
+    // lifecycle directly; still written only by the worker queue.
+    var cachedPricing: [String: (pricing: TokscalePricing, fetchedAt: Date)] = [:]
+    private let pricingTTL: TimeInterval = 6 * 60 * 60
+    /// Per-model retry floor for failed resolves (first resolution and
+    /// expired re-resolution alike); bounded, and a failed expiry keeps the
+    /// last-known-good price instead of zeroing costs.
     private var pricingRetryAfter: [String: Date] = [:]
+    /// Canonical signature of the customModelPricing setting: the sidecar
+    /// syncs only when this changes (round-4 Phase 3.2), never every tick.
+    private var lastCustomPricingSignature: String?
     var rawSnapshots: [String: RawSnapshot] = [:]
     var derivedSnapshots: [String: DerivedSnapshot] = [:]
     private var mergeContext: MergeContext?
@@ -425,7 +438,15 @@ final class Collector {
             }
         }
 
-        environment.customPricingSync(settings)
+        // Sidecar I/O only on the first tick and when the setting actually
+        // changes (round-4 Phase 3.2): a canonical sorted-key signature makes
+        // dictionary traversal order irrelevant, and a failed write records
+        // the signature anyway so a cheap tick never retries in a loop.
+        let customPricingSig = customPricingSignature(settings["customModelPricing"])
+        if lastCustomPricingSignature != customPricingSig {
+            environment.customPricingSync(settings)
+            lastCustomPricingSignature = customPricingSig
+        }
 
         // One clock reading for the whole tick (review round 3.1/3.2): the
         // day/month keys, period filtering and stats windows all use the
@@ -471,6 +492,7 @@ final class Collector {
                 PerfDiag.log(String(format: "source %@: changed (%d files), re-read", client, fp.files.count))
             }
             resolvePricing(models: raw.models, policy: pricingPolicy, now: now)
+            let pricingMap = pricingMapForDerivation()
             let key = DerivedKey(
                 client: client,
                 fingerprint: raw.fingerprint,
@@ -483,11 +505,11 @@ final class Collector {
                 adapterContributions[client] = derived
             } else {
                 let periods = adapterPeriodsFor(
-                    client: client, rows: raw.rows, pricing: cachedPricing,
+                    client: client, rows: raw.rows, pricing: pricingMap,
                     now: now, allTimeSince: allTimeSince
                 )
                 let history = Adapters.historyContributions(
-                    rows: raw.rows, client: client, pricingByModel: cachedPricing
+                    rows: raw.rows, client: client, pricingByModel: pricingMap
                 )
                 let derived = DerivedSnapshot(key: key, periods: periods, history: history)
                 derivedSnapshots[client] = derived
@@ -750,17 +772,30 @@ final class Collector {
 
     // MARK: - Pricing resolution (review round Phase 2)
 
-    /// Attempt to resolve missing pricing for the given models. cacheOnly
-    /// never spawns and never schedules retries; resolve may spawn and, on
-    /// failure, schedules a bounded retry (next full check at the
-    /// earliest). Resolved pricing changes the derived signature, so the
-    /// affected clients re-derive from cached rows on the same tick.
+    /// Pricing resolution per tick (round-4 Phase 3.1):
+    ///  - cheap ticks keep last-known-good pricing and never spawn;
+    ///  - full ticks re-resolve a model once its 6h TTL expired, but only
+    ///    after that model's retry floor;
+    ///  - an expired resolve that fails keeps the previous price (costs are
+    ///    never zeroed) and sets the bounded 300s retry floor;
+    ///  - one lookup per model per tick even when several clients share it.
+    /// Resolved pricing feeds the derived signature, so affected clients
+    /// re-derive from cached rows on the same tick without a raw re-read.
     private func resolvePricing(models: [String], policy: PricingPolicy, now: Date) {
+        var lookedUpThisTick = Set<String>()
         for model in models {
-            if cachedPricing[model] != nil { continue }
-            if policy == .resolve, let retry = pricingRetryAfter[model], now < retry { continue }
+            guard !lookedUpThisTick.contains(model) else { continue }
+            let cached = cachedPricing[model]
+            if let cached {
+                let expired = now.timeIntervalSince(cached.fetchedAt) >= pricingTTL
+                if policy == .cacheOnly || !expired { continue }
+                if let retry = pricingRetryAfter[model], now < retry { continue }
+            } else if policy == .resolve, let retry = pricingRetryAfter[model], now < retry {
+                continue
+            }
+            lookedUpThisTick.insert(model)
             if let pricing = environment.pricingLookup(model, policy) {
-                cachedPricing[model] = pricing
+                cachedPricing[model] = (pricing, now)
                 pricingRetryAfter.removeValue(forKey: model)
             } else if policy == .resolve {
                 pricingRetryAfter[model] = now.addingTimeInterval(300)
@@ -768,13 +803,34 @@ final class Collector {
         }
     }
 
+    /// Flat price map for the derivation helpers (worker-owned cache).
+    private func pricingMapForDerivation() -> [String: TokscalePricing] {
+        var map: [String: TokscalePricing] = [:]
+        for (model, entry) in cachedPricing {
+            map[model] = entry.pricing
+        }
+        return map
+    }
+
+    /// Canonical, sorted-key JSON signature of the custom pricing setting:
+    /// stable across dictionary traversal orders, so two equivalent settings
+    /// always compare equal.
+    private func customPricingSignature(_ value: Any?) -> String {
+        guard let value, !(value is NSNull) else { return "" }
+        guard JSONSerialization.isValidJSONObject(value),
+              let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]) else {
+            return String(describing: value)
+        }
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+
     /// Derived-key pricing signature: unresolved models are named so their
     /// later resolution invalidates the derived snapshot.
     private func pricingSignature(for models: [String]) -> String {
         var parts: [String] = []
         for key in models.sorted() {
-            if let pricing = cachedPricing[key] {
-                parts.append(key + ":" + Self.pricingCostString(pricing))
+            if let entry = cachedPricing[key] {
+                parts.append(key + ":" + Self.pricingCostString(entry.pricing))
             } else {
                 parts.append(key + ":UNRESOLVED")
             }
@@ -1064,8 +1120,11 @@ enum CustomPricingSidecar {
             merged[id] = models
         }
 
-        writeJsonAtomic(["models": merged], to: pricingPath)
-        writeJsonAtomic(["version": 1, "managedIds": Array(managedModels.keys)], to: sidecarPath)
+        // Sorted keys make the canonical bytes stable across dictionary
+        // traversal orders; identical target bytes skip the write entirely
+        // (no pointless mtime churn / SSD I/O on unchanged ticks).
+        writeJsonAtomicIfChanged(["models": merged], to: pricingPath)
+        writeJsonAtomicIfChanged(["version": 1, "managedIds": managedModels.keys.sorted()], to: sidecarPath)
     }
 
     private static func normalizeCustomPricing(_ value: Any?) -> [[String: Any]] {
@@ -1084,7 +1143,9 @@ enum CustomPricingSidecar {
             if let v = cacheReadPerM.value { entry["cacheReadPerM"] = v }
             byId[modelId] = entry
         }
-        return Array(byId.values)
+        // Sort by modelId: dictionary iteration order must never leak into
+        // the signature or the written files (round-4 Phase 3.2).
+        return byId.keys.sorted().map { byId[$0]! }
     }
 
     private static func unitPrice(_ value: Any?) -> (value: Double?, isInvalid: Bool) {
@@ -1108,8 +1169,14 @@ enum CustomPricingSidecar {
         return models
     }
 
-    private static func writeJsonAtomic(_ object: [String: Any], to path: String) {
-        guard let data = try? JSONSerialization.data(withJSONObject: object) else { return }
+    private static func writeJsonAtomicIfChanged(_ object: [String: Any], to path: String) {
+        guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else { return }
+        // Content identical to the target file: skip the write. The caller
+        // still records the attempt (Collector signature gate), so a failed
+        // write below is logged but never retried on every cheap tick.
+        if let existing = try? Data(contentsOf: URL(fileURLWithPath: path)), existing == data {
+            return
+        }
         do {
             let dir = URL(fileURLWithPath: path).deletingLastPathComponent()
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

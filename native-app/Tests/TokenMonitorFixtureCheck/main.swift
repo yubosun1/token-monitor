@@ -1085,7 +1085,9 @@ func runCollectorStateTests() {
         collector.requestRefresh(.full, reason: .manual)
         world.waitIdle(collector, queue)
         checkEqual(world.pricingLookups["model-a"] ?? 0, 3, "T12 expired resolve attempted once on failure")
-        checkClose(UsageCore.doubleValue(world.period(collector, "today")["costUsd"]), 1.2, "T12 failed expiry keeps last-known-good costs")
+        // The clock has crossed midnight by now, so the allTime window is
+        // the stable view: last-known-good costs must survive the failure.
+        checkClose(UsageCore.doubleValue(world.period(collector, "allTime")["costUsd"]), 1.2, "T12 failed expiry keeps last-known-good costs")
         collector.requestRefresh(.full, reason: .manual)
         world.waitIdle(collector, queue)
         checkEqual(world.pricingLookups["model-a"] ?? 0, 3, "T12 expiry failure respects the retry floor")
@@ -1095,7 +1097,7 @@ func runCollectorStateTests() {
         collector.requestRefresh(.full, reason: .manual)
         world.waitIdle(collector, queue)
         checkEqual(world.pricingLookups["model-a"] ?? 0, 4, "T12 expiry retried after the floor")
-        checkClose(UsageCore.doubleValue(world.period(collector, "today")["costUsd"]), 1.8, "T12 recovered costs")
+        checkClose(UsageCore.doubleValue(world.period(collector, "allTime")["costUsd"]), 1.8, "T12 recovered costs")
     }
 
     // T14: the custom pricing sidecar syncs only on the first tick and when
