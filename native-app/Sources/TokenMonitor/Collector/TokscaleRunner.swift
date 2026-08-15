@@ -1,5 +1,15 @@
 import Foundation
 
+/// Pricing lookup policy (review-round fix): the collector passes the
+/// policy explicitly per call instead of toggling a global mutable switch,
+/// so concurrent callers can never affect each other.
+enum PricingPolicy {
+    /// Resolve from the in-memory/disk caches only; never spawn.
+    case cacheOnly
+    /// May spawn a pricing subprocess on a cache miss.
+    case resolve
+}
+
 /// Spawns the bundled tokscale CLI (the same Rust binary the Electron app
 /// shipped) and decodes its JSON output.
 final class TokscaleRunner {
@@ -16,11 +26,6 @@ final class TokscaleRunner {
     /// Live subprocess registry (PLAN.md Phase 4): the app terminates every
     /// in-flight scan on quit so no orphaned tokscale process survives.
     private var runningProcesses: [Process] = []
-
-    /// When false, pricing(for:) resolves from the in-memory/disk caches
-    /// only and never spawns (first startup tick fast path). Set by the
-    /// collector queue per tick; single-writer, no lock needed.
-    var allowSubprocessLookup = true
 
     // MARK: - Persistent pricing cache (PLAN.md Phase 3)
 
@@ -170,9 +175,11 @@ final class TokscaleRunner {
         return try JSONDecoder().decode(TokscaleGraph.self, from: Data(String(result.stdout[start...]).utf8))
     }
 
-    /// Cached `tokscale pricing` lookup: in-memory → persistent disk cache
-    /// (same 6h TTL as the JS side used) → one subprocess fetch.
-    func pricing(for modelId: String) -> TokscalePricing? {
+    /// Cached pricing lookup: in-memory, then persistent disk cache (same
+    /// 6h TTL as the JS side used), then one subprocess fetch. The policy
+    /// decides whether a cache miss may spawn; cacheOnly returns nil on a
+    /// miss and never spawns.
+    func pricing(for modelId: String, policy: PricingPolicy = .resolve) -> TokscalePricing? {
         if pricingCache.isEmpty { loadDiskPricingCache() }
         let key = modelId.trimmingCharacters(in: .whitespaces).lowercased()
         guard !key.isEmpty else { return nil }
@@ -182,7 +189,7 @@ final class TokscaleRunner {
             return cached.pricing
         }
         lock.unlock()
-        guard allowSubprocessLookup else { return nil }
+        if policy == .cacheOnly { return nil }
         guard let fetched = fetchPricing(modelId) else { return nil }
         lock.lock()
         pricingCache[key] = (fetched, Date())
@@ -220,4 +227,3 @@ enum CollectorError: LocalizedError {
         }
     }
 }
-

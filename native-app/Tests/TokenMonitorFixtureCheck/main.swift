@@ -423,7 +423,369 @@ func runChecks() {
         checkEqual(missing2.signature, missing.signature, "empty fingerprint is stable")
     }
 
+// MARK: - Stateful Collector tests (review-round Phase 0)
+//
+// These drive a real Collector instance with fakes for file scanning,
+// tokscale runs, pricing lookups, settings and the clock. They assert
+// observable behavior and call counts (raw reads, pricing lookups,
+// tokscale spawns, executed ticks) — not just pure-function outputs.
+
+func shanghaiDate(_ y: Int, _ mo: Int, _ d: Int, _ h: Int, _ mi: Int) -> Date {
+    var cal = Calendar(identifier: .gregorian)
+    cal.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+    return cal.date(from: DateComponents(year: y, month: mo, day: d, hour: h, minute: mi))!
+}
+
+func stateRow(client: String, session: String, model: String, input: Double, output: Double, startedAt: String) -> UsageCore.UsageRow {
+    return UsageCore.UsageRow(
+        client: client, sessionId: session, model: model, provider: client,
+        input: input, output: output, cacheRead: 0, cacheWrite: 0, reasoning: 0,
+        messageCount: 1, cost: 0, startedAt: startedAt, lastUsedAt: startedAt,
+        projectId: "", projectLabel: "", performance: nil
+    )
+}
+
+func fakePricing(_ inputCost: Double, _ outputCost: Double) -> TokscalePricing {
+    return TokscalePricing(
+        modelId: "model-a", matchedKey: "model-a", source: "test",
+        pricing: TokscalePricing.Pricing(
+            inputCostPerToken: inputCost, outputCostPerToken: outputCost,
+            cacheReadInputTokenCost: nil, cacheCreationInputTokenCost: nil
+        )
+    )
+}
+
+final class FakeCollectorWorld {
+    var now: Date
+    var settings: [String: Any]
+    var adapterFingerprints: [String: String] = [:]
+    var rowsByClient: [String: [UsageCore.UsageRow]] = [:]
+    var pricingByModel: [String: TokscalePricing?] = [:]
+    var tokscaleFingerprint = "fp-tok-1"
+    var tokscalePeriods: [String: [String: Any]]?
+    var tokscaleGraph: (days: [HistoryCore.Day], activeTimeMs: Double?)?
+    var pushes: [[String: Any]] = []
+    var tickKinds: [RefreshKind] = []
+    var tickReasons: [RefreshReason] = []
+    var rawReads: [String: Int] = [:]
+    var pricingLookups: [String: Int] = [:]
+    var pricingLookupPolicies: [String: PricingPolicy] = [:]
+    var tokscalePeriodSpawns = 0
+    var tokscaleGraphSpawns = 0
+    var tokscaleFingerprintChecks = 0
+    var adapterFingerprintChecks: [String: Int] = [:]
+    /// When non-nil, the first adapter read blocks until this is signalled.
+    var blockFirstRead: DispatchSemaphore?
+
+    init(now: Date, settings: [String: Any]) {
+        self.now = now
+        self.settings = settings
+    }
+
+    func makeCollector() -> (Collector, DispatchQueue) {
+        let queue = DispatchQueue(label: "test-collector-\(UUID().uuidString)")
+        let env = CollectorEnvironment(
+            now: { self.now },
+            settings: { self.settings },
+            adapterFingerprint: { client in
+                self.adapterFingerprintChecks[client, default: 0] += 1
+                return SourceScanner.Fingerprint(files: [], signature: self.adapterFingerprints[client] ?? "")
+            },
+            adapterRows: { client in
+                self.rawReads[client, default: 0] += 1
+                if let gate = self.blockFirstRead {
+                    self.blockFirstRead = nil
+                    gate.wait()
+                }
+                return self.rowsByClient[client] ?? []
+            },
+            pricingLookup: { model, policy in
+                self.pricingLookups[model, default: 0] += 1
+                self.pricingLookupPolicies[model] = policy
+                return self.pricingByModel[model] ?? nil
+            },
+            tokscaleFingerprint: { _ in
+                self.tokscaleFingerprintChecks += 1
+                return SourceScanner.Fingerprint(files: [], signature: self.tokscaleFingerprint)
+            },
+            tokscalePeriods: { _, _, _ in
+                self.tokscalePeriodSpawns += 1
+                return self.tokscalePeriods
+            },
+            tokscaleGraph: { _ in
+                self.tokscaleGraphSpawns += 1
+                return self.tokscaleGraph
+            },
+            push: { event, payload in
+                self.pushes.append(["event": event, "payload": payload])
+            },
+            customPricingSync: { _ in },
+            tickObserver: { kind, reason in
+                self.tickKinds.append(kind)
+                self.tickReasons.append(reason)
+            }
+        )
+        return (Collector(environment: env, workerQueue: queue), queue)
+    }
+
+    func waitIdle(_ collector: Collector, _ queue: DispatchQueue) {
+        queue.sync {}
+    }
+
+    func period(_ collector: Collector, _ name: String) -> [String: Any] {
+        let periods = collector.latestStats()?["periods"] as? [String: Any] ?? [:]
+        return periods[name] as? [String: Any] ?? [:]
+    }
+}
+
+func stateSettings(clients: String, allTimeSince: String = "2024-01-01", collectionIntervalMs: Double = 300000) -> [String: Any] {
+    return [
+        "clients": clients,
+        "allTimeSince": allTimeSince,
+        "collectionIntervalMs": collectionIntervalMs,
+        "refreshMs": 15000,
+        "customModelPricing": [Any](),
+        "deviceId": "test-device"
+    ]
+}
+
+func runCollectorStateTests() {
+    // T1: midnight crossing re-derives today from cached rows (no raw read).
+    do {
+        let world = FakeCollectorWorld(
+            now: shanghaiDate(2026, 8, 15, 23, 59),
+            settings: stateSettings(clients: "proma")
+        )
+        world.rowsByClient["proma"] = [
+            stateRow(client: "proma", session: "s1", model: "model-a", input: 100, output: 50, startedAt: "2026-08-15T12:00:00+08:00"),
+            stateRow(client: "proma", session: "s2", model: "model-a", input: 200, output: 100, startedAt: "2026-08-14T12:00:00+08:00")
+        ]
+        let (collector, queue) = world.makeCollector()
+        collector.requestRefresh(.full, reason: .startup)
+        world.waitIdle(collector, queue)
+        checkEqual(UsageCore.intValue(world.period(collector, "today")["totalTokens"]), 150, "T1 today before midnight")
+        checkEqual(world.rawReads["proma"] ?? 0, 1, "T1 one raw read at startup")
+
+        world.now = shanghaiDate(2026, 8, 16, 0, 1)
+        collector.requestRefresh(.cheap, reason: .timer)
+        world.waitIdle(collector, queue)
+        checkEqual(UsageCore.intValue(world.period(collector, "today")["totalTokens"]), 0, "T1 today empty after midnight")
+        checkEqual(UsageCore.intValue(world.period(collector, "month")["totalTokens"]), 450, "T1 month keeps both days")
+        checkEqual(world.rawReads["proma"] ?? 0, 1, "T1 no raw re-read after midnight")
+    }
+
+    // T2: month crossing re-derives month from cached rows.
+    do {
+        let world = FakeCollectorWorld(
+            now: shanghaiDate(2026, 8, 31, 23, 59),
+            settings: stateSettings(clients: "proma")
+        )
+        world.rowsByClient["proma"] = [
+            stateRow(client: "proma", session: "s1", model: "model-a", input: 100, output: 50, startedAt: "2026-08-31T12:00:00+08:00"),
+            stateRow(client: "proma", session: "s2", model: "model-a", input: 200, output: 100, startedAt: "2026-07-15T12:00:00+08:00")
+        ]
+        let (collector, queue) = world.makeCollector()
+        collector.requestRefresh(.full, reason: .startup)
+        world.waitIdle(collector, queue)
+        // month = current month only: the July row is outside it.
+        checkEqual(UsageCore.intValue(world.period(collector, "month")["totalTokens"]), 150, "T2 month before rollover")
+
+        world.now = shanghaiDate(2026, 9, 1, 0, 1)
+        collector.requestRefresh(.cheap, reason: .timer)
+        world.waitIdle(collector, queue)
+        checkEqual(UsageCore.intValue(world.period(collector, "month")["totalTokens"]), 0, "T2 month empty after rollover")
+        checkEqual(world.rawReads["proma"] ?? 0, 1, "T2 no raw re-read after rollover")
+    }
+
+    // T3: allTimeSince change re-derives adapter allTime from cached rows.
+    do {
+        let world = FakeCollectorWorld(
+            now: shanghaiDate(2026, 8, 15, 12, 0),
+            settings: stateSettings(clients: "proma", allTimeSince: "2024-01-01")
+        )
+        world.rowsByClient["proma"] = [
+            stateRow(client: "proma", session: "s1", model: "model-a", input: 100, output: 50, startedAt: "2025-06-01T12:00:00+08:00"),
+            stateRow(client: "proma", session: "s2", model: "model-a", input: 200, output: 100, startedAt: "2023-06-01T12:00:00+08:00")
+        ]
+        let (collector, queue) = world.makeCollector()
+        collector.requestRefresh(.full, reason: .startup)
+        world.waitIdle(collector, queue)
+        checkEqual(UsageCore.intValue(world.period(collector, "allTime")["totalTokens"]), 150, "T3 allTime before since change")
+
+        world.settings["allTimeSince"] = "2023-01-01"
+        collector.requestRefresh(.full, reason: .settingsChange)
+        world.waitIdle(collector, queue)
+        checkEqual(UsageCore.intValue(world.period(collector, "allTime")["totalTokens"]), 450, "T3 allTime after since change")
+        checkEqual(world.rawReads["proma"] ?? 0, 1, "T3 no raw re-read for allTimeSince")
+    }
+
+    // T4: disabling a client removes it from totals/history immediately.
+    do {
+        let world = FakeCollectorWorld(
+            now: shanghaiDate(2026, 8, 15, 12, 0),
+            settings: stateSettings(clients: "proma,hanako")
+        )
+        world.rowsByClient["proma"] = [
+            stateRow(client: "proma", session: "s1", model: "model-a", input: 100, output: 50, startedAt: "2026-08-15T10:00:00+08:00")
+        ]
+        world.rowsByClient["hanako"] = [
+            stateRow(client: "hanako", session: "h1", model: "model-b", input: 300, output: 150, startedAt: "2026-08-15T11:00:00+08:00")
+        ]
+        let (collector, queue) = world.makeCollector()
+        collector.requestRefresh(.full, reason: .startup)
+        world.waitIdle(collector, queue)
+        let allTimeBefore = world.period(collector, "allTime")
+        checkEqual(UsageCore.intValue((allTimeBefore["clients"] as? [String: Any])?["proma"]), 150, "T4 proma present before")
+        checkEqual(UsageCore.intValue((allTimeBefore["clients"] as? [String: Any])?["hanako"]), 450, "T4 hanako present before")
+
+        world.settings["clients"] = "hanako"
+        collector.requestRefresh(.full, reason: .settingsChange)
+        world.waitIdle(collector, queue)
+        let allTimeAfter = world.period(collector, "allTime")
+        checkEqual(UsageCore.intValue((allTimeAfter["clients"] as? [String: Any])?["proma"]), 0, "T4 proma gone after disable")
+        checkEqual(UsageCore.intValue((allTimeAfter["clients"] as? [String: Any])?["hanako"]), 450, "T4 hanako stays")
+        checkEqual(UsageCore.intValue(allTimeAfter["totalTokens"]), 450, "T4 totals exclude disabled client")
+        checkEqual(world.rawReads["proma"] ?? 0, 1, "T4 no raw re-read for client change")
+        // History no longer contains proma per-client contributions.
+        let history = collector.history() ?? [:]
+        let days = history["daily"] as? [[String: Any]] ?? []
+        var promaInHistory = false
+        for day in days {
+            let perClient = day["perClient"] as? [String: Any] ?? [:]
+            if perClient["proma"] != nil { promaInHistory = true }
+        }
+        check(!promaInHistory, "T4 proma gone from history")
+    }
+
+    // T5: startup cheap pricing miss is retried and completed by the full
+    // tick, costs update without a raw re-read.
+    do {
+        let world = FakeCollectorWorld(
+            now: shanghaiDate(2026, 8, 15, 12, 0),
+            settings: stateSettings(clients: "proma")
+        )
+        world.pricingByModel["model-a"] = nil // unresolved on cache-only
+        world.rowsByClient["proma"] = [
+            stateRow(client: "proma", session: "s1", model: "model-a", input: 100, output: 50, startedAt: "2026-08-15T10:00:00+08:00")
+        ]
+        let (collector, queue) = world.makeCollector()
+        collector.requestRefresh(.cheap, reason: .startup)
+        world.waitIdle(collector, queue)
+        checkEqual(UsageCore.doubleValue(world.period(collector, "today")["costUsd"]), 0.0, "T5 cost 0 before pricing resolved")
+        checkEqual(world.pricingLookups["model-a"] ?? 0, 1, "T5 one cache-only lookup")
+        checkEqual(world.pricingLookupPolicies["model-a"], .cacheOnly, "T5 cheap tick uses cacheOnly policy")
+
+        world.pricingByModel["model-a"] = fakePricing(0.001, 0.002)
+        collector.requestRefresh(.full, reason: .startup)
+        world.waitIdle(collector, queue)
+        checkEqual(world.pricingLookups["model-a"] ?? 0, 2, "T5 full tick retries the lookup")
+        checkEqual(world.pricingLookupPolicies["model-a"], .resolve, "T5 full tick uses resolve policy")
+        // 100 input * 0.001 + 50 output * 0.002 = 0.1 + 0.1 = 0.2
+        checkClose(UsageCore.doubleValue(world.period(collector, "today")["costUsd"]), 0.2, "T5 cost resolved after full tick")
+        checkEqual(world.rawReads["proma"] ?? 0, 1, "T5 no raw re-read for pricing")
+    }
+
+    // T6: scheduled full checks respect collectionIntervalMs; an unchanged
+    // fingerprint check advances the cadence without spawning.
+    do {
+        let world = FakeCollectorWorld(
+            now: shanghaiDate(2026, 8, 15, 12, 0),
+            settings: stateSettings(clients: "proma,claude", collectionIntervalMs: 300000)
+        )
+        world.rowsByClient["proma"] = [
+            stateRow(client: "proma", session: "s1", model: "model-a", input: 100, output: 50, startedAt: "2026-08-15T10:00:00+08:00")
+        ]
+        world.tokscalePeriods = ["today": UsageCore.emptyPeriod(), "month": UsageCore.emptyPeriod(), "allTime": UsageCore.emptyPeriod()]
+        world.tokscaleGraph = ([], nil)
+        let (collector, queue) = world.makeCollector()
+        collector.requestRefresh(.full, reason: .startup)
+        world.waitIdle(collector, queue)
+        checkEqual(world.tokscaleFingerprintChecks, 1, "T6 full startup checks fingerprint once")
+        checkEqual(world.tokscalePeriodSpawns, 1, "T6 startup scans periods once")
+
+        world.now = world.now.addingTimeInterval(60)
+        collector.requestRefresh(.cheap, reason: .timer)
+        world.waitIdle(collector, queue)
+        checkEqual(world.tokscaleFingerprintChecks, 1, "T6 cheap tick within interval does not full-check")
+
+        world.now = world.now.addingTimeInterval(301)
+        collector.requestRefresh(.cheap, reason: .timer)
+        world.waitIdle(collector, queue)
+        checkEqual(world.tokscaleFingerprintChecks, 2, "T6 full check runs once interval elapsed")
+        checkEqual(world.tokscalePeriodSpawns, 1, "T6 unchanged fingerprint spawns nothing")
+
+        world.now = world.now.addingTimeInterval(60)
+        collector.requestRefresh(.cheap, reason: .timer)
+        world.waitIdle(collector, queue)
+        checkEqual(world.tokscaleFingerprintChecks, 2, "T6 cadence reset: no per-15s full check")
+    }
+
+    // T7: requests arriving during a long tick coalesce into exactly one
+    // necessary follow-up refresh (a full), settings change not lost.
+    do {
+        let world = FakeCollectorWorld(
+            now: shanghaiDate(2026, 8, 15, 12, 0),
+            settings: stateSettings(clients: "proma")
+        )
+        world.rowsByClient["proma"] = [
+            stateRow(client: "proma", session: "s1", model: "model-a", input: 100, output: 50, startedAt: "2026-08-15T10:00:00+08:00")
+        ]
+        let gate = DispatchSemaphore(value: 0)
+        world.blockFirstRead = gate
+        let (collector, queue) = world.makeCollector()
+        collector.requestRefresh(.full, reason: .manual)
+        // Give the worker a moment to enter the blocked tick.
+        Thread.sleep(forTimeInterval: 0.2)
+        for _ in 0..<10 { collector.requestRefresh(.cheap, reason: .timer) }
+        for _ in 0..<3 { collector.requestRefresh(.full, reason: .manual) }
+        collector.requestRefresh(.full, reason: .settingsChange)
+        checkEqual(world.tickKinds.count, 1, "T7 blocked tick is the only running tick")
+        gate.signal()
+        world.waitIdle(collector, queue)
+        checkEqual(world.tickKinds.count, 2, "T7 exactly one follow-up tick after the burst")
+        checkEqual(world.tickKinds.last, .full, "T7 follow-up is a full refresh")
+    }
+
+    // T8: period success + graph failure keeps new periods and old history;
+    // graph retries with backoff without re-running the periods.
+    do {
+        let world = FakeCollectorWorld(
+            now: shanghaiDate(2026, 8, 15, 12, 0),
+            settings: stateSettings(clients: "proma,claude", collectionIntervalMs: 300)
+        )
+        world.rowsByClient["proma"] = [
+            stateRow(client: "proma", session: "s1", model: "model-a", input: 100, output: 50, startedAt: "2026-08-15T10:00:00+08:00")
+        ]
+        world.tokscalePeriods = ["today": UsageCore.emptyPeriod(), "month": UsageCore.emptyPeriod(), "allTime": UsageCore.emptyPeriod()]
+        world.tokscaleGraph = nil // graph fails on the first full scan
+        let (collector, queue) = world.makeCollector()
+        collector.requestRefresh(.full, reason: .startup)
+        world.waitIdle(collector, queue)
+        checkEqual(world.tokscalePeriodSpawns, 1, "T8 first full scans periods once")
+        checkEqual(world.tokscaleGraphSpawns, 1, "T8 first full attempts graph once")
+        checkEqual(UsageCore.intValue(world.period(collector, "allTime")["totalTokens"]), 150, "T8 periods survive graph failure")
+
+        // Immediate manual full: within backoff, no retry.
+        collector.requestRefresh(.full, reason: .manual)
+        world.waitIdle(collector, queue)
+        checkEqual(world.tokscaleGraphSpawns, 1, "T8 graph retry backs off")
+
+        // After the backoff window: graph retries alone, periods not re-run.
+        var graphDay = HistoryCore.Day(date: "2026-08-15", tokens: 10, cost: 0.5, messages: 1)
+        graphDay.perClient["claude"] = (tokens: 10, cost: 0.5, messages: 1)
+        world.tokscaleGraph = (days: [graphDay], activeTimeMs: 1000)
+        world.now = world.now.addingTimeInterval(301)
+        collector.requestRefresh(.full, reason: .manual)
+        world.waitIdle(collector, queue)
+        checkEqual(world.tokscaleGraphSpawns, 2, "T8 graph retried after backoff")
+        checkEqual(world.tokscalePeriodSpawns, 1, "T8 periods not re-run for a graph-only retry")
+        let history = collector.history() ?? [:]
+        let daily = history["daily"] as? [[String: Any]] ?? []
+        check(daily.contains { ($0["date"] as? String) == "2026-08-15" && UsageCore.doubleValue($0["tokens"]) > 0 }, "T8 history gained the graph day after recovery")
+    }
+}
+
 runChecks()
+runCollectorStateTests()
 print("fixture checks: \(checkCount) checks, \(failureCount) failures")
 if failureCount > 0 { exit(1) }
-
