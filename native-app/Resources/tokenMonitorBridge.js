@@ -102,6 +102,7 @@
     regenerateHubSecret: function () { return invoke('hub:regenerateSecret'); },
     onHubPush: function (callback) { return on('hub:push', callback); },
     onStatsPush: function (callback) { return on('stats:push', callback); },
+    onVisibility: function (callback) { return on('window:visibility', callback); },
     onSettingsPush: function (callback) { return on('settings:push', callback); },
     onOpenSettings: function (callback) { return on('settings:open', callback); },
     onOpenView: function (callback) { return on('view:open', callback); },

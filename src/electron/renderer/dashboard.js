@@ -599,6 +599,12 @@ async function refresh() {
   try {
     state.motion = state.history ? 'update' : 'entry';
     state.history = await window.tokenMonitor.getDashboardHistory();
+    // Hidden dashboard (PLAN.md Phase 6): update the cached history but
+    // defer the DOM render; reappearing renders once with fresh data.
+    if (state.windowVisible === false) {
+      state.historyDirty = true;
+      return;
+    }
     render();
   } catch (error) {
     state.motion = 'none';
@@ -681,6 +687,15 @@ reducedMotionMedia?.addEventListener?.('change', () => {
 });
 
 window.tokenMonitor.onDashboardHistoryChanged?.(() => { void refresh(); });
+
+window.tokenMonitor.onVisibility?.(({ visible }) => {
+  state.windowVisible = visible;
+  if (visible && state.historyDirty) {
+    state.historyDirty = false;
+    state.motion = 'update';
+    render();
+  }
+});
 
 els.tabs.forEach((tab) => tab.addEventListener('click', () => {
   if (state.tab === tab.dataset.tab) return;

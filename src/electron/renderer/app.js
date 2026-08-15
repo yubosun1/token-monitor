@@ -9844,12 +9844,26 @@ function renderStatsUpdate() {
 }
 
 const statsRenderScheduler = statsRenderSchedulerApi.createStatsRenderScheduler({
-  isHidden: () => document.hidden,
+  isHidden: () => document.hidden || state.windowVisible === false,
   render: renderStatsUpdate
 });
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) cancelTokenRateBoost();
   statsRenderScheduler.flush();
+});
+// Native window visibility (PLAN.md Phase 6): the panel is ordered out
+// while the page stays alive, so document.hidden alone is not enough.
+// Hidden windows stop tickers and defer renders; reappearing does exactly
+// one catch-up render instead of replaying the backlog.
+window.tokenMonitor.onVisibility?.(({ visible }) => {
+  state.windowVisible = visible;
+  if (!visible) {
+    cancelTokenRateBoost();
+    stopServiceStatusTicker();
+  } else {
+    if (state.breakdown === 'status') ensureServiceStatusTicker();
+    statsRenderScheduler.flush();
+  }
 });
 
 window.tokenMonitor.onStatsPush?.((payload) => {

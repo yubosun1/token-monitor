@@ -209,6 +209,7 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
     override func showWindow(_ sender: Any?) {
         lastShownAt = Date()
         super.showWindow(sender)
+        pushVisibility(true)
     }
 
     private func autoHideIfNeeded() {
@@ -219,7 +220,15 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
         guard trayMode else { return }
         guard Date().timeIntervalSince(lastShownAt) > 0.25 else { return }
         window.orderOut(nil)
+        pushVisibility(false)
         windowDidHide()
+    }
+
+    /// Window-local visibility push (PLAN.md Phase 6): the renderer pauses
+    /// its tickers and deferred renders while the panel is ordered out, and
+    /// does one catch-up render when it reappears.
+    private func pushVisibility(_ visible: Bool) {
+        bridge.pushLocal("window:visibility", ["visible": visible])
     }
 
     /// Hook for subclasses after an auto-hide (not an explicit close).
