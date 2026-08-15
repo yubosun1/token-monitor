@@ -106,9 +106,15 @@ final class BridgeCore {
             }
             if let profiles = patch.removeValue(forKey: "opencodeProfiles") as? [[String: Any]] {
                 for profile in profiles {
-                    guard let name = profile["name"] as? String,
-                          let cookie = profile["cookie"] as? String, !cookie.isEmpty else { continue }
-                    CredentialStore.shared.saveOpencodeProfile(name: name, cookie: cookie)
+                    guard let name = profile["name"] as? String else { continue }
+                    let cookie = profile["cookie"] as? String ?? ""
+                    let apiKey = profile["apiKey"] as? String ?? ""
+                    if !cookie.isEmpty {
+                        CredentialStore.shared.saveOpencodeProfile(name: name, cookie: cookie)
+                    }
+                    if !apiKey.isEmpty {
+                        CredentialStore.shared.setOpencodeProfileApiKey(name: name, apiKey: apiKey)
+                    }
                 }
             }
             // Start-at-login is a native system registration; the setting

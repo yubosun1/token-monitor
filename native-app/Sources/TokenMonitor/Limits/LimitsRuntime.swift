@@ -69,8 +69,8 @@ final class LimitsRuntime {
                 providers.append(DeepseekBalance.fetchLimits(nowMs: nowMs))
             case "opencode":
                 let profiles = CredentialStore.shared.opencodeProfiles()
-                    .filter { $0.enabled && !$0.cookie.isEmpty }
-                let profileList = profiles.map { OpencodeLimits.Profile(name: $0.name, cookie: $0.cookie, enabled: $0.enabled) }
+                    .filter { $0.enabled && (!$0.cookie.isEmpty || !$0.apiKey.isEmpty) }
+                let profileList = profiles.map { OpencodeLimits.Profile(name: $0.name, cookie: $0.cookie, apiKey: $0.apiKey, enabled: $0.enabled) }
                 // Async fetch on this queue via a semaphore bridge.
                 let semaphore = DispatchSemaphore(value: 0)
                 var fetched: [[String: Any]] = []

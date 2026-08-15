@@ -78,6 +78,7 @@ final class CredentialStore {
     struct OpenCodeProfile {
         let name: String
         let cookie: String
+        let apiKey: String
         let enabled: Bool
     }
 
@@ -92,6 +93,7 @@ final class CredentialStore {
             return OpenCodeProfile(
                 name: name,
                 cookie: profile["cookie"] as? String ?? "",
+                apiKey: profile["apiKey"] as? String ?? "",
                 enabled: profile["enabled"] as? Bool ?? true
             )
         }.sorted { $0.name < $1.name }
@@ -115,7 +117,21 @@ final class CredentialStore {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
         mutateProfiles { profiles in
-            profiles[trimmed] = ["cookie": cookie.trimmingCharacters(in: .whitespaces), "enabled": true]
+            let existing = profiles[trimmed] as? [String: Any] ?? [:]
+            var next = existing
+            next["cookie"] = cookie.trimmingCharacters(in: .whitespaces)
+            next["enabled"] = true
+            profiles[trimmed] = next
+        }
+    }
+
+    func setOpencodeProfileApiKey(name: String, apiKey: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        mutateProfiles { profiles in
+            guard var profile = profiles[trimmed] as? [String: Any] else { return }
+            profile["apiKey"] = apiKey.trimmingCharacters(in: .whitespaces)
+            profiles[trimmed] = profile
         }
     }
 
