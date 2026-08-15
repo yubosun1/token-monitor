@@ -117,15 +117,17 @@ final class Collector {
     private var cachedPeriods: (today: [String: Any], month: [String: Any], allTime: [String: Any])?
     private var cachedClients: [String] = []
 
-    // Worker-owned cache state.
+    // Worker-owned cache state. rawSnapshots/derivedSnapshots/tokscaleSnapshot
+    // are internal (not private) so the fixture checker can assert cache
+    // lifecycle directly; they are still written only by the worker queue.
     private var pricingGeneration = 0
     private var cachedPricing: [String: TokscalePricing] = [:]
     private var pricingRetryAfter: [String: Date] = [:]
-    private var rawSnapshots: [String: RawSnapshot] = [:]
-    private var derivedSnapshots: [String: DerivedSnapshot] = [:]
+    var rawSnapshots: [String: RawSnapshot] = [:]
+    var derivedSnapshots: [String: DerivedSnapshot] = [:]
     private var mergeContext: MergeContext?
     private var mergedAdapterPeriods: [String: [String: Any]]?
-    private var tokscaleSnapshot: TokscaleSnapshot?
+    var tokscaleSnapshot: TokscaleSnapshot?
     private var lastFullCheckAt = Date.distantPast
     private var periodFailures = 0
     private var graphFailures = 0

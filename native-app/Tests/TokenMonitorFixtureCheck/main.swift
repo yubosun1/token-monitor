@@ -445,6 +445,13 @@ func stateRow(client: String, session: String, model: String, input: Double, out
     )
 }
 
+func periodWithTokens(_ tokens: Int, client: String = "claude") -> [String: Any] {
+    var p = UsageCore.emptyPeriod()
+    p["totalTokens"] = tokens
+    p["clients"] = [client: tokens]
+    return p
+}
+
 func fakePricing(_ inputCost: Double, _ outputCost: Double) -> TokscalePricing {
     return TokscalePricing(
         modelId: "model-a", matchedKey: "model-a", source: "test",
@@ -465,6 +472,9 @@ final class FakeCollectorWorld {
     var tokscalePeriods: [String: [String: Any]]?
     var tokscaleGraph: (days: [HistoryCore.Day], activeTimeMs: Double?)?
     var pushes: [[String: Any]] = []
+    var statsPushes: Int {
+        pushes.filter { ($0["event"] as? String) == "stats:push" }.count
+    }
     var tickKinds: [RefreshKind] = []
     var tickReasons: [RefreshReason] = []
     var rawReads: [String: Int] = [:]
@@ -474,6 +484,7 @@ final class FakeCollectorWorld {
     var tokscaleGraphSpawns = 0
     var tokscaleFingerprintChecks = 0
     var adapterFingerprintChecks: [String: Int] = [:]
+    var customPricingSyncCalls = 0
     /// When non-nil, the first adapter read blocks until this is signalled.
     var blockFirstRead: DispatchSemaphore?
 
@@ -519,7 +530,9 @@ final class FakeCollectorWorld {
             push: { event, payload in
                 self.pushes.append(["event": event, "payload": payload])
             },
-            customPricingSync: { _ in },
+            customPricingSync: { _ in
+                self.customPricingSyncCalls += 1
+            },
             tickObserver: { kind, reason in
                 self.tickKinds.append(kind)
                 self.tickReasons.append(reason)
@@ -801,6 +814,217 @@ func runCollectorStateTests() {
         let history = collector.history() ?? [:]
         let daily = history["daily"] as? [[String: Any]] ?? []
         check(daily.contains { ($0["date"] as? String) == "2026-08-15" && UsageCore.doubleValue($0["tokens"]) > 0 }, "T8 history gained the graph day after recovery")
+    }
+
+    // T10: a context change (new day, same fingerprint) resets per-part
+    // validity. The old snapshot's success flags must not leak into the new
+    // context; the failed part keeps last-known-good data but retries alone
+    // after its backoff, and the successful part is not re-run.
+    do {
+        let world = FakeCollectorWorld(
+            now: shanghaiDate(2026, 8, 15, 12, 0),
+            settings: stateSettings(clients: "proma,claude", collectionIntervalMs: 300)
+        )
+        world.rowsByClient["proma"] = [
+            stateRow(client: "proma", session: "s1", model: "model-a", input: 100, output: 50, startedAt: "2026-08-15T10:00:00+08:00")
+        ]
+        world.tokscalePeriods = ["today": UsageCore.emptyPeriod(), "month": UsageCore.emptyPeriod(), "allTime": UsageCore.emptyPeriod()]
+        world.tokscaleGraph = ([], nil)
+        let (collector, queue) = world.makeCollector()
+        collector.requestRefresh(.full, reason: .startup)
+        world.waitIdle(collector, queue)
+        checkEqual(world.tokscalePeriodSpawns, 1, "T10 first full scans periods once")
+        checkEqual(world.tokscaleGraphSpawns, 1, "T10 first full scans graph once")
+        checkEqual(collector.tokscaleSnapshot?.periodsSuccess, true, "T10 initial period success")
+        checkEqual(collector.tokscaleSnapshot?.graphSuccess, true, "T10 initial graph success")
+
+        // Next day, same fingerprint: the period scan fails, graph succeeds.
+        world.now = shanghaiDate(2026, 8, 16, 0, 5)
+        world.tokscalePeriods = nil
+        var graphDay = HistoryCore.Day(date: "2026-08-16", tokens: 10, cost: 0.5, messages: 1)
+        graphDay.perClient["claude"] = (tokens: 10, cost: 0.5, messages: 1)
+        world.tokscaleGraph = (days: [graphDay], activeTimeMs: 1000)
+        collector.requestRefresh(.full, reason: .manual)
+        world.waitIdle(collector, queue)
+        checkEqual(collector.tokscaleSnapshot?.periodsSuccess, false, "T10 new-context period failure resets validity")
+        checkEqual(collector.tokscaleSnapshot?.graphSuccess, true, "T10 new-context graph success kept")
+        checkEqual(world.tokscalePeriodSpawns, 2, "T10 period attempted once for the new context")
+        checkEqual(world.tokscaleGraphSpawns, 2, "T10 graph attempted once for the new context")
+        // Old period data stays visible as last-known-good (adapter-only totals).
+        checkEqual(UsageCore.intValue(world.period(collector, "allTime")["totalTokens"]), 150, "T10 last-known-good period data still displayed")
+
+        // Within the backoff window nothing retries.
+        collector.requestRefresh(.full, reason: .manual)
+        world.waitIdle(collector, queue)
+        checkEqual(world.tokscalePeriodSpawns, 2, "T10 period failure backs off")
+        checkEqual(world.tokscaleGraphSpawns, 2, "T10 successful graph not re-run")
+
+        // After the backoff window the period retries alone and recovers.
+        world.tokscalePeriods = [
+            "today": periodWithTokens(500),
+            "month": periodWithTokens(500),
+            "allTime": periodWithTokens(500)
+        ]
+        world.now = world.now.addingTimeInterval(301)
+        collector.requestRefresh(.full, reason: .manual)
+        world.waitIdle(collector, queue)
+        checkEqual(world.tokscalePeriodSpawns, 3, "T10 failed period retried after backoff")
+        checkEqual(world.tokscaleGraphSpawns, 2, "T10 successful graph still not re-run")
+        checkEqual(collector.tokscaleSnapshot?.periodsSuccess, true, "T10 period validity recovered")
+        checkEqual(UsageCore.intValue(world.period(collector, "allTime")["totalTokens"]), 650, "T10 recovered period data merged")
+    }
+
+    // T10b: the symmetric case — fingerprint changes and the graph scan
+    // fails: graph validity must reset and retry alone, period not re-run.
+    do {
+        let world = FakeCollectorWorld(
+            now: shanghaiDate(2026, 8, 15, 12, 0),
+            settings: stateSettings(clients: "proma,claude", collectionIntervalMs: 300)
+        )
+        world.rowsByClient["proma"] = [
+            stateRow(client: "proma", session: "s1", model: "model-a", input: 100, output: 50, startedAt: "2026-08-15T10:00:00+08:00")
+        ]
+        world.tokscalePeriods = ["today": UsageCore.emptyPeriod(), "month": UsageCore.emptyPeriod(), "allTime": UsageCore.emptyPeriod()]
+        world.tokscaleGraph = ([], nil)
+        let (collector, queue) = world.makeCollector()
+        collector.requestRefresh(.full, reason: .startup)
+        world.waitIdle(collector, queue)
+        checkEqual(world.tokscalePeriodSpawns, 1, "T10b startup scans periods once")
+        checkEqual(world.tokscaleGraphSpawns, 1, "T10b startup scans graph once")
+
+        // Fingerprint changes and the graph scan now fails.
+        world.tokscaleFingerprint = "fp-tok-2"
+        world.tokscaleGraph = nil
+        collector.requestRefresh(.full, reason: .manual)
+        world.waitIdle(collector, queue)
+        checkEqual(collector.tokscaleSnapshot?.graphSuccess, false, "T10b new-context graph failure resets validity")
+        checkEqual(collector.tokscaleSnapshot?.periodsSuccess, true, "T10b period success kept for new context")
+        checkEqual(world.tokscalePeriodSpawns, 2, "T10b period scanned once for the new context")
+        checkEqual(world.tokscaleGraphSpawns, 2, "T10b graph attempted once for the new context")
+
+        // Within backoff nothing retries.
+        collector.requestRefresh(.full, reason: .manual)
+        world.waitIdle(collector, queue)
+        checkEqual(world.tokscaleGraphSpawns, 2, "T10b graph failure backs off")
+        checkEqual(world.tokscalePeriodSpawns, 2, "T10b successful period not re-run")
+
+        // After backoff the graph retries alone and recovers.
+        var graphDay = HistoryCore.Day(date: "2026-08-15", tokens: 10, cost: 0.5, messages: 1)
+        graphDay.perClient["claude"] = (tokens: 10, cost: 0.5, messages: 1)
+        world.tokscaleGraph = (days: [graphDay], activeTimeMs: 1000)
+        world.now = world.now.addingTimeInterval(301)
+        collector.requestRefresh(.full, reason: .manual)
+        world.waitIdle(collector, queue)
+        checkEqual(world.tokscaleGraphSpawns, 3, "T10b failed graph retried after backoff")
+        checkEqual(world.tokscalePeriodSpawns, 2, "T10b successful period still not re-run")
+        checkEqual(collector.tokscaleSnapshot?.graphSuccess, true, "T10b graph validity recovered")
+    }
+
+    // T11: disabling every client pushes one legal empty stats/history wire
+    // shape (no early return), clears the raw/derived caches, and recovers
+    // when clients are re-enabled.
+    do {
+        let world = FakeCollectorWorld(
+            now: shanghaiDate(2026, 8, 15, 12, 0),
+            settings: stateSettings(clients: "proma,hanako")
+        )
+        world.rowsByClient["proma"] = [
+            stateRow(client: "proma", session: "s1", model: "model-a", input: 100, output: 50, startedAt: "2026-08-15T10:00:00+08:00")
+        ]
+        world.rowsByClient["hanako"] = [
+            stateRow(client: "hanako", session: "h1", model: "model-b", input: 300, output: 150, startedAt: "2026-08-15T11:00:00+08:00")
+        ]
+        let (collector, queue) = world.makeCollector()
+        collector.requestRefresh(.full, reason: .startup)
+        world.waitIdle(collector, queue)
+        checkEqual(UsageCore.intValue(world.period(collector, "allTime")["totalTokens"]), 600, "T11 initial totals")
+        checkEqual(collector.rawSnapshots.count, 2, "T11 raw snapshots for both clients")
+        checkEqual(world.statsPushes, 1, "T11 one startup push")
+
+        // Partial disable: proma drops out and its caches are removed.
+        world.settings["clients"] = "hanako"
+        collector.requestRefresh(.full, reason: .settingsChange)
+        world.waitIdle(collector, queue)
+        checkEqual(UsageCore.intValue(world.period(collector, "allTime")["totalTokens"]), 450, "T11 partial disable totals")
+        checkEqual(collector.rawSnapshots.count, 1, "T11 disabled client raw cache removed")
+        checkEqual(collector.derivedSnapshots.count, 1, "T11 disabled client derived cache removed")
+
+        // Full disable: one empty push with the normal wire shape.
+        world.settings["clients"] = ""
+        collector.requestRefresh(.full, reason: .settingsChange)
+        world.waitIdle(collector, queue)
+        let stats = collector.latestStats() ?? [:]
+        let periods = stats["periods"] as? [String: Any] ?? [:]
+        let allTime = periods["allTime"] as? [String: Any] ?? [:]
+        let today = periods["today"] as? [String: Any] ?? [:]
+        checkEqual(UsageCore.intValue(allTime["totalTokens"]), 0, "T11 empty clients zero totals")
+        checkEqual(UsageCore.intValue(today["totalTokens"]), 0, "T11 empty clients zero today")
+        checkEqual((allTime["clients"] as? [String: Any] ?? [:]).isEmpty, true, "T11 no per-client entries")
+        let device = (stats["devices"] as? [[String: Any]])?.first ?? [:]
+        checkEqual((device["trackedClients"] as? [String] ?? []).isEmpty, true, "T11 trackedClients empty")
+        checkEqual((device["clientStatus"] as? [String: Any] ?? [:]).isEmpty, true, "T11 clientStatus empty")
+        let history = stats["history"] as? [String: Any]
+        check(history != nil, "T11 empty history present")
+        checkEqual((history?["daily"] as? [Any] ?? []).isEmpty, true, "T11 empty daily history")
+        checkEqual(collector.rawSnapshots.isEmpty, true, "T11 all raw caches cleared")
+        checkEqual(collector.derivedSnapshots.isEmpty, true, "T11 all derived caches cleared")
+        checkEqual(collector.tokscaleSnapshot == nil, true, "T11 tokscale snapshot dropped")
+        checkEqual(world.statsPushes, 3, "T11 empty stats pushed exactly once")
+
+        // Re-enable: normal collection resumes.
+        world.settings["clients"] = "proma"
+        collector.requestRefresh(.full, reason: .settingsChange)
+        world.waitIdle(collector, queue)
+        checkEqual(UsageCore.intValue(world.period(collector, "allTime")["totalTokens"]), 150, "T11 re-enabled client recovers")
+        checkEqual(world.statsPushes, 4, "T11 recovery pushed once")
+    }
+
+    // T13: timer cheap requests arriving while a full tick is running are
+    // covered by that full and dropped instead of queued behind it.
+    do {
+        let world = FakeCollectorWorld(
+            now: shanghaiDate(2026, 8, 15, 12, 0),
+            settings: stateSettings(clients: "proma")
+        )
+        world.rowsByClient["proma"] = [
+            stateRow(client: "proma", session: "s1", model: "model-a", input: 100, output: 50, startedAt: "2026-08-15T10:00:00+08:00")
+        ]
+        let gate = DispatchSemaphore(value: 0)
+        world.blockFirstRead = gate
+        let (collector, queue) = world.makeCollector()
+        collector.requestRefresh(.full, reason: .manual)
+        Thread.sleep(forTimeInterval: 0.2)
+        for _ in 0..<10 { collector.requestRefresh(.cheap, reason: .timer) }
+        checkEqual(world.tickKinds.count, 1, "T13 blocked full is the only running tick")
+        gate.signal()
+        world.waitIdle(collector, queue)
+        checkEqual(world.tickKinds.count, 1, "T13 timer cheaps during a running full are dropped")
+    }
+
+    // T13b: strong requests arriving during a running full still queue
+    // exactly one necessary follow-up; the strongest kind wins.
+    do {
+        let world = FakeCollectorWorld(
+            now: shanghaiDate(2026, 8, 15, 12, 0),
+            settings: stateSettings(clients: "proma")
+        )
+        world.rowsByClient["proma"] = [
+            stateRow(client: "proma", session: "s1", model: "model-a", input: 100, output: 50, startedAt: "2026-08-15T10:00:00+08:00")
+        ]
+        let gate = DispatchSemaphore(value: 0)
+        world.blockFirstRead = gate
+        let (collector, queue) = world.makeCollector()
+        collector.requestRefresh(.full, reason: .manual)
+        Thread.sleep(forTimeInterval: 0.2)
+        for _ in 0..<5 { collector.requestRefresh(.cheap, reason: .timer) }
+        collector.requestRefresh(.full, reason: .settingsChange)
+        collector.requestRefresh(.full, reason: .manual)
+        collector.requestRefresh(.fullForced, reason: .manual)
+        checkEqual(world.tickKinds.count, 1, "T13b blocked tick is the only running tick")
+        gate.signal()
+        world.waitIdle(collector, queue)
+        checkEqual(world.tickKinds.count, 2, "T13b exactly one follow-up tick")
+        checkEqual(world.tickKinds.last, .fullForced, "T13b strongest request wins")
     }
 }
 
