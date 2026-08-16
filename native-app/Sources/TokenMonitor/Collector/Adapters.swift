@@ -565,6 +565,15 @@ enum Adapters {
         var output = Data()
         var chunk = [UInt8](repeating: 0, count: 1 << 16)
         return input.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> (Data?, Bool) in
+            // Pre-allocate the output buffer when the zstd frame header
+            // records the uncompressed size — avoids repeated realloc as
+            // 64KB chunks append (session files decompress to a few MB).
+            if let base = raw.baseAddress, raw.count > 0 {
+                let frameSize = ZSTD_getFrameContentSize(base, raw.count)
+                if frameSize > 0 && frameSize < UInt64.max - 1 {
+                    output.reserveCapacity(Int(frameSize))
+                }
+            }
             var inBuf = ZSTD_inBuffer(src: raw.baseAddress, size: raw.count, pos: 0)
             var keepGoing = true
             while keepGoing {
