@@ -204,6 +204,319 @@ enum UsageCore {
         )
     }
 
+    // MARK: - Typed aggregation structs
+
+    /// Strongly-typed intermediate aggregation struct. The collector hot
+    /// path previously operated on [String: Any] JSON dictionaries — every
+    /// row required 13 sub-dictionary unboxes (as? JSON) plus intValue/
+    /// doubleValue type-probing on each field. This struct eliminates all
+    /// Any-boxing during aggregation; toJSON() is the only place values
+    /// cross into the JSON wire shape.
+    struct TypedSession {
+        var client: String
+        var sessionId: String
+        var totalTokens: Int = 0
+        var costUsd: Double = 0
+        var messageCount: Int = 0
+        var inputTokens: Int = 0
+        var outputTokens: Int = 0
+        var cacheReadTokens: Int = 0
+        var cacheWriteTokens: Int = 0
+        var reasoningTokens: Int = 0
+        var startedAtMs: Double = 0
+        var lastUsedAtMs: Double = 0
+        var projectId: String = ""
+        var projectLabel: String = ""
+        var models: [String: Int] = [:]
+        var modelCosts: [String: Double] = [:]
+        var providers: [String: Int] = [:]
+
+        init(client: String, sessionId: String) {
+            self.client = client
+            self.sessionId = sessionId
+        }
+
+        init(from json: JSON) {
+            client = json["client"] as? String ?? ""
+            sessionId = json["sessionId"] as? String ?? ""
+            totalTokens = intValue(json["totalTokens"])
+            costUsd = doubleValue(json["costUsd"])
+            messageCount = intValue(json["messageCount"])
+            inputTokens = intValue(json["inputTokens"])
+            outputTokens = intValue(json["outputTokens"])
+            cacheReadTokens = intValue(json["cacheReadTokens"])
+            cacheWriteTokens = intValue(json["cacheWriteTokens"])
+            reasoningTokens = intValue(json["reasoningTokens"])
+            startedAtMs = timestampMs(json["startedAt"])
+            lastUsedAtMs = timestampMs(json["lastUsedAt"])
+            projectId = json["projectId"] as? String ?? ""
+            projectLabel = json["projectLabel"] as? String ?? ""
+            if let m = json["models"] as? JSON { models = m.mapValues { intValue($0) } }
+            if let mc = json["modelCosts"] as? JSON { modelCosts = mc.mapValues { doubleValue($0) } }
+            if let p = json["providers"] as? JSON { providers = p.mapValues { intValue($0) } }
+        }
+
+        mutating func merge(row: UsageRow, model: String?, tokens: Int, cost: Double, cacheRead: Int, cacheWrite: Int, output: Int) {
+            totalTokens += tokens
+            costUsd += cost
+            messageCount += max(0, Int(row.messageCount.rounded()))
+            inputTokens += max(0, Int(row.input.rounded()))
+            outputTokens += output
+            cacheReadTokens += cacheRead
+            cacheWriteTokens += cacheWrite
+            reasoningTokens += max(0, Int(row.reasoning.rounded()))
+            let rowStartedMs = timestampMs(row.startedAt)
+            if rowStartedMs > 0 && (startedAtMs == 0 || rowStartedMs < startedAtMs) {
+                startedAtMs = rowStartedMs
+            }
+            let rowLastMs = timestampMs(row.lastUsedAt)
+            if rowLastMs > lastUsedAtMs {
+                lastUsedAtMs = rowLastMs
+            }
+            if projectId.isEmpty && !row.projectId.isEmpty {
+                projectId = row.projectId
+                projectLabel = row.projectLabel
+            }
+            if let model, tokens > 0 {
+                models[model, default: 0] += tokens
+            }
+            if let model, cost > 0 {
+                modelCosts[model, default: 0] += cost
+            }
+            if let provider = normalizeProviderName(row.provider ?? ""), tokens > 0 {
+                providers[provider, default: 0] += tokens
+            }
+        }
+
+        mutating func mergeTyped(_ other: TypedSession) {
+            totalTokens += other.totalTokens
+            costUsd += other.costUsd
+            messageCount += other.messageCount
+            inputTokens += other.inputTokens
+            outputTokens += other.outputTokens
+            cacheReadTokens += other.cacheReadTokens
+            cacheWriteTokens += other.cacheWriteTokens
+            reasoningTokens += other.reasoningTokens
+            if other.startedAtMs > 0 && (startedAtMs == 0 || other.startedAtMs < startedAtMs) {
+                startedAtMs = other.startedAtMs
+            }
+            if other.lastUsedAtMs > lastUsedAtMs {
+                lastUsedAtMs = other.lastUsedAtMs
+            }
+            if projectId.isEmpty && !other.projectId.isEmpty {
+                projectId = other.projectId
+                projectLabel = other.projectLabel
+            }
+            for (k, v) in other.models { models[k, default: 0] += v }
+            for (k, v) in other.modelCosts { modelCosts[k, default: 0] += v }
+            for (k, v) in other.providers { providers[k, default: 0] += v }
+        }
+
+        func toJSON() -> JSON {
+            return [
+                "client": client,
+                "sessionId": sessionId,
+                "totalTokens": totalTokens,
+                "costUsd": costUsd,
+                "messageCount": messageCount,
+                "inputTokens": inputTokens,
+                "outputTokens": outputTokens,
+                "cacheReadTokens": cacheReadTokens,
+                "cacheWriteTokens": cacheWriteTokens,
+                "reasoningTokens": reasoningTokens,
+                "startedAt": startedAtMs > 0 ? isoFromMs(startedAtMs) : "",
+                "lastUsedAt": lastUsedAtMs > 0 ? isoFromMs(lastUsedAtMs) : "",
+                "projectId": projectId,
+                "projectLabel": projectLabel,
+                "models": models,
+                "modelCosts": modelCosts,
+                "providers": providers
+            ]
+        }
+    }
+
+    struct TypedPeriod {
+        var totalTokens: Int = 0
+        var costUsd: Double = 0
+        var cacheReadTokens: Int = 0
+        var cacheWriteTokens: Int = 0
+        var outputTokens: Int = 0
+        var timedTokens: Int = 0
+        var timedOutputTokens: Int = 0
+        var timedDurationMs: Int = 0
+        var clients: [String: Int] = [:]
+        var clientCosts: [String: Double] = [:]
+        var clientCacheReads: [String: Int] = [:]
+        var clientCacheWrites: [String: Int] = [:]
+        var clientOutputs: [String: Int] = [:]
+        var models: [String: Int] = [:]
+        var modelCosts: [String: Double] = [:]
+        var modelCacheReads: [String: Int] = [:]
+        var modelCacheWrites: [String: Int] = [:]
+        var modelOutputs: [String: Int] = [:]
+        var clientModels: [String: [String: Int]] = [:]
+        var clientModelCosts: [String: [String: Double]] = [:]
+        var sessions: [String: TypedSession] = [:]
+
+        init() {}
+
+        init(from json: JSON) {
+            totalTokens = intValue(json["totalTokens"])
+            costUsd = doubleValue(json["costUsd"])
+            cacheReadTokens = intValue(json["cacheReadTokens"])
+            cacheWriteTokens = intValue(json["cacheWriteTokens"])
+            outputTokens = intValue(json["outputTokens"])
+            timedTokens = intValue(json["timedTokens"])
+            timedOutputTokens = intValue(json["timedOutputTokens"])
+            timedDurationMs = intValue(json["timedDurationMs"])
+            if let v = json["clients"] as? JSON { clients = v.mapValues { intValue($0) } }
+            if let v = json["clientCosts"] as? JSON { clientCosts = v.mapValues { doubleValue($0) } }
+            if let v = json["clientCacheReads"] as? JSON { clientCacheReads = v.mapValues { intValue($0) } }
+            if let v = json["clientCacheWrites"] as? JSON { clientCacheWrites = v.mapValues { intValue($0) } }
+            if let v = json["clientOutputs"] as? JSON { clientOutputs = v.mapValues { intValue($0) } }
+            if let v = json["models"] as? JSON { models = v.mapValues { intValue($0) } }
+            if let v = json["modelCosts"] as? JSON { modelCosts = v.mapValues { doubleValue($0) } }
+            if let v = json["modelCacheReads"] as? JSON { modelCacheReads = v.mapValues { intValue($0) } }
+            if let v = json["modelCacheWrites"] as? JSON { modelCacheWrites = v.mapValues { intValue($0) } }
+            if let v = json["modelOutputs"] as? JSON { modelOutputs = v.mapValues { intValue($0) } }
+            if let v = json["clientModels"] as? JSON {
+                clientModels = v.mapValues { sub in (sub as? JSON ?? [:]).mapValues { intValue($0) } }
+            }
+            if let v = json["clientModelCosts"] as? JSON {
+                clientModelCosts = v.mapValues { sub in (sub as? JSON ?? [:]).mapValues { doubleValue($0) } }
+            }
+            if let v = json["sessions"] as? JSON {
+                for (key, val) in v {
+                    if let sJSON = val as? JSON {
+                        sessions[key] = TypedSession(from: sJSON)
+                    }
+                }
+            }
+        }
+
+        mutating func addRow(_ row: UsageRow) {
+            let client = normalizeClientName(row.client ?? "")
+            let tokens = row.input + row.output + row.cacheRead + row.cacheWrite
+            let cost = row.cost
+            let cacheRead = max(0, Int(row.cacheRead.rounded()))
+            let cacheWrite = max(0, Int(row.cacheWrite.rounded()))
+            let output = max(0, Int(row.output.rounded()))
+            let timedTokens = max(0, Int((row.performance?.timedTokens ?? 0).rounded()))
+            let timedDurationMs = max(0, Int((row.performance?.totalDurationMs ?? 0).rounded()))
+            let timedOutputTokens = timedDurationMs > 0 ? output : 0
+            var model = normalizeModelName(row.model ?? "")
+            if client == "cursor" && model == "auto" { model = "cursor-auto" }
+
+            let tokenCount = max(0, Int(tokens.rounded()))
+            totalTokens += tokenCount
+            costUsd += cost
+            cacheReadTokens += cacheRead
+            cacheWriteTokens += cacheWrite
+            outputTokens += output
+            self.timedTokens += timedTokens
+            self.timedOutputTokens += timedOutputTokens
+            self.timedDurationMs += timedDurationMs
+
+            if let client, tokenCount > 0 {
+                clients[client, default: 0] += tokenCount
+                if cacheRead > 0 { clientCacheReads[client, default: 0] += cacheRead }
+                if cacheWrite > 0 { clientCacheWrites[client, default: 0] += cacheWrite }
+                if output > 0 { clientOutputs[client, default: 0] += output }
+            }
+            if let client, cost > 0 { clientCosts[client, default: 0] += cost }
+            if let model, tokenCount > 0 {
+                models[model, default: 0] += tokenCount
+                if cacheRead > 0 { modelCacheReads[model, default: 0] += cacheRead }
+                if cacheWrite > 0 { modelCacheWrites[model, default: 0] += cacheWrite }
+                if output > 0 { modelOutputs[model, default: 0] += output }
+            }
+            if let model, cost > 0 { modelCosts[model, default: 0] += cost }
+            if let client, let model, tokenCount > 0 {
+                clientModels[client, default: [:]][model, default: 0] += tokenCount
+            }
+            if let client, let model, cost > 0 {
+                clientModelCosts[client, default: [:]][model, default: 0] += cost
+            }
+
+            if let client, let id = row.sessionId, !id.isEmpty {
+                let key = "\(client):\(id)"
+                var session = sessions[key] ?? TypedSession(client: client, sessionId: id)
+                session.merge(row: row, model: model, tokens: tokenCount, cost: cost, cacheRead: cacheRead, cacheWrite: cacheWrite, output: output)
+                sessions[key] = session
+            }
+        }
+
+        mutating func merge(_ other: TypedPeriod) {
+            totalTokens += other.totalTokens
+            costUsd += other.costUsd
+            cacheReadTokens += other.cacheReadTokens
+            cacheWriteTokens += other.cacheWriteTokens
+            outputTokens += other.outputTokens
+            timedTokens += other.timedTokens
+            timedOutputTokens += other.timedOutputTokens
+            timedDurationMs += other.timedDurationMs
+            for (k, v) in other.clients { clients[k, default: 0] += v }
+            for (k, v) in other.clientCosts { clientCosts[k, default: 0] += v }
+            for (k, v) in other.clientCacheReads { clientCacheReads[k, default: 0] += v }
+            for (k, v) in other.clientCacheWrites { clientCacheWrites[k, default: 0] += v }
+            for (k, v) in other.clientOutputs { clientOutputs[k, default: 0] += v }
+            for (k, v) in other.models { models[k, default: 0] += v }
+            for (k, v) in other.modelCosts { modelCosts[k, default: 0] += v }
+            for (k, v) in other.modelCacheReads { modelCacheReads[k, default: 0] += v }
+            for (k, v) in other.modelCacheWrites { modelCacheWrites[k, default: 0] += v }
+            for (k, v) in other.modelOutputs { modelOutputs[k, default: 0] += v }
+            for (client, sub) in other.clientModels {
+                for (model, v) in sub {
+                    clientModels[client, default: [:]][model, default: 0] += v
+                }
+            }
+            for (client, sub) in other.clientModelCosts {
+                for (model, v) in sub {
+                    clientModelCosts[client, default: [:]][model, default: 0] += v
+                }
+            }
+            for (key, s) in other.sessions {
+                if var existing = sessions[key] {
+                    existing.mergeTyped(s)
+                    sessions[key] = existing
+                } else {
+                    sessions[key] = s
+                }
+            }
+        }
+
+        func toJSON() -> JSON {
+            var sessionsJSON: JSON = [:]
+            for (key, s) in sessions {
+                sessionsJSON[key] = s.toJSON()
+            }
+            return [
+                "totalTokens": totalTokens,
+                "costUsd": costUsd,
+                "cacheReadTokens": cacheReadTokens,
+                "cacheWriteTokens": cacheWriteTokens,
+                "outputTokens": outputTokens,
+                "timedTokens": timedTokens,
+                "timedOutputTokens": timedOutputTokens,
+                "timedDurationMs": timedDurationMs,
+                "clients": clients,
+                "clientCosts": clientCosts,
+                "clientCacheReads": clientCacheReads,
+                "clientCacheWrites": clientCacheWrites,
+                "clientOutputs": clientOutputs,
+                "models": models,
+                "modelCosts": modelCosts,
+                "modelCacheReads": modelCacheReads,
+                "modelCacheWrites": modelCacheWrites,
+                "modelOutputs": modelOutputs,
+                "clientModels": clientModels,
+                "clientModelCosts": clientModelCosts,
+                "projects": JSON(),
+                "sessions": sessionsJSON
+            ]
+        }
+    }
+
     /// Port of addUsageRowToPeriod: row-level token totals, per-client and
     /// per-model rollups, and the session bucket.
     static func addUsageRowToPeriod(_ period: inout JSON, row: UsageRow) {
@@ -372,12 +685,14 @@ enum UsageCore {
     }
 
     /// Port of extractUsageFromTokscale: rows → period.
+    /// Uses TypedPeriod internally to avoid per-row Any-boxing; the final
+    /// toJSON() is the only place values enter the JSON wire shape.
     static func extractPeriod(entries: [UsageRow]) -> JSON {
-        var period = emptyPeriod()
+        var typed = TypedPeriod()
         for row in entries {
-            addUsageRowToPeriod(&period, row: row)
+            typed.addRow(row)
         }
-        return period
+        return typed.toJSON()
     }
 
     /// Port of addPeriodInto.
@@ -474,10 +789,10 @@ enum UsageCore {
     }
 
     static func mergePeriods(_ periods: [JSON]) -> JSON {
-        var target = emptyPeriod()
+        var typed = TypedPeriod()
         for period in periods {
-            addPeriodInto(&target, period)
+            typed.merge(TypedPeriod(from: period))
         }
-        return target
+        return typed.toJSON()
     }
 }
