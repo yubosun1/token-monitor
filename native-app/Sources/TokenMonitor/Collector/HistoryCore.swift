@@ -74,11 +74,7 @@ enum HistoryCore {
     /// local midnight and 08:00 (UTC+8) — the dashboard's activity view
     /// showed today as 0 during that window.
     static func localTodayKey() -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .current
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.string(from: Date())
+        DateFormatUtil.localTodayKey()
     }
 
     static func normalizeHistory(days input: [Day], todayKey: String? = nil, capDays: Int = 370, totalActiveTimeMsOverride: Double? = nil) -> JSON {
@@ -219,11 +215,6 @@ enum HistoryCore {
     }
 
     static func dayKeyAddDays(_ key: String, delta: Int) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd"
-        guard let date = formatter.date(from: key) else { return key }
-        let next = Calendar.current.date(byAdding: .day, value: delta, to: date) ?? date
-        return formatter.string(from: next)
+        DateFormatUtil.dayKeyByAdding(key, delta: delta)
     }
 }

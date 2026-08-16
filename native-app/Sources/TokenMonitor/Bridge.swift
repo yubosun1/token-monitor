@@ -61,7 +61,7 @@ final class BridgeCore {
                 "type": "stats",
                 "reason": "local",
                 "stats": stats,
-                "at": ISO8601DateFormatter().string(from: Date())
+                "at": DateFormatUtil.iso8601.string(from: Date())
             ]
         ]
     }
@@ -93,7 +93,7 @@ final class BridgeCore {
     }
 
     func emptyStats() -> [String: Any] {
-        let now = ISO8601DateFormatter().string(from: Date())
+        let now = DateFormatUtil.iso8601.string(from: Date())
         let period = emptyPeriod()
         return [
             "updatedAt": now,

@@ -224,11 +224,7 @@ enum Adapters {
     static func localDateKey(_ timestampMs: Double, timeZone: TimeZone = .current) -> String {
         guard timestampMs > 0 else { return "" }
         let date = Date(timeIntervalSince1970: timestampMs / 1000)
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = timeZone
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.string(from: date)
+        return DateFormatUtil.dayKey(date, timeZone: timeZone)
     }
 
     static func localDayStart(_ date: Date, timeZone: TimeZone = .current) -> Double {

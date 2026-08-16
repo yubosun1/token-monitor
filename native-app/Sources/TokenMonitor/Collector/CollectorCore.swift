@@ -926,17 +926,11 @@ final class Collector {
     // MARK: - Clock / calendar keys
 
     static func dayKey(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.string(from: date)
+        DateFormatUtil.dayKey(date)
     }
 
     static func monthKey(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM"
-        return formatter.string(from: date)
+        DateFormatUtil.monthKey(date)
     }
 
     // MARK: - Components
@@ -948,10 +942,7 @@ final class Collector {
 
     private func allTimeSinceMs(_ settings: [String: Any]) -> Double {
         let raw = settings["allTimeSince"] as? String ?? "2024-01-01"
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd"
-        if let date = formatter.date(from: raw) {
+        if let date = DateFormatUtil.parseDayKey(raw) {
             return date.timeIntervalSince1970 * 1000
         }
         return 0
@@ -1008,7 +999,7 @@ final class Collector {
     private func buildStats(settings: [String: Any], clients: [String], today: [String: Any], month: [String: Any], allTime: [String: Any], history: [String: Any]?, collectedAt: Date) -> [String: Any] {
         let osVersion = ProcessInfo.processInfo.operatingSystemVersion
         let osVersionString = "\(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)"
-        let nowIso = ISO8601DateFormatter().string(from: collectedAt)
+        let nowIso = DateFormatUtil.iso8601.string(from: collectedAt)
         let windows = periodWindows(collectedAt)
 
         let clientStatus = deriveClientStatus(clients: clients, allTimePeriod: allTime)
@@ -1078,21 +1069,14 @@ final class Collector {
         let monthStart = calendar.date(from: monthComps) ?? now
         let nextMonth = calendar.date(byAdding: .month, value: 1, to: monthStart) ?? monthStart
 
-        let dayKeyFormatter = DateFormatter()
-        dayKeyFormatter.locale = Locale(identifier: "en_US_POSIX")
-        dayKeyFormatter.dateFormat = "yyyy-MM-dd"
-        let monthKeyFormatter = DateFormatter()
-        monthKeyFormatter.locale = Locale(identifier: "en_US_POSIX")
-        monthKeyFormatter.dateFormat = "yyyy-MM"
-
         return [
             "today": [
-                "key": dayKeyFormatter.string(from: now),
-                "endsAt": ISO8601DateFormatter().string(from: nextDay)
+                "key": DateFormatUtil.dayKey(now),
+                "endsAt": DateFormatUtil.iso8601.string(from: nextDay)
             ],
             "month": [
-                "key": monthKeyFormatter.string(from: now),
-                "endsAt": ISO8601DateFormatter().string(from: nextMonth)
+                "key": DateFormatUtil.monthKey(now),
+                "endsAt": DateFormatUtil.iso8601.string(from: nextMonth)
             ]
         ]
     }
