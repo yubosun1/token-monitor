@@ -1,9 +1,9 @@
 import AppKit
 
-/// 主窗口内容控制器（用量卡 + breakdown + 会话 + 限额 + 设置/详情覆盖层）。
+/// 主窗口内容控制器（home/tool/status/model/project/session/limits/trends）。
 ///
-/// 取代原 index.html 的 shell：顶部 TotalBarView、模式切换条、内容区按当前
-/// 模式切换 breakdown/session/limits 子控制器；设置与会话详情以覆盖层弹出。
+/// 取代原 index.html 的 shell：顶部 TotalBarView、底部 ViewSwitcherBar、
+/// 内容区按当前视图切换子控制器；设置与会话详情以覆盖层弹出。
 /// 数据直接监听 DataBus.statsUpdated 拉取 Collector.shared.latestStats()。
 final class MainViewController: NSViewController, TotalBarDelegate, WindowHostConsumer, SettingsHost, WindowTeardownObserver {
 
@@ -14,24 +14,30 @@ final class MainViewController: NSViewController, TotalBarDelegate, WindowHostCo
     // MARK: - State
 
     private var period: String = "today"
-    private var mode: String = "tool" // tool|model|session|limits
+    private var mode: String = "home" // home|tool|status|model|project|session|limits|trends
 
     // MARK: - Subviews / children
 
     private let totalBar = TotalBarView()
     private let contentContainer = NSView()
     private let modalOverlay = NSView()
-    private var modeButtons: [(String, HoverButton)] = []
+    private let switcherBar = ViewSwitcherBar()
+    private var backRow: NSView?
     private var observers: [NSObjectProtocol] = []
 
+    private let homeVC = HomeViewController()
     private let breakdownClientVC = BreakdownViewController()
     private let breakdownModelVC = BreakdownViewController()
+    private let statusVC = StatusViewController()
+    private let projectsVC = ProjectsViewController()
     private let sessionListVC = SessionListViewController()
     private let limitsVC = LimitsViewController()
+    private let trendsVC = TrendsViewController()
     private var settingsVC: NSViewController?
 
     private var currentContentVC: NSViewController?
     private var presentedVC: NSViewController?
+    private var contentTopConstraint: NSLayoutConstraint?
 
     // MARK: - Lifecycle
 
@@ -49,14 +55,22 @@ final class MainViewController: NSViewController, TotalBarDelegate, WindowHostCo
         separator.translatesAutoresizingMaskIntoConstraints = false
         separator.heightAnchor.constraint(equalToConstant: 1).isActive = true
 
-        let modeBar = buildModeBar()
-        modeBar.translatesAutoresizingMaskIntoConstraints = false
-
         contentContainer.wantsLayer = true
         contentContainer.layer?.backgroundColor = .clear
         contentContainer.translatesAutoresizingMaskIntoConstraints = false
 
-        let mainStack = NSStackView(views: [totalBar, separator, modeBar, contentContainer])
+        switcherBar.onSelectView = { [weak self] id in self?.setMode(id) }
+        switcherBar.onRefresh = { [weak self] in self?.totalBarDidClickRefresh() }
+        switcherBar.onSettings = { [weak self] in self?.openSettings() }
+        switcherBar.translatesAutoresizingMaskIntoConstraints = false
+
+        let footerSeparator = NSView()
+        footerSeparator.wantsLayer = true
+        footerSeparator.layer?.backgroundColor = AppTheme.separatorColor.cgColor
+        footerSeparator.translatesAutoresizingMaskIntoConstraints = false
+        footerSeparator.heightAnchor.constraint(equalToConstant: 1).isActive = true
+
+        let mainStack = NSStackView(views: [totalBar, separator, contentContainer, footerSeparator, switcherBar])
         mainStack.orientation = .vertical
         mainStack.alignment = .leading
         mainStack.spacing = 0
@@ -88,73 +102,47 @@ final class MainViewController: NSViewController, TotalBarDelegate, WindowHostCo
     override func viewDidLoad() {
         super.viewDidLoad()
         breakdownModelVC.mode = "model"
+        homeVC.onOpenView = { [weak self] id in
+            self?.setMode(id)
+        }
         sessionListVC.onSelect = { [weak self] client, sid, period, cost in
             self?.presentSessionDetail(client: client, sessionId: sid, period: period, cost: cost)
         }
-        installContent(breakdownClientVC)
+        let saved = (BridgeCore.shared.settings.snapshot()["lastViewState"] as? [String: Any])?["breakdown"] as? String
+        let savedPeriod = (BridgeCore.shared.settings.snapshot()["lastViewState"] as? [String: Any])?["period"] as? String
+        if let savedPeriod, ["today", "month", "allTime"].contains(savedPeriod) {
+            period = savedPeriod
+            totalBar.setSelectedPeriod(savedPeriod)
+        }
+        let initial = AppViews.allIds.contains(saved ?? "") ? saved! : "home"
+        mode = initial
+        switcherBar.setCurrentView(initial)
+        installContent(viewController(for: initial))
         observeData()
     }
 
-    // MARK: - Mode bar
-
-    private func buildModeBar() -> NSView {
-        let bar = NSView()
-        let stack = NSStackView()
-        stack.orientation = .horizontal
-        stack.distribution = .fillEqually
-        stack.spacing = 0
-        stack.edgeInsets = NSEdgeInsets(top: 6, left: 10, bottom: 6, right: 10)
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        bar.addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: bar.topAnchor),
-            stack.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
-        ])
-        for (title, key) in [("Tool", "tool"), ("Model", "model"), ("Session", "session"), ("Limits", "limits")] {
-            let btn = HoverButton(title: title)
-            btn.font = AppTheme.tabFont
-            btn.target = self
-            btn.action = #selector(modeClick(_:))
-            btn.identifier = NSUserInterfaceItemIdentifier(key)
-            stack.addArrangedSubview(btn)
-            modeButtons.append((key, btn))
-        }
-        applyModeSelection()
-        return bar
-    }
-
-    private func applyModeSelection() {
-        for (key, btn) in modeButtons {
-            let selected = key == mode
-            btn.attributedTitle = NSAttributedString(string: btn.title, attributes: [
-                .font: AppTheme.tabFont,
-                .foregroundColor: selected ? AppTheme.accent : AppTheme.textTertiary,
-            ])
-            btn.selectedBackground = selected ? AppTheme.accent.withAlphaComponent(0.16) : .clear
+    private func viewController(for id: String) -> NSViewController {
+        switch id {
+        case "tool": return breakdownClientVC
+        case "model": return breakdownModelVC
+        case "session": return sessionListVC
+        case "limits": return limitsVC
+        case "status": return statusVC
+        case "project": return projectsVC
+        case "trends": return trendsVC
+        default: return homeVC
         }
     }
 
-    @objc private func modeClick(_ sender: NSButton) {
-        guard let key = sender.identifier?.rawValue else { return }
-        setMode(key)
-    }
+    // MARK: - Mode switching
 
-    private func setMode(_ newMode: String) {
-        guard newMode != mode else { return }
+    func setMode(_ newMode: String) {
+        guard newMode != mode, AppViews.allIds.contains(newMode) else { return }
         mode = newMode
-        applyModeSelection()
-        let vc: NSViewController
-        switch newMode {
-        case "tool": vc = breakdownClientVC
-        case "model": vc = breakdownModelVC
-        case "session": vc = sessionListVC
-        case "limits": vc = limitsVC
-        default: vc = breakdownClientVC
-        }
-        installContent(vc)
+        switcherBar.setCurrentView(newMode, persist: true)
+        installContent(viewController(for: newMode))
         refreshContent()
+        updateBackRow()
     }
 
     private func installContent(_ vc: NSViewController) {
@@ -164,16 +152,76 @@ final class MainViewController: NSViewController, TotalBarDelegate, WindowHostCo
             old.removeFromParent()
         }
         addChild(vc)
+        if let consumer = vc as? WindowHostConsumer {
+            consumer.host = host
+        }
         let v = vc.view
         v.translatesAutoresizingMaskIntoConstraints = false
         contentContainer.addSubview(v)
+        contentTopConstraint?.isActive = false
+        let top = v.topAnchor.constraint(equalTo: contentContainer.topAnchor)
+        top.isActive = true
+        contentTopConstraint = top
         NSLayoutConstraint.activate([
             v.leadingAnchor.constraint(equalTo: contentContainer.leadingAnchor),
             v.trailingAnchor.constraint(equalTo: contentContainer.trailingAnchor),
-            v.topAnchor.constraint(equalTo: contentContainer.topAnchor),
             v.bottomAnchor.constraint(equalTo: contentContainer.bottomAnchor),
         ])
         currentContentVC = vc
+    }
+
+    // MARK: - Back row
+
+    private func updateBackRow() {
+        guard mode != "home" else {
+            if backRow != nil {
+                backRow?.removeFromSuperview()
+                backRow = nil
+                contentTopConstraint?.isActive = false
+                if let current = currentContentVC {
+                    let top = current.view.topAnchor.constraint(equalTo: contentContainer.topAnchor)
+                    top.isActive = true
+                    contentTopConstraint = top
+                }
+            }
+            return
+        }
+        if backRow == nil {
+            let row = NSView()
+            row.wantsLayer = true
+            row.layer?.backgroundColor = .clear
+            let btn = HoverButton(title: "‹ 返回首页")
+            btn.font = AppTheme.smallFont
+            btn.target = self
+            btn.action = #selector(backHome)
+            btn.translatesAutoresizingMaskIntoConstraints = false
+            row.addSubview(btn)
+            NSLayoutConstraint.activate([
+                btn.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 10),
+                btn.topAnchor.constraint(equalTo: row.topAnchor, constant: 2),
+                btn.bottomAnchor.constraint(equalTo: row.bottomAnchor, constant: -2),
+            ])
+            backRow = row
+        }
+        guard let backRow, backRow.superview !== contentContainer else { return }
+        backRow.translatesAutoresizingMaskIntoConstraints = false
+        contentContainer.addSubview(backRow)
+        NSLayoutConstraint.activate([
+            backRow.leadingAnchor.constraint(equalTo: contentContainer.leadingAnchor),
+            backRow.trailingAnchor.constraint(equalTo: contentContainer.trailingAnchor),
+            backRow.topAnchor.constraint(equalTo: contentContainer.topAnchor),
+            backRow.heightAnchor.constraint(equalToConstant: 24),
+        ])
+        if let current = currentContentVC {
+            contentTopConstraint?.isActive = false
+            let top = current.view.topAnchor.constraint(equalTo: contentContainer.topAnchor, constant: 24)
+            top.isActive = true
+            contentTopConstraint = top
+        }
+    }
+
+    @objc private func backHome() {
+        setMode("home")
     }
 
     // MARK: - Data bus
@@ -192,8 +240,14 @@ final class MainViewController: NSViewController, TotalBarDelegate, WindowHostCo
         let stats = Collector.shared.latestStats()
         let settings = BridgeCore.shared.settings.snapshot()
         totalBar.update(stats: stats, settings: settings)
+        homeVC.update(stats: stats, period: period, settings: settings)
         breakdownClientVC.update(stats: stats, period: period, settings: settings)
         breakdownModelVC.update(stats: stats, period: period, settings: settings)
+        sessionListVC.update(stats: stats, period: period, settings: settings)
+        limitsVC.update(stats: stats, period: period, settings: settings)
+        projectsVC.update(stats: stats, period: period, settings: settings)
+        trendsVC.update(stats: stats, period: period, settings: settings)
+        statusVC.refreshIfNeeded()
         refreshContent()
     }
 
@@ -203,12 +257,18 @@ final class MainViewController: NSViewController, TotalBarDelegate, WindowHostCo
         if let vc = currentContentVC as? ContentUpdatable {
             vc.update(stats: stats, period: period, settings: settings)
         }
+        if let statusVC = currentContentVC as? StatusViewController {
+            statusVC.refreshIfNeeded()
+        }
     }
 
     // MARK: - TotalBarDelegate
 
     func totalBarDidSelectPeriod(_ period: String) {
         self.period = period
+        var lastView = BridgeCore.shared.settings.snapshot()["lastViewState"] as? [String: Any] ?? [:]
+        lastView["period"] = period
+        BridgeCore.shared.settings.update(["lastViewState": lastView])
         refresh()
     }
 

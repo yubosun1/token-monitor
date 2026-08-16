@@ -1,10 +1,10 @@
 # Token Monitor（macOS 原生定制版）
 
-本项目是 [token-monitor](https://github.com/Javis603/token-monitor)（MIT）的个人定制 fork：把原 Electron 实现改写成**纯原生 macOS 应用**（Swift + AppKit + WKWebView），仅供单机本地使用。渲染层沿用原版 HTML/CSS/JS（像素级一致），外壳全部换成本地代码，资源占用远低于 Electron 版。
+本项目是 [token-monitor](https://github.com/Javis603/token-monitor)（MIT）的个人定制 fork：把原 Electron 实现改写成**纯原生 macOS 应用**（Swift + AppKit，无 WebKit、无 HTML/JS 渲染层），仅供单机本地使用。界面全部为原生 AppKit 视图，资源占用远低于 Electron 版。
 
 ## 特性
 
-- **界面**：原版渲染层跑在 WKWebView 中，外观与 Electron 版一致；外壳为原生 Swift —— 菜单栏图标、悬浮置顶玻璃窗、⌘E 全局快捷键、原生窗口拖拽、空闲自动回收隐藏窗口的 WebView（省内存）。
+- **界面**：原生 AppKit UI —— 主窗口八个视图（首页概览 / 工具 / 状态 / 模型 / 项目 / 会话 / 限额 / 趋势）+ 底部视图切换器（可排序/隐藏）、独立用量面板（统计卡 + Token Activity 热力图 + 堆叠柱/K 线趋势 + 图例悬停提示）、设置覆盖层（货币汇率 / 视图与客户端顺序 / 自定义定价 / 订阅 / 限额选项等）；外壳为原生 Swift —— 菜单栏图标、悬浮置顶玻璃窗、⌘E 全局快捷键、原生窗口拖拽、空闲自动回收隐藏窗口（省内存）。
 - **用量采集**：只追踪本机 7 个客户端 —— Claude Code、Codex、OpenCode、WorkBuddy（经 tokscale 引擎）+ Proma、Hanako、DeepSeek Harness（原生 Swift 解析器）。
 - **AI 限额**：DeepSeek 余额 + OpenCode 配额（保留原版界面与订阅记录功能）。
 - **统计口径**：今日/本月/全部按**本地时区自然日/自然月**划分，用量按**消息/事件自身时间戳**归日（跨午夜的会话会正确拆到两天），与 tokscale 的 `bucketTimezone` 配置保持一致。
@@ -63,15 +63,16 @@ TOKEN_MONITOR_DIAG=1 ./dist/Token\ Monitor.app/Contents/MacOS/TokenMonitor   # �
 ```
 native-app/
   Package.swift            SwiftPM 工程（macOS 15，Swift 5 模式）
-  Sources/TokenMonitor/    AppDelegate（托盘/窗口）、Bridge（渲染层 IPC）、
+  Sources/TokenMonitor/    AppDelegate（托盘/窗口）、BridgeCore（数据门面）、
                            Collector/（采集核心：Adapters / UsageCore / HistoryCore /
                            CollectorCore / SourceScanner / TokscaleRunner）、
-                           Limits/（限额/订阅/凭证）、SessionDetail、Status
-  Resources/               tokenMonitorBridge.js（替代 Electron preload 的桥）
+                           Limits/（限额/订阅/凭证）、SessionDetail、Status、
+                           UI/（原生视图：主窗口八视图 / Dashboard / 设置 /
+                           图表算法 ChartCore / 主题 Theme）
   Vendor/                  tokscale 二进制 + libzstd 静态库（vendor 化）
-  scripts/                 build-app.sh（打包渲染层 + 构建）、stage-www.sh 等
+  scripts/                 build-app.sh（构建 .app）、stage-www.sh 等
   docs/                    性能与调优记录
-src/electron/renderer/     原版渲染层（唯一保留的 JS 界面代码）
+src/electron/renderer/     原版渲染层（仅作参考，不再打包进应用）
 assets/icons/              客户端图标
 ```
 
@@ -81,12 +82,12 @@ assets/icons/              客户端图标
 
 - `[perf]` 采集 tick 各阶段耗时、CPU/内存足迹；
 - `[dsh]` 每次 zstd 解压与解析结果（文件数 / usage 事件数 / 行数）；
-- `[diag]` 页面状态探针与交互探针；
+- `[diag]` 各探针：`TOKEN_MONITOR_DIAG_VIEWS=1` 轮巡全部视图并打开设置/用量面板（原生 UI 冒烟测试）；
 - 每次 stats 推送的完整 JSON 快照（`TOKEN_MONITOR_DIAG_DIR` 可指定输出目录）。
 
 ## 已知取舍
 
-- 界面主题固定为默认外观；项目分组视图（projects）暂未移植（默认关闭）。
+- 界面主题固定为默认外观；会话用量归档保留（session usage archive）仅保留设置项，采集器暂未实现归档行为。
 - 会话详情弹窗对 Proma/Hanako/DSH 及 tokscale 类客户端有数据；逐消息详情覆盖范围以代码为准。
 - 版本号沿用 0.44.0-native，不提供自动更新。
 

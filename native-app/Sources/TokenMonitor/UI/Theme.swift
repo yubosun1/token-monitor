@@ -29,18 +29,89 @@ enum AppTheme {
     static let tabFont = NSFont.systemFont(ofSize: 10, weight: .semibold)
     static let buttonFont = NSFont.systemFont(ofSize: 12, weight: .regular)
 
-    /// 客户端配色（breakdown 进度条/圆点）。
+    /// 客户端配色（对齐原版 usageCharts.clientColors 的品牌色；深色品牌色
+    /// 经 displayColor 抬亮，避免在深底上不可见）。
     static func clientColor(_ id: String) -> NSColor {
+        let hex = clientHex(id)
+        return color(hex: hex)
+    }
+
+    /// 品牌色 hex（原版 clientColors 表）。
+    static func clientHex(_ id: String) -> String {
         switch id {
-        case "claude":    return NSColor(calibratedRed: 0.95, green: 0.62, blue: 0.44, alpha: 1)
-        case "codex":     return NSColor(calibratedRed: 0.40, green: 0.78, blue: 0.66, alpha: 1)
-        case "opencode":  return NSColor(calibratedRed: 0.55, green: 0.70, blue: 1.00, alpha: 1)
-        case "workbuddy": return NSColor(calibratedRed: 0.80, green: 0.60, blue: 0.95, alpha: 1)
-        case "proma":     return NSColor(calibratedRed: 0.96, green: 0.76, blue: 0.45, alpha: 1)
-        case "hanako":    return NSColor(calibratedRed: 0.96, green: 0.55, blue: 0.68, alpha: 1)
-        case "dsh":       return NSColor(calibratedRed: 0.50, green: 0.82, blue: 0.88, alpha: 1)
-        default:          return NSColor(calibratedWhite: 0.72, alpha: 1)
+        case "claude":    return "#cc7c5e"
+        case "codex":     return "#49a3b0"
+        case "deepseek":  return "#4d6bfe"
+        case "workbuddy": return "#0DC8A5"
+        case "proma":     return "#000000"
+        case "hanako":    return "#E8A33D"
+        default:          return "#6ab4f0"
         }
+    }
+
+    /// 把过暗的 hex 抬到可见灰（原版 displayColor）。
+    static func displayColor(_ hex: String) -> String {
+        let h = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        guard h.count == 6, let v = UInt64(h, radix: 16) else { return hex }
+        let r = Double((v >> 16) & 0xFF), g = Double((v >> 8) & 0xFF), b = Double(v & 0xFF)
+        let lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
+        if lum >= 42 { return hex }
+        let lift = { (c: Double) -> Int in Int((c + (205 - c) * 0.62).rounded()) }
+        return String(format: "#%02X%02X%02X", lift(r), lift(g), lift(b))
+    }
+
+    static func color(hex: String) -> NSColor {
+        let lifted = displayColor(hex)
+        let h = lifted.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        guard h.count == 6, let v = UInt64(h, radix: 16) else { return NSColor(calibratedWhite: 0.72, alpha: 1) }
+        return NSColor(
+            calibratedRed: CGFloat((v >> 16) & 0xFF) / 255,
+            green: CGFloat((v >> 8) & 0xFF) / 255,
+            blue: CGFloat(v & 0xFF) / 255,
+            alpha: 1
+        )
+    }
+
+    /// 模型 → 厂商品牌色（原版 modelVendorFor 正则 + 哈希回退调色板）。
+    static func modelColor(_ model: String) -> NSColor {
+        let name = model.lowercased()
+        var vendor: String?
+        if name.range(of: #"^(cursor-)?auto$"#, options: .regularExpression) != nil { vendor = "cursor" }
+        else if name.range(of: #"claude|anthropic|sonnet|opus|haiku"#, options: .regularExpression) != nil { vendor = "claude" }
+        else if name.range(of: #"gpt|openai|codex|^o[134](?:-|$)|o[134]-(mini|pro|preview)|chatgpt"#, options: .regularExpression) != nil { vendor = "codex" }
+        else if name.range(of: #"gemini|gemma|google"#, options: .regularExpression) != nil { vendor = "gemini" }
+        else if name.range(of: #"grok|xai"#, options: .regularExpression) != nil { vendor = "xai" }
+        else if name.range(of: #"deepseek"#, options: .regularExpression) != nil { vendor = "deepseek" }
+        else if name.range(of: #"llama|meta"#, options: .regularExpression) != nil { vendor = "meta" }
+        else if name.range(of: #"mistral|mixtral|codestral"#, options: .regularExpression) != nil { vendor = "mistral" }
+        else if name.range(of: #"qwen|qwq|qvq"#, options: .regularExpression) != nil { vendor = "qwen" }
+        else if name.range(of: #"kimi|moonshot"#, options: .regularExpression) != nil { vendor = "kimi" }
+        else if name.range(of: #"chatglm|\bglm-|\bzai\b|z\.ai|zhipu"#, options: .regularExpression) != nil { vendor = "zai" }
+        else if name.range(of: #"cohere|command-r"#, options: .regularExpression) != nil { vendor = "cohere" }
+        else if name.range(of: #"mimo|xiaomi"#, options: .regularExpression) != nil { vendor = "xiaomi" }
+        else if name.range(of: #"minimax|\babab"#, options: .regularExpression) != nil { vendor = "minimax" }
+        else if name.range(of: #"doubao|\bseed(?:-|$)"#, options: .regularExpression) != nil { vendor = "doubao" }
+        else if name.range(of: #"hy3|hunyuan"#, options: .regularExpression) != nil { vendor = "hunyuan" }
+        else if name.range(of: #"^big-pickle$"#, options: .regularExpression) != nil { vendor = "opencode" }
+        else if name.range(of: #"hermes"#, options: .regularExpression) != nil { vendor = "hermes" }
+        else if name.range(of: #"cursor"#, options: .regularExpression) != nil { vendor = "cursor" }
+
+        let vendorHex: [String: String] = [
+            "claude": "#cc7c5e", "codex": "#49a3b0", "hermes": "#d4af37", "gemini": "#4285f4",
+            "deepseek": "#4d6bfe", "cursor": "#6ab4f0", "opencode": "#6ab4f0", "xai": "#6ab4f0",
+            "meta": "#1d65c1", "mistral": "#fa520f", "qwen": "#615ced", "kimi": "#6ab4f0",
+            "zai": "#6ab4f0", "cohere": "#39594d", "xiaomi": "#ff6700", "minimax": "#f23f5d",
+            "doubao": "#1E37FC", "hunyuan": "#0053E0",
+        ]
+        if let vendor, let hex = vendorHex[vendor] { return color(hex: hex) }
+
+        // 哈希回退调色板（原版 fallbackModelColors）。
+        let palette = ["#6ab4f0", "#cc7c5e", "#a57df0", "#49a3b0", "#f0d66a", "#f06a7b"]
+        var hash = 0
+        for scalar in name.unicodeScalars {
+            hash = (hash &* 31 &+ Int(scalar.value)) & 0x7FFFFFFF
+        }
+        return color(hex: palette[abs(hash) % palette.count])
     }
 
     static func clientLabel(_ id: String) -> String {

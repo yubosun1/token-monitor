@@ -115,8 +115,8 @@ final class SettingsStore {
             "homeModuleOrder": "limits,tool,model,trends",
             "hiddenHomeModules": "tool",
             "viewDisplayOrder": "",
-            "hiddenViews": "status",
-            "lastViewState": ["period": "today", "breakdown": "tool"],
+            "hiddenViews": "",
+            "lastViewState": ["period": "today", "breakdown": "home"],
             // Misc
             "deviceId": "macbook-pro-local",
             "language": "zh-CN",

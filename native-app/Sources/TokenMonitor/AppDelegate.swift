@@ -67,6 +67,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+        // Dev aid: TOKEN_MONITOR_DIAG_VIEWS=1 cycles the main window through
+        // every view (home/tool/status/model/project/session/limits/trends),
+        // opens the settings overlay and the standalone dashboard once each —
+        // exercises the full native UI tree (constraints, drawing, data reads)
+        // so constraint/layout regressions surface in the diag log.
+        if diag, ProcessInfo.processInfo.environment["TOKEN_MONITOR_DIAG_VIEWS"] != nil {
+            runViewsProbe()
+        }
+    }
+
+    /// Diag-only: cycle all main-window views, then open settings and the
+    /// dashboard window briefly (native UI smoke test).
+    private func runViewsProbe() {
+        let views = ["home", "tool", "status", "model", "project", "session", "limits", "trends"]
+        var index = 0
+        func step() {
+            guard let wc = mainWindowController, let main = wc.contentController as? MainViewController else {
+                NSLog("[diag] views probe: main controller missing, aborting")
+                return
+            }
+            if index < views.count {
+                let id = views[index]
+                index += 1
+                main.setMode(id)
+                NSLog("[diag] views probe: switched to %@", id)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: step)
+                return
+            }
+            // Settings overlay
+            main.openSettings()
+            NSLog("[diag] views probe: settings opened")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
+                main.dismissOverlay()
+                NSLog("[diag] views probe: settings closed")
+                // Standalone dashboard window
+                self.openDashboard()
+                NSLog("[diag] views probe: dashboard opened")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
+                    self.dashboardWindowController?.hostRequestClose()
+                    NSLog("[diag] views probe: dashboard closed, done")
+                }
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 12, execute: step)
     }
 
     /// Diag-only: hide the main window (the same path the tray toggle takes),

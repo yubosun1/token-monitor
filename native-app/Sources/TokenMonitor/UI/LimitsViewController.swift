@@ -58,11 +58,19 @@ final class LimitsViewController: NSViewController, ContentUpdatable {
             limits = LimitsRuntime.shared.summary()
         }
         let providers = limits["providers"] as? [[String: Any]] ?? []
+        // 按设置 limitProviderOrder 排序
+        let order = ((settings["limitProviderOrder"] as? String) ?? "deepseek,opencode")
+            .split(separator: ",").map { String($0).lowercased() }
+        let ordered = providers.sorted { a, b in
+            let ia = order.firstIndex(of: a["provider"] as? String ?? "") ?? Int.max
+            let ib = order.firstIndex(of: b["provider"] as? String ?? "") ?? Int.max
+            return ia == ib ? (a["provider"] as? String ?? "") < (b["provider"] as? String ?? "") : ia < ib
+        }
 
         cardsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        emptyLabel.isHidden = !providers.isEmpty
+        emptyLabel.isHidden = !ordered.isEmpty
 
-        for provider in providers {
+        for provider in ordered {
             let card = LimitCardView()
             card.configure(provider: provider, settings: settings)
             cardsStack.addArrangedSubview(card)
@@ -147,9 +155,16 @@ private final class LimitCardView: NSView {
 
     func configure(provider: [String: Any], settings: [String: Any]) {
         let id = provider["provider"] as? String ?? ""
-        let accountLabel = provider["accountLabel"] as? String ?? ""
+        var accountLabel = provider["accountLabel"] as? String ?? ""
+        if settings["maskLimitAccountEmails"] as? Bool ?? false {
+            accountLabel = maskEmail(accountLabel)
+        }
         let status = provider["status"] as? String ?? ""
-        titleLabel.stringValue = AppTheme.clientLabel(id) + (accountLabel.isEmpty ? "" : " · \(accountLabel)")
+        var title = AppTheme.clientLabel(id) + (accountLabel.isEmpty ? "" : " · \(accountLabel)")
+        if settings["showLimitSource"] as? Bool ?? false, let source = provider["source"] as? String, !source.isEmpty {
+            title += "  [\(source)]"
+        }
+        titleLabel.stringValue = title
         statusLabel.stringValue = statusText(status)
         statusLabel.layer?.backgroundColor = statusColor(status).cgColor
         statusLabel.textColor = .white
@@ -179,6 +194,15 @@ private final class LimitCardView: NSView {
             hint.drawsBackground = false
             bodyStack.addArrangedSubview(hint)
         }
+    }
+
+    private func maskEmail(_ value: String) -> String {
+        guard value.contains("@") else { return value }
+        let parts = value.split(separator: "@", maxSplits: 1)
+        guard let local = parts.first, let domain = parts.last, local.count > 1 else { return value }
+        let head = local.prefix(1)
+        let tail = local.count > 3 ? local.suffix(1) : ""
+        return "\(head)***\(tail)@\(domain)"
     }
 
     private func statusText(_ s: String) -> String {
@@ -280,30 +304,56 @@ private final class LimitWindowRow: NSView {
         let limit = UsageCore.doubleValue(window["limit"])
         let remainingPct = window["remainingPercent"]
         let usedPct = window["usedPercent"]
+        let showUsed = settings["showLimitUsed"] as? Bool ?? false
 
         labelField.stringValue = label
-        if remaining > 0 || limit > 0 {
-            let sym = Fmt.currencySymbol(currency)
-            valueField.stringValue = limit > 0
-                ? "\(sym)\(Fmt.tokens(Int(remaining))) / \(sym)\(Fmt.tokens(Int(limit)))"
-                : "\(sym)\(Fmt.tokens(Int(remaining)))"
+        let sym = Fmt.currencySymbol(currency)
+        if showUsed {
+            if limit > 0 {
+                valueField.stringValue = "\(sym)\(Fmt.tokens(Int(used))) / \(sym)\(Fmt.tokens(Int(limit)))"
+            } else if let p = usedPct, !(p is NSNull) {
+                valueField.stringValue = "\(Fmt.percent(UsageCore.doubleValue(p) / 100))"
+            } else {
+                valueField.stringValue = "\(sym)\(Fmt.tokens(Int(used)))"
+            }
         } else {
-            valueField.stringValue = "—"
+            if remaining > 0 || limit > 0 {
+                valueField.stringValue = limit > 0
+                    ? "\(sym)\(Fmt.tokens(Int(remaining))) / \(sym)\(Fmt.tokens(Int(limit)))"
+                    : "\(sym)\(Fmt.tokens(Int(remaining)))"
+            } else {
+                valueField.stringValue = "—"
+            }
         }
 
-        // 进度条：优先 usedPercent，否则 limit>0 用 used/limit，否则 remainingPct。
+        // 进度条：showLimitUsed 时显示已用比例，否则显示剩余比例。
         var fraction = 0.0
-        if let p = usedPct, !(p is NSNull) {
-            fraction = UsageCore.doubleValue(p)
-        } else if limit > 0 {
-            fraction = used / limit
-        } else if let p = remainingPct, !(p is NSNull) {
-            fraction = 1 - UsageCore.doubleValue(p)
+        if showUsed {
+            if let p = usedPct, !(p is NSNull) {
+                fraction = UsageCore.doubleValue(p)
+            } else if limit > 0 {
+                fraction = used / limit
+            } else if let p = remainingPct, !(p is NSNull) {
+                fraction = 1 - UsageCore.doubleValue(p)
+            }
+        } else {
+            if let p = remainingPct, !(p is NSNull) {
+                fraction = UsageCore.doubleValue(p)
+            } else if let p = usedPct, !(p is NSNull) {
+                fraction = 1 - UsageCore.doubleValue(p)
+            } else if limit > 0 {
+                fraction = 1 - used / limit
+            }
         }
         fraction = max(0, min(1, fraction))
-        barFill.layer?.backgroundColor = AppTheme.accent.cgColor
-        barFill.widthAnchor.constraint(equalTo: barBg.widthAnchor, multiplier: CGFloat(max(0.02, fraction))).isActive = true
+        let color = fraction < 0.2 ? AppTheme.danger : (fraction < 0.5 ? AppTheme.warning : AppTheme.accent)
+        barFill.layer?.backgroundColor = color.cgColor
+        barFillWidth?.isActive = false
+        barFillWidth = barFill.widthAnchor.constraint(equalTo: barBg.widthAnchor, multiplier: CGFloat(max(0.02, fraction)))
+        barFillWidth?.isActive = true
     }
+
+    private var barFillWidth: NSLayoutConstraint?
 }
 
 // MARK: - Balance row (DeepSeek 消费)

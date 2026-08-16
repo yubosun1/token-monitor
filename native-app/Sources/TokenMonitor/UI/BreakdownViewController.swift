@@ -55,28 +55,38 @@ final class BreakdownViewController: NSViewController {
         let periods = stats?["periods"] as? [String: Any]
         let periodDict = periods?[period] as? [String: Any]
 
-        var entries: [(id: String, tokens: Int, cost: Double)] = []
+        var entries: [(id: String, tokens: Int, cost: Double, cacheRead: Int, output: Int)] = []
         if mode == "client" {
             let clients = periodDict?["clients"] as? [String: Any] ?? [:]
             let costs = periodDict?["clientCosts"] as? [String: Any] ?? [:]
+            let cacheReads = periodDict?["clientCacheReads"] as? [String: Any] ?? [:]
+            let outputs = periodDict?["clientOutputs"] as? [String: Any] ?? [:]
             for (id, value) in clients {
-                entries.append((id, UsageCore.intValue(value), UsageCore.doubleValue(costs[id])))
+                entries.append((id, UsageCore.intValue(value), UsageCore.doubleValue(costs[id]),
+                                UsageCore.intValue(cacheReads[id]), UsageCore.intValue(outputs[id])))
             }
         } else {
             let models = periodDict?["models"] as? [String: Any] ?? [:]
             let costs = periodDict?["modelCosts"] as? [String: Any] ?? [:]
+            let cacheReads = periodDict?["modelCacheReads"] as? [String: Any] ?? [:]
+            let outputs = periodDict?["modelOutputs"] as? [String: Any] ?? [:]
             for (id, value) in models {
-                entries.append((id, UsageCore.intValue(value), UsageCore.doubleValue(costs[id])))
+                entries.append((id, UsageCore.intValue(value), UsageCore.doubleValue(costs[id]),
+                                UsageCore.intValue(cacheReads[id]), UsageCore.intValue(outputs[id])))
             }
         }
         // client 维度按设置里的显示顺序优先排，再按 tokens 降序；model 直接按 tokens 降序。
         if mode == "client" {
             let order = ((settings["clientDisplayOrder"] as? String) ?? "")
                 .split(separator: ",").map { String($0).lowercased() }
+            let hidden = Set(AppViews.csvItems(settings["hiddenClients"]).map { $0.lowercased() })
             entries.sort { a, b in
                 let ia = order.firstIndex(of: a.id) ?? Int.max
                 let ib = order.firstIndex(of: b.id) ?? Int.max
                 return ia == ib ? a.tokens > b.tokens : ia < ib
+            }
+            if !hidden.isEmpty {
+                entries.removeAll { hidden.contains($0.id) }
             }
         } else {
             entries.sort { $0.tokens > $1.tokens }
@@ -95,7 +105,9 @@ final class BreakdownViewController: NSViewController {
                 cost: entry.cost,
                 maxTokens: maxTokens,
                 isClient: mode == "client",
-                settings: settings
+                settings: settings,
+                cacheRead: entry.cacheRead,
+                output: entry.output
             )
             rowsStack.addArrangedSubview(row)
             row.widthAnchor.constraint(equalTo: rowsStack.widthAnchor).isActive = true
@@ -125,6 +137,11 @@ private final class BreakdownRowView: NSView {
     private let costLabel = NSTextField(labelWithString: "")
     private let barBg = NSView()
     private let barFill = NSView()
+    private let accordionStack = NSStackView()
+    private var expanded = false
+    private var tracking: NSTrackingArea?
+    private var hover = false
+    private var hasAccordion = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -157,21 +174,26 @@ private final class BreakdownRowView: NSView {
         barFill.translatesAutoresizingMaskIntoConstraints = false
         barBg.addSubview(barFill)
 
-        let topRow = NSStackView(views: [dot, nameLabel, tokensLabel])
+        let topRow = NSStackView(views: [dot, nameLabel, tokensLabel, costLabel])
         topRow.orientation = .horizontal
         topRow.alignment = .centerY
         topRow.spacing = 6
         nameLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
         tokensLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
-
-        let bottomRow = NSStackView(views: [barBg, costLabel])
-        bottomRow.orientation = .horizontal
-        bottomRow.alignment = .centerY
-        bottomRow.spacing = 8
-        barBg.setContentHuggingPriority(.defaultLow, for: .horizontal)
         costLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
 
-        let stack = NSStackView(views: [topRow, bottomRow])
+        let bottomRow = NSStackView(views: [barBg])
+        bottomRow.orientation = .horizontal
+        bottomRow.alignment = .centerY
+        barBg.setContentHuggingPriority(.defaultLow, for: .horizontal)
+
+        accordionStack.orientation = .vertical
+        accordionStack.alignment = .leading
+        accordionStack.spacing = 0
+        accordionStack.translatesAutoresizingMaskIntoConstraints = false
+        accordionStack.isHidden = true
+
+        let stack = NSStackView(views: [topRow, bottomRow, accordionStack])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 4
@@ -186,6 +208,7 @@ private final class BreakdownRowView: NSView {
             dot.widthAnchor.constraint(equalToConstant: 8),
             dot.heightAnchor.constraint(equalToConstant: 8),
             barBg.heightAnchor.constraint(equalToConstant: 4),
+            barBg.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -28),
             barFill.leadingAnchor.constraint(equalTo: barBg.leadingAnchor),
             barFill.topAnchor.constraint(equalTo: barBg.topAnchor),
             barFill.bottomAnchor.constraint(equalTo: barBg.bottomAnchor),
@@ -203,14 +226,89 @@ private final class BreakdownRowView: NSView {
         label.cell?.truncatesLastVisibleLine = true
     }
 
-    func configure(id: String, tokens: Int, cost: Double, maxTokens: Int, isClient: Bool, settings: [String: Any]) {
+    func configure(id: String, tokens: Int, cost: Double, maxTokens: Int, isClient: Bool, settings: [String: Any], cacheRead: Int = 0, output: Int = 0) {
         nameLabel.stringValue = isClient ? AppTheme.clientLabel(id) : id
         tokensLabel.stringValue = Fmt.tokens(tokens)
         costLabel.stringValue = Fmt.money(cost, settings: settings)
-        let color = isClient ? AppTheme.clientColor(id) : AppTheme.accent
+        let color = isClient ? AppTheme.clientColor(id) : AppTheme.modelColor(id)
         dot.layer?.backgroundColor = color.cgColor
         barFill.layer?.backgroundColor = color.cgColor
         let fraction = maxTokens > 0 ? CGFloat(tokens) / CGFloat(maxTokens) : 0
-        barFill.widthAnchor.constraint(equalTo: barBg.widthAnchor, multiplier: max(0.02, fraction)).isActive = true
+        barFillWidth?.isActive = false
+        barFillWidth = barFill.widthAnchor.constraint(equalTo: barBg.widthAnchor, multiplier: max(0.02, fraction))
+        barFillWidth?.isActive = true
+
+        hasAccordion = tokens > 0 && (cacheRead > 0 || output > 0)
+        if hasAccordion {
+            renderAccordion(tokens: tokens, cacheRead: cacheRead, output: output, color: color)
+        } else {
+            accordionStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+            accordionStack.isHidden = true
+            expanded = false
+        }
+    }
+
+    private var barFillWidth: NSLayoutConstraint?
+
+    private func renderAccordion(tokens: Int, cacheRead: Int, output: Int, color: NSColor) {
+        accordionStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        let cacheMiss = max(0, tokens - cacheRead - output)
+        let inputTokens = cacheRead + cacheMiss
+        let hitPct = inputTokens > 0 ? Int((Double(cacheRead) / Double(inputTokens) * 100).rounded()) : 0
+        let missPct = 100 - hitPct
+        let rows: [(String, String, Int)] = [
+            ("输入缓存命中", "\(hitPct)%", cacheRead),
+            ("输入缓存未命中", "\(missPct)%", cacheMiss),
+            ("输出", "", output),
+        ]
+        for (label, pct, value) in rows {
+            let row = NSStackView()
+            row.orientation = .horizontal
+            row.alignment = .centerY
+            row.spacing = 6
+            let l = NSTextField(labelWithString: pct.isEmpty ? label : "\(label) \(pct)")
+            l.font = AppTheme.smallFont
+            l.textColor = AppTheme.textSecondary
+            l.isBezeled = false
+            l.drawsBackground = false
+            l.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            let v = NSTextField(labelWithString: Fmt.tokens(value))
+            v.font = AppTheme.monoFont
+            v.textColor = AppTheme.textPrimary
+            v.isBezeled = false
+            v.drawsBackground = false
+            row.addArrangedSubview(l)
+            row.addArrangedSubview(v)
+            row.edgeInsets = NSEdgeInsets(top: 3, left: 14, bottom: 3, right: 0)
+            accordionStack.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalTo: accordionStack.widthAnchor).isActive = true
+        }
+        accordionStack.isHidden = !expanded
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(rect: bounds, options: [.activeAlways, .inVisibleRect, .mouseEnteredAndExited], owner: self, userInfo: nil)
+        tracking = area
+        addTrackingArea(area)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        hover = true
+        layer?.backgroundColor = AppTheme.hoverColor.cgColor
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        hover = false
+        layer?.backgroundColor = expanded ? AppTheme.hoverColor.withAlphaComponent(0.5).cgColor : .clear
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard hasAccordion else { return }
+        expanded.toggle()
+        accordionStack.isHidden = !expanded
+        layer?.backgroundColor = expanded ? AppTheme.hoverColor.withAlphaComponent(0.5).cgColor : (hover ? AppTheme.hoverColor.cgColor : .clear)
+        needsLayout = true
     }
 }
