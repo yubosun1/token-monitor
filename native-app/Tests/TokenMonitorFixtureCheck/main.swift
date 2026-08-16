@@ -79,8 +79,8 @@ enum FixtureHarness {
                 reasoning: UsageCore.doubleValue(row["reasoning"]),
                 messageCount: UsageCore.doubleValue(row["messageCount"]),
                 cost: UsageCore.doubleValue(row["cost"]),
-                startedAt: row["startedAt"] as? String ?? "",
-                lastUsedAt: row["lastUsedAt"] as? String ?? "",
+                startedAt: UsageCore.timestampMs(row["startedAt"] as? String ?? ""),
+                lastUsedAt: UsageCore.timestampMs(row["lastUsedAt"] as? String ?? ""),
                 projectId: row["projectId"] as? String ?? "",
                 projectLabel: row["projectLabel"] as? String ?? "",
                 performance: nil
@@ -275,8 +275,8 @@ func runChecks() {
         let ts = FixtureHarness.loadTokscalePeriods()
         let rows = ts.today.map(UsageCore.rowFromTokscaleEntry)
         checkEqual(rows.count, 2, "tokscale today entries")
-        checkEqual(rows[0].startedAt, "", "missing startedAt decodes empty")
-        checkEqual(rows[0].lastUsedAt, "", "missing lastUsedAt decodes empty")
+        checkEqual(rows[0].startedAt, 0, "missing startedAt decodes empty")
+        checkEqual(rows[0].lastUsedAt, 0, "missing lastUsedAt decodes empty")
 
         let period = UsageCore.extractPeriod(entries: rows)
         checkEqual(UsageCore.intValue(period["totalTokens"]), 41_782_131, "tokscale today totalTokens")
@@ -332,26 +332,26 @@ func runChecks() {
 
         var row = UsageCore.UsageRow(client: "dsh", sessionId: "d1", model: "m", provider: "dsh",
                                      input: 1, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0,
-                                     messageCount: 1, cost: 0, startedAt: "", lastUsedAt: "",
+                                     messageCount: 1, cost: 0, startedAt: 0, lastUsedAt: 0,
                                      projectId: "", projectLabel: "", performance: nil)
         // DST began 2026-03-08 02:00 EST in New York: 00:00-01:59 on that
         // day are still EST (UTC-5); 03:00+ is EDT (UTC-4). The "before"
         // row is the last second of the previous local day.
-        row.startedAt = "2026-03-07T23:59:59-05:00" // 04:59:59Z, before local midnight
+        row.startedAt = UsageCore.timestampMs("2026-03-07T23:59:59-05:00") // 04:59:59Z, before local midnight
         row.lastUsedAt = row.startedAt
         let before = Adapters.periodRows(rows: [row], sinceMs: dayStart, client: "dsh", includeUndated: false, timeZone: tz)
         checkEqual(before.count, 0, "DST: pre-midnight row excluded from today")
 
-        row.startedAt = "2026-03-08T00:00:00-05:00" // 05:00Z == local midnight exactly
+        row.startedAt = UsageCore.timestampMs("2026-03-08T00:00:00-05:00") // 05:00Z == local midnight exactly
         row.lastUsedAt = row.startedAt
         let atMidnight = Adapters.periodRows(rows: [row], sinceMs: dayStart, client: "dsh", includeUndated: false, timeZone: tz)
         checkEqual(atMidnight.count, 1, "DST: exact-midnight row included in today")
 
-        row.startedAt = "2026-03-08T03:30:00-04:00" // after the switch, EDT
+        row.startedAt = UsageCore.timestampMs("2026-03-08T03:30:00-04:00") // after the switch, EDT
         row.lastUsedAt = row.startedAt
         let after = Adapters.periodRows(rows: [row], sinceMs: dayStart, client: "dsh", includeUndated: false, timeZone: tz)
         checkEqual(after.count, 1, "DST: post-switch row included in today")
-        checkEqual(Adapters.localDateKey(UsageCore.timestampMs(row.startedAt), timeZone: tz), "2026-03-08", "DST: date key across switch")
+        checkEqual(Adapters.localDateKey(row.startedAt, timeZone: tz), "2026-03-08", "DST: date key across switch")
     }
 }
 
@@ -438,10 +438,11 @@ func shanghaiDate(_ y: Int, _ mo: Int, _ d: Int, _ h: Int, _ mi: Int) -> Date {
 }
 
 func stateRow(client: String, session: String, model: String, input: Double, output: Double, startedAt: String) -> UsageCore.UsageRow {
+    let startedAtMs = UsageCore.timestampMs(startedAt)
     return UsageCore.UsageRow(
         client: client, sessionId: session, model: model, provider: client,
         input: input, output: output, cacheRead: 0, cacheWrite: 0, reasoning: 0,
-        messageCount: 1, cost: 0, startedAt: startedAt, lastUsedAt: startedAt,
+        messageCount: 1, cost: 0, startedAt: startedAtMs, lastUsedAt: startedAtMs,
         projectId: "", projectLabel: "", performance: nil
     )
 }

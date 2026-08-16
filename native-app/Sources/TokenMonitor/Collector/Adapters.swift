@@ -259,7 +259,7 @@ enum Adapters {
     /// buildTokscaleJson + extractUsageFromTokscale's input.
     static func periodRows(rows: [UsageCore.UsageRow], sinceMs: Double, client: String, includeUndated: Bool, timeZone: TimeZone = .current) -> [UsageCore.UsageRow] {
         var filtered = rows.filter { row in
-            let createdAt = UsageCore.timestampMs(row.startedAt.isEmpty ? row.lastUsedAt : row.startedAt)
+            let createdAt = row.startedAt > 0 ? row.startedAt : row.lastUsedAt
             // startedAt is the row's createdAt for adapters; see adapter row builders.
             if createdAt <= 0 { return includeUndated }
             return createdAt >= sinceMs
@@ -281,7 +281,7 @@ enum Adapters {
                 existing.reasoning += row.reasoning
                 existing.messageCount += row.messageCount > 0 ? row.messageCount : 1
                 existing.cost += row.cost
-                if !row.startedAt.isEmpty && (existing.startedAt.isEmpty || row.startedAt < existing.startedAt) {
+                if row.startedAt > 0 && (existing.startedAt == 0 || row.startedAt < existing.startedAt) {
                     existing.startedAt = row.startedAt
                 }
                 if row.lastUsedAt > existing.lastUsedAt { existing.lastUsedAt = row.lastUsedAt }
@@ -300,15 +300,15 @@ enum Adapters {
         var out: [HistoryContribution] = []
         for row in rows {
             // Row createdAt lives in startedAt for adapters.
-            let date = localDateKey(UsageCore.timestampMs(row.startedAt), timeZone: timeZone)
+            let date = localDateKey(row.startedAt, timeZone: timeZone)
             guard !date.isEmpty else { continue }
             let modelId = (row.model ?? "unknown").trimmingCharacters(in: .whitespaces).lowercased()
             let cost = estimatedRowCost(row: row, pricingByModel: pricingByModel)
             // Estimated session active time: wall-clock span of the row, clamped
             // to non-negative and capped at 8h so long-lived sessions don't
             // inflate a single day's active time.
-            let started = UsageCore.timestampMs(row.startedAt)
-            let ended = UsageCore.timestampMs(row.lastUsedAt)
+            let started = row.startedAt
+            let ended = row.lastUsedAt
             let activeTimeMs = max(0, min(ended - started, 8 * 60 * 60 * 1000))
             out.append(HistoryContribution(
                 date: date,
@@ -411,8 +411,8 @@ enum Adapters {
                     reasoning: 0,
                     messageCount: 1,
                     cost: 0,
-                    startedAt: UsageCore.isoFromMs(createdAt),
-                    lastUsedAt: UsageCore.isoFromMs(createdAt),
+                    startedAt: createdAt,
+                    lastUsedAt: createdAt,
                     projectId: "",
                     projectLabel: "",
                     performance: nil
@@ -420,8 +420,8 @@ enum Adapters {
             }
         }
         guard var row = best else { return nil }
-        row.startedAt = UsageCore.isoFromMs(latestCreatedAt)
-        row.lastUsedAt = UsageCore.isoFromMs(latestCreatedAt)
+        row.startedAt = latestCreatedAt
+        row.lastUsedAt = latestCreatedAt
         return row
     }
 
@@ -497,8 +497,8 @@ enum Adapters {
                 reasoning: 0,
                 messageCount: 1,
                 cost: 0,
-                startedAt: UsageCore.isoFromMs(createdAt),
-                lastUsedAt: UsageCore.isoFromMs(createdAt),
+                startedAt: createdAt,
+                lastUsedAt: createdAt,
                 projectId: "",
                 projectLabel: "",
                 performance: nil
@@ -983,8 +983,8 @@ enum Adapters {
             reasoning: 0,
             messageCount: 1,
             cost: 0,
-            startedAt: UsageCore.isoFromMs(createdAt),
-            lastUsedAt: UsageCore.isoFromMs(lastTime),
+            startedAt: createdAt,
+            lastUsedAt: lastTime,
             projectId: "",
             projectLabel: "",
             performance: nil

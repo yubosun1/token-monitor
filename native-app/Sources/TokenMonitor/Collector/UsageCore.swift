@@ -176,8 +176,8 @@ enum UsageCore {
         var reasoning: Double
         var messageCount: Double
         var cost: Double
-        var startedAt: String
-        var lastUsedAt: String
+        var startedAt: Double
+        var lastUsedAt: Double
         var projectId: String
         var projectLabel: String
         var performance: TokscalePerformance?
@@ -196,8 +196,8 @@ enum UsageCore {
             reasoning: entry.reasoning ?? 0,
             messageCount: entry.messageCount ?? 0,
             cost: entry.cost,
-            startedAt: entry.startedAt ?? "",
-            lastUsedAt: entry.lastUsedAt ?? "",
+            startedAt: timestampMs(entry.startedAt ?? ""),
+            lastUsedAt: timestampMs(entry.lastUsedAt ?? ""),
             projectId: entry.projectId ?? "",
             projectLabel: entry.projectLabel ?? "",
             performance: entry.performance
@@ -265,13 +265,11 @@ enum UsageCore {
             cacheReadTokens += cacheRead
             cacheWriteTokens += cacheWrite
             reasoningTokens += max(0, Int(row.reasoning.rounded()))
-            let rowStartedMs = timestampMs(row.startedAt)
-            if rowStartedMs > 0 && (startedAtMs == 0 || rowStartedMs < startedAtMs) {
-                startedAtMs = rowStartedMs
+            if row.startedAt > 0 && (startedAtMs == 0 || row.startedAt < startedAtMs) {
+                startedAtMs = row.startedAt
             }
-            let rowLastMs = timestampMs(row.lastUsedAt)
-            if rowLastMs > lastUsedAtMs {
-                lastUsedAtMs = rowLastMs
+            if row.lastUsedAt > lastUsedAtMs {
+                lastUsedAtMs = row.lastUsedAt
             }
             if projectId.isEmpty && !row.projectId.isEmpty {
                 projectId = row.projectId
@@ -612,8 +610,8 @@ enum UsageCore {
         session["cacheReadTokens"] = max(0, Int(row.cacheRead.rounded()))
         session["cacheWriteTokens"] = max(0, Int(row.cacheWrite.rounded()))
         session["reasoningTokens"] = max(0, Int(row.reasoning.rounded()))
-        session["startedAt"] = row.startedAt
-        session["lastUsedAt"] = row.lastUsedAt
+        session["startedAt"] = row.startedAt > 0 ? isoFromMs(row.startedAt) : ""
+        session["lastUsedAt"] = row.lastUsedAt > 0 ? isoFromMs(row.lastUsedAt) : ""
         session["projectId"] = row.projectId
         session["projectLabel"] = row.projectLabel
         if let model = normalizeModelName(row.model ?? ""), intValue(session["totalTokens"]) > 0 {
