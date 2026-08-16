@@ -1104,25 +1104,45 @@ final class Collector {
         ]
     }
 
-    private func contentSignature(_ stats: [String: Any]) -> String {
-        var parts: [String] = []
+    private func contentSignature(_ stats: [String: Any]) -> UInt64 {
+        // FNV-1a hash over the same fields the old string signature used.
+        // Replaces [String] allocation + String(format:) + joined() with
+        // a single UInt64 — cheaper to compute and compare. Quantization
+        // to 4 decimal places matches the old %.4f string behavior.
+        var hash: UInt64 = 0xcbf29ce484222325
+        func mix(_ value: UInt64) {
+            hash ^= value
+            hash &*= 0x100000001b3
+        }
+        func mixStr(_ s: String) {
+            for byte in s.utf8 { mix(UInt64(byte)) }
+        }
+        func mixCost(_ v: Double) {
+            let q = v.isFinite ? (v * 10000).rounded() : 0
+            mix(q.bitPattern)
+        }
+
         let periods = stats["periods"] as? [String: Any] ?? [:]
         for name in ["today", "month", "allTime"] {
             guard let period = periods[name] as? [String: Any] else { continue }
-            parts.append("\(name)=\(UsageCore.intValue(period["totalTokens"])):\(String(format: "%.4f", UsageCore.doubleValue(period["costUsd"])))")
+            mixStr(name)
+            mix(UInt64(UsageCore.intValue(period["totalTokens"])))
+            mixCost(UsageCore.doubleValue(period["costUsd"]))
             if let costs = period["clientCosts"] as? [String: Any] {
                 for (client, cost) in costs.sorted(by: { $0.key < $1.key }) {
-                    parts.append("\(name).cc.\(client)=\(String(format: "%.4f", UsageCore.doubleValue(cost)))")
+                    mixStr(client)
+                    mixCost(UsageCore.doubleValue(cost))
                 }
             }
         }
         if let device = (stats["devices"] as? [[String: Any]])?.first,
            let statuses = device["clientStatus"] as? [String: Any] {
             for (client, status) in statuses.sorted(by: { $0.key < $1.key }) {
-                parts.append("cs.\(client)=\(status)")
+                mixStr(client)
+                mixStr(String(describing: status))
             }
         }
-        return parts.joined(separator: "|")
+        return hash
     }
 
     private func deriveClientStatus(clients: [String], allTimePeriod: [String: Any]) -> [String: String] {
