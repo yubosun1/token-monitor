@@ -70,7 +70,6 @@ native-app/
   Resources/               tokenMonitorBridge.js（替代 Electron preload 的桥）
   Vendor/                  tokscale 二进制 + libzstd 静态库（vendor 化）
   scripts/                 build-app.sh（打包渲染层 + 构建）、stage-www.sh 等
-  docs/                    性能与调优记录
 src/electron/renderer/     原版渲染层（唯一保留的 JS 界面代码）
 assets/icons/              客户端图标
 ```
