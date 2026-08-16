@@ -95,15 +95,43 @@ enum UsageCore {
         return 0
     }
 
+    /// Shared ISO8601 formatters: creating an ISO8601DateFormatter is
+    /// expensive (~0.2-0.5ms), and timestampMs/isoFromMs run once per row
+    /// per period during every derive — per-call instances made a dsh
+    /// re-derive take seconds. Instances are immutable; a lock guards the
+    /// (negligibly contended) shared use.
+    private static let iso8601Lock = NSLock()
+    private static let iso8601Parser = ISO8601DateFormatter()
+    private static let iso8601Writer = ISO8601DateFormatter()
+
+    /// Row timestamps repeat across ticks (the same rows are re-derived on
+    /// every append), so memoize string → ms parses; the cache turns a warm
+    /// derive's per-row parsing into dict lookups. Bounded to keep junk
+    /// strings (e.g. malformed lines) from growing it unboundedly.
+    private static let timestampCacheLock = NSLock()
+    private static var timestampCache: [String: Double] = [:]
+    private static let timestampCacheLimit = 50_000
+
     static func timestampMs(_ value: Any?) -> Double {
         guard let value else { return 0 }
         if let n = value as? Double, n.isFinite { return n > 0 && n < 1e12 ? n * 1000 : n }
         if let n = value as? Int { return Double(n) > 0 && Double(n) < 1e12 ? Double(n) * 1000 : Double(n) }
         if let s = value as? String, !s.isEmpty {
             if let n = Double(s), n.isFinite { return n > 0 && n < 1e12 ? n * 1000 : n }
-            let parsed = ISO8601DateFormatter().date(from: s) ?? RFC3339DateParser.parse(s)
-            if let parsed { return parsed.timeIntervalSince1970 * 1000 }
-            return 0
+            timestampCacheLock.lock()
+            let cached = timestampCache[s]
+            timestampCacheLock.unlock()
+            if let cached { return cached }
+            iso8601Lock.lock()
+            // Fast static formatters first (they cover every canonical shape
+            // we emit), then the ISO8601 parser for exotic variants.
+            let parsed = RFC3339DateParser.parse(s) ?? iso8601Parser.date(from: s)
+            iso8601Lock.unlock()
+            let ms = parsed.map { $0.timeIntervalSince1970 * 1000 } ?? 0
+            timestampCacheLock.lock()
+            if timestampCache.count < timestampCacheLimit { timestampCache[s] = ms }
+            timestampCacheLock.unlock()
+            return ms
         }
         return 0
     }
@@ -128,7 +156,10 @@ enum UsageCore {
 
     static func isoFromMs(_ ms: Double) -> String {
         guard ms > 0 else { return "" }
-        return ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: ms / 1000))
+        iso8601Lock.lock()
+        let out = iso8601Writer.string(from: Date(timeIntervalSince1970: ms / 1000))
+        iso8601Lock.unlock()
+        return out
     }
 
     // MARK: - Row → period

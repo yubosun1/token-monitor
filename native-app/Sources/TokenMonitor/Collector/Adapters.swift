@@ -40,6 +40,11 @@ enum Adapters {
     private static var fileListCache: [String: (stamp: (Date, Int), urls: [URL])] = [:]
     private static var parseCache: [String: (stamp: (Date, Int), value: Any)] = [:]
     private static var decompressCounter = 0
+    /// Per-file streaming state for incremental re-reads of actively
+    /// appending dsh sessions (see DshIncrementalState). Guarded by
+    /// fileCacheLock; an entry is dropped after the session stops changing
+    /// (one final full verify) or when the file disappears.
+    private static var dshIncrementalStates: [String: DshIncrementalState] = [:]
 
     // MARK: - Cache lifecycle diagnostics (round-4 Phase 5 test seams)
 
@@ -65,12 +70,25 @@ enum Adapters {
         return Set(parseCache.keys.filter { $0.hasPrefix("dsh|") }.map { String($0.dropFirst(4)) })
     }
 
+    /// Number of files currently holding incremental streaming state
+    /// (fixture seam: dropped after idle verification or pruning).
+    static var dshIncrementalStateCount: Int {
+        fileCacheLock.lock(); defer { fileCacheLock.unlock() }
+        return dshIncrementalStates.count
+    }
+
     /// Drop dsh parse entries whose file is no longer in the active set
-    /// (deleted sessions), so the cache stays bounded by live files.
+    /// (deleted sessions), so the cache stays bounded by live files. The
+    /// incremental streaming states are pruned the same way (streams freed).
     static func pruneDshParseCache(activeFiles: Set<String>) {
         fileCacheLock.lock(); defer { fileCacheLock.unlock() }
         parseCache = parseCache.filter { key, _ in
             !key.hasPrefix("dsh|") || activeFiles.contains(String(key.dropFirst(4)))
+        }
+        for path in dshIncrementalStates.keys where !activeFiles.contains(path) {
+            if var state = dshIncrementalStates.removeValue(forKey: path) {
+                freeDshStream(&state)
+            }
         }
     }
 
@@ -93,6 +111,13 @@ enum Adapters {
         }
         fileListCache = fileListCache.filter { key, _ in
             !disabled.contains { client in key.hasPrefix("list|" + client + "|") }
+        }
+        if disabled.contains("dsh") {
+            for path in dshIncrementalStates.keys {
+                if var state = dshIncrementalStates.removeValue(forKey: path) {
+                    freeDshStream(&state)
+                }
+            }
         }
         fileCacheLock.unlock()
     }
@@ -533,32 +558,39 @@ enum Adapters {
         defer { ZSTD_freeDStream(stream) }
         let initResult = ZSTD_initDStream(stream)
         guard ZSTD_isError(initResult) == 0 else { return nil }
+        let (output, ok) = feedZstd(stream, input: compressed, diag: diag, name: url.lastPathComponent)
+        return ok ? output : nil
+    }
 
+    /// Feed compressed bytes through a streaming decoder, returning the
+    /// decompressed output. Errors surface as (nil, false). Used both for
+    /// full parses and for incremental tail feeds on a retained stream.
+    private static func feedZstd(_ stream: OpaquePointer, input: Data, diag: Bool = false, name: String = "?") -> (output: Data?, ok: Bool) {
         var output = Data()
         var chunk = [UInt8](repeating: 0, count: 1 << 16)
-        return compressed.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> Data? in
-            var input = ZSTD_inBuffer(src: raw.baseAddress, size: raw.count, pos: 0)
+        return input.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> (Data?, Bool) in
+            var inBuf = ZSTD_inBuffer(src: raw.baseAddress, size: raw.count, pos: 0)
             var keepGoing = true
             while keepGoing {
                 let produced = chunk.withUnsafeMutableBytes { (outRaw: UnsafeMutableRawBufferPointer) -> Int in
                     var out = ZSTD_outBuffer(dst: outRaw.baseAddress, size: outRaw.count, pos: 0)
-                    let ret = ZSTD_decompressStream(stream, &out, &input)
+                    let ret = ZSTD_decompressStream(stream, &out, &inBuf)
                     if ZSTD_isError(ret) != 0 {
                         if diag {
-                            NSLog("[dsh] stream error for %@: %@", url.lastPathComponent,
+                            NSLog("[dsh] stream error for %@: %@", name,
                                   String(cString: ZSTD_getErrorName(Int(ret))))
                         }
                         return -1
                     }
                     return out.pos
                 }
-                guard produced >= 0 else { return nil }
+                guard produced >= 0 else { return (nil, false) }
                 if produced > 0 {
                     output.append(contentsOf: chunk[0..<produced])
                 }
-                keepGoing = (input.pos < input.size) || produced > 0
+                keepGoing = (inBuf.pos < inBuf.size) || produced > 0
             }
-            return output
+            return (output, true)
         }
     }
 
@@ -588,15 +620,257 @@ enum Adapters {
 
     /// Parse one session.jsonl.zstd into usage rows, memoized by
     /// (path, mtime, size) — unchanged sessions skip decompress + parse.
+    /// Actively-appending sessions use the incremental streaming state so a
+    /// re-read only decompresses/parses the appended tail.
     /// Internal (not private) so the fixture checker can drive one file at a
     /// time on temporary zstd fixtures without touching real user sessions.
     static func cachedSessionFileRows(_ file: URL) -> DshFileResult {
-        if let stamp = fileStamp(file) {
-            return cachedValue("dsh|\(file.path)", stamp: stamp) {
-                parseSessionFile(file)
+        guard let stamp = fileStamp(file) else { return parseSessionFile(file) }
+        let key = "dsh|\(file.path)"
+        fileCacheLock.lock()
+        let hit: DshFileResult? = parseCache[key].flatMap { cached in
+            (cached.stamp.0 == stamp.mtime && cached.stamp.1 == stamp.size) ? cached.value as? DshFileResult : nil
+        }
+        if let hit {
+            // Stable file with a memoized result: free the incremental state
+            // once the file has been untouched for a grace period. The grace
+            // matters: a slowly-appending session (one line per tick) is
+            // unchanged on most ticks, and dropping its stream after the
+            // first stable tick would force a full re-parse on every append.
+            if var state = dshIncrementalStates[file.path],
+               state.stamp.mtime == stamp.mtime, state.stamp.size == stamp.size,
+               Date().timeIntervalSince(stamp.mtime) > 120 {
+                freeDshStream(&state)
+                dshIncrementalStates[file.path] = nil
             }
         }
-        return parseSessionFile(file)
+        fileCacheLock.unlock()
+        if let hit { return hit }
+        return dshRead(file, key: key, stamp: stamp)
+    }
+
+    /// A file that changed since its last read: first touch does a full
+    /// parse and keeps streaming state; later appends feed only the tail;
+    /// a file that stopped changing gets one final full verify (which also
+    /// memoizes the result and drops the state). Truncation/rewrites reset.
+    private static func dshRead(_ file: URL, key: String, stamp: (mtime: Date, size: Int)) -> DshFileResult {
+        fileCacheLock.lock()
+        var state = dshIncrementalStates[file.path]
+        fileCacheLock.unlock()
+
+        if var s = state {
+            if stamp.size < s.compressedOffset {
+                // Truncated: the retained stream position is invalid.
+                freeDshStream(&s)
+                fileCacheLock.lock()
+                dshIncrementalStates[file.path] = nil
+                fileCacheLock.unlock()
+                state = nil
+            } else if s.stamp.mtime == stamp.mtime && s.stamp.size == stamp.size {
+                // Unchanged since the last incremental parse: one final full
+                // re-parse corrects any in-flight model attribution,
+                // memoizes the result, and drops the streaming state.
+                let full = parseSessionFile(file)
+                freeDshStream(&s)
+                fileCacheLock.lock()
+                dshIncrementalStates[file.path] = nil
+                parseCache[key] = (stamp, full)
+                fileCacheLock.unlock()
+                return full
+            } else if headFingerprint(file) != s.headFingerprint {
+                // Rewritten in place (frame header changed): reset.
+                freeDshStream(&s)
+                fileCacheLock.lock()
+                dshIncrementalStates[file.path] = nil
+                fileCacheLock.unlock()
+                state = nil
+            } else {
+                return feedDshDelta(file, state: &s, stamp: stamp)
+            }
+        }
+        return dshFullParseAndInit(file, key: key, stamp: stamp)
+    }
+
+    /// First read (or reset): full decompression through a fresh streaming
+    /// decoder, full two-pass parse, then keep decoder + accumulation state
+    /// for cheap appends. Memoizes the initial result as well.
+    private static func dshFullParseAndInit(_ file: URL, key: String, stamp: (mtime: Date, size: Int)) -> DshFileResult {
+        guard let compressed = try? Data(contentsOf: file) else { return DshFileResult() }
+        guard let stream = ZSTD_createDStream(),
+              ZSTD_isError(ZSTD_initDStream(stream)) == 0 else { return DshFileResult() }
+        fileCacheLock.lock()
+        decompressCounter += 1
+        fileCacheLock.unlock()
+        let (output, ok) = feedZstd(stream, input: compressed)
+        guard ok, let output else {
+            ZSTD_freeDStream(stream)
+            return DshFileResult()
+        }
+        let sessionId = file.deletingLastPathComponent().lastPathComponent
+        let parsed = parseSessionData(output, sessionId: sessionId)
+        let result = DshFileResult(rows: parsed.rows, events: parsed.events)
+        let state = DshIncrementalState(
+            sessionId: sessionId,
+            stamp: stamp,
+            compressedOffset: compressed.count,
+            headFingerprint: headFingerprint(file),
+            stream: stream,
+            seenSeq: parsed.seenSeq,
+            fallbackModel: parsed.fallbackModel,
+            headerCreatedAt: parsed.headerCreatedAt,
+            lastTime: parsed.lastTime,
+            pendingEvents: [],
+            rows: parsed.rows,
+            totalEvents: parsed.events
+        )
+        fileCacheLock.lock()
+        dshIncrementalStates[file.path] = state
+        parseCache[key] = (stamp, result)
+        fileCacheLock.unlock()
+        return result
+    }
+
+    /// Feed the appended tail through the retained streaming decoder and
+    /// parse only the new lines. Usage events whose (turn, step) model is
+    /// not yet known are held as pending until a finish chunk resolves them
+    /// (or the final idle verify emits them with the fallback model).
+    private static func feedDshDelta(_ file: URL, state: inout DshIncrementalState, stamp: (mtime: Date, size: Int)) -> DshFileResult {
+        guard let handle = try? FileHandle(forReadingFrom: file) else {
+            return DshFileResult(rows: state.rows, events: state.totalEvents)
+        }
+        defer { try? handle.close() }
+        try? handle.seek(toOffset: UInt64(state.compressedOffset))
+        guard let tail = try? handle.readToEnd(), !tail.isEmpty else {
+            state.stamp = stamp
+            return DshFileResult(rows: state.rows, events: state.totalEvents)
+        }
+        fileCacheLock.lock()
+        decompressCounter += 1
+        fileCacheLock.unlock()
+        guard let stream = state.stream else {
+            freeDshStream(&state)
+            return dshFullParseAndInit(file, key: "dsh|\(file.path)", stamp: stamp)
+        }
+        let diag = ProcessInfo.processInfo.environment["TOKEN_MONITOR_DIAG"] != nil
+        let (output, ok) = feedZstd(stream, input: tail, diag: diag, name: file.lastPathComponent)
+        state.compressedOffset += tail.count
+        state.stamp = stamp
+        guard ok, let output else {
+            // Decode failure mid-append: restart from scratch.
+            freeDshStream(&state)
+            return dshFullParseAndInit(file, key: "dsh|\(file.path)", stamp: stamp)
+        }
+        if !output.isEmpty, let text = String(data: output, encoding: .utf8) {
+            parseDeltaLines(text, state: &state)
+        }
+        if diag {
+            NSLog("[dsh] delta %@ tail=%d bytes events=%d rows=%d", file.lastPathComponent, tail.count, state.totalEvents, state.rows.count)
+        }
+        fileCacheLock.lock()
+        dshIncrementalStates[file.path] = state
+        fileCacheLock.unlock()
+        return DshFileResult(rows: state.rows, events: state.totalEvents)
+    }
+
+    private static func parseDeltaLines(_ text: String, state: inout DshIncrementalState) {
+        for line in text.split(whereSeparator: \.isNewline) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty, let lineData = trimmed.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: lineData) as? JSON else { continue }
+            let seq = obj["seq"] as? Int ?? 0
+            if state.seenSeq.contains(seq) { continue }
+            state.seenSeq.insert(seq)
+            let time = UsageCore.timestampMs(obj["time"])
+            if time > state.lastTime { state.lastTime = time }
+            let type = obj["type"] as? String ?? ""
+            let data = obj["data"] as? JSON ?? JSON()
+            if type == "session" {
+                if let createdAt = obj["createdAt"] { state.headerCreatedAt = UsageCore.timestampMs(createdAt) }
+                continue
+            }
+            if type == "request/header" || type == "request/context" {
+                let header = data["header"] as? JSON ?? data
+                let config = header["config"] as? JSON ?? header
+                if let model = config["model"] as? String { state.fallbackModel = model }
+                continue
+            }
+            if type == "assistant/chunk" {
+                let chunk = data["chunk"] as? JSON ?? JSON()
+                let chunkType = chunk["type"] as? String ?? ""
+                let turn = data["turn"] as? Int ?? 0
+                let step = data["step"] as? Int ?? 0
+                if chunkType == "usage", let usage = chunk["usage"] as? JSON {
+                    state.pendingEvents.append(PendingDshEvent(turn: turn, step: step, time: time, usage: usage))
+                    state.totalEvents += 1
+                } else if chunkType == "finish" {
+                    if let model = (chunk["replayState"] as? JSON)?["model"] as? String {
+                        resolvePendingDshEvents(&state, turn: turn, step: step, model: model)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Emit rows for pending usage events whose (turn, step) model just
+    /// became known, in arrival order.
+    private static func resolvePendingDshEvents(_ state: inout DshIncrementalState, turn: Int, step: Int, model: String) {
+        var index = 0
+        while index < state.pendingEvents.count {
+            let event = state.pendingEvents[index]
+            if event.turn == turn && event.step == step {
+                state.rows.append(makeDshRow(
+                    sessionId: state.sessionId, model: model, eventTime: event.time,
+                    headerCreatedAt: state.headerCreatedAt, lastTime: state.lastTime, usage: event.usage
+                ))
+                state.pendingEvents.remove(at: index)
+            } else {
+                index += 1
+            }
+        }
+    }
+
+    /// First 64 bytes of the compressed file: cheap rewrite detector for
+    /// the incremental path (a truncated/recompressed file changes its
+    /// frame header, while plain appends keep the prefix identical).
+    private static func headFingerprint(_ file: URL) -> [UInt8] {
+        guard let handle = try? FileHandle(forReadingFrom: file) else { return [] }
+        defer { try? handle.close() }
+        return Array((try? handle.read(upToCount: 64)) ?? Data())
+    }
+
+    private static func freeDshStream(_ state: inout DshIncrementalState) {
+        if let stream = state.stream {
+            ZSTD_freeDStream(stream)
+            state.stream = nil
+        }
+    }
+
+    /// One pending usage event awaiting its (turn, step) model.
+    struct PendingDshEvent {
+        var turn: Int
+        var step: Int
+        var time: Double
+        var usage: JSON
+    }
+
+    /// Streaming state for one session.jsonl.zstd that is actively
+    /// appending: a retained ZSTD decoder positioned at compressedOffset,
+    /// the accumulated parse context and the accumulated rows. Only files
+    /// that changed recently hold a state; stable files are memoized and
+    /// their streams freed.
+    struct DshIncrementalState {
+        var sessionId: String
+        var stamp: (mtime: Date, size: Int)
+        var compressedOffset: Int
+        var headFingerprint: [UInt8]
+        var stream: OpaquePointer?
+        var seenSeq: Set<Int>
+        var fallbackModel: String
+        var headerCreatedAt: Double
+        var lastTime: Double
+        var pendingEvents: [PendingDshEvent]
+        var rows: [UsageCore.UsageRow]
+        var totalEvents: Int
     }
 
     private static func parseSessionFile(_ file: URL) -> DshFileResult {
@@ -605,9 +879,26 @@ enum Adapters {
             if diag { NSLog("[dsh] decompress failed: %@", file.path) }
             return DshFileResult()
         }
-        guard let text = String(data: data, encoding: .utf8) else { return DshFileResult() }
-        let sessionDir = file.deletingLastPathComponent()
-        let sessionId = sessionDir.lastPathComponent // session-<uuid>
+        let parsed = parseSessionData(data, sessionId: file.deletingLastPathComponent().lastPathComponent)
+        return DshFileResult(rows: parsed.rows, events: parsed.events)
+    }
+
+    /// Parsed content of one dsh session plus the context an incremental
+    /// delta parse needs to continue (model fallback, timestamps, dedupe).
+    private struct ParsedDshSession {
+        var rows: [UsageCore.UsageRow] = []
+        var events = 0
+        var fallbackModel = "unknown"
+        var headerCreatedAt = 0.0
+        var lastTime = 0.0
+        var seenSeq: Set<Int> = []
+    }
+
+    /// Two-pass parse of a fully decompressed session: pass 1 attributes
+    /// models per (turn, step) from finish chunks plus the session-level
+    /// fallback model from request/header; pass 2 builds usage rows.
+    private static func parseSessionData(_ data: Data, sessionId: String) -> ParsedDshSession {
+        guard let text = String(data: data, encoding: .utf8) else { return ParsedDshSession() }
 
         // Pass 1: attribute models per (turn, step) from finish chunks,
         // plus the session-level fallback model from request/header.
@@ -663,38 +954,44 @@ enum Adapters {
             let turn = event["turn"] as? Int ?? 0
             let step = event["step"] as? Int ?? 0
             let model = stepModels["\(turn):\(step)"] ?? fallbackModel
-            let input = UsageCore.doubleValue(usage["inputTokens"])
-            let output = UsageCore.doubleValue(usage["outputTokens"])
-            let cacheRead = UsageCore.doubleValue(usage["cacheReadTokens"])
-            let cacheWrite = UsageCore.doubleValue(usage["cacheWriteTokens"])
-            // Attribute each usage event to its own timestamp (not the
-            // session header's createdAt): a session that spans local
-            // midnight must contribute to the day its tokens were actually
-            // spent, so "today" includes every session active today
-            // (periodRows filters on startedAt; proma/hanako rows already
-            // carry per-message times). Fall back to the header time when
-            // the event line has none.
             let eventTime = UsageCore.doubleValue(event["time"])
-            let createdAt = eventTime > 0 ? eventTime : (headerCreatedAt > 0 ? headerCreatedAt : lastTime)
-            rows.append(UsageCore.UsageRow(
-                client: "dsh",
-                sessionId: sessionId,
-                model: model,
-                provider: "dsh",
-                input: input,
-                output: output,
-                cacheRead: cacheRead,
-                cacheWrite: cacheWrite,
-                reasoning: 0,
-                messageCount: 1,
-                cost: 0,
-                startedAt: UsageCore.isoFromMs(createdAt),
-                lastUsedAt: UsageCore.isoFromMs(lastTime),
-                projectId: "",
-                projectLabel: "",
-                performance: nil
+            rows.append(makeDshRow(
+                sessionId: sessionId, model: model, eventTime: eventTime,
+                headerCreatedAt: headerCreatedAt, lastTime: lastTime, usage: usage
             ))
         }
-        return DshFileResult(rows: rows, events: usageEvents.count)
+        return ParsedDshSession(
+            rows: rows, events: usageEvents.count,
+            fallbackModel: fallbackModel, headerCreatedAt: headerCreatedAt,
+            lastTime: lastTime, seenSeq: seenSeq
+        )
+    }
+
+    /// One usage row from a usage event. Attribute each event to its own
+    /// timestamp (not the session header's createdAt): a session that spans
+    /// local midnight must contribute to the day its tokens were actually
+    /// spent, so "today" includes every session active today (periodRows
+    /// filters on startedAt; proma/hanako rows already carry per-message
+    /// times). Fall back to the header time when the event line has none.
+    private static func makeDshRow(sessionId: String, model: String, eventTime: Double, headerCreatedAt: Double, lastTime: Double, usage: JSON) -> UsageCore.UsageRow {
+        let createdAt = eventTime > 0 ? eventTime : (headerCreatedAt > 0 ? headerCreatedAt : lastTime)
+        return UsageCore.UsageRow(
+            client: "dsh",
+            sessionId: sessionId,
+            model: model,
+            provider: "dsh",
+            input: UsageCore.doubleValue(usage["inputTokens"]),
+            output: UsageCore.doubleValue(usage["outputTokens"]),
+            cacheRead: UsageCore.doubleValue(usage["cacheReadTokens"]),
+            cacheWrite: UsageCore.doubleValue(usage["cacheWriteTokens"]),
+            reasoning: 0,
+            messageCount: 1,
+            cost: 0,
+            startedAt: UsageCore.isoFromMs(createdAt),
+            lastUsedAt: UsageCore.isoFromMs(lastTime),
+            projectId: "",
+            projectLabel: "",
+            performance: nil
+        )
     }
 }

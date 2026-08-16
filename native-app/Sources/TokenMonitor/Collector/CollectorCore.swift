@@ -813,9 +813,20 @@ final class Collector {
                 collectedAt: Date()
             )
             self.stateLock.lock()
+            let previous = self.statsCache
             self.statsCache = stats
             self.stateLock.unlock()
-            self.environment.push("stats:push", BridgeCore.shared.statsPushPayload(stats))
+            // Gate like the main tick: only push when the payload actually
+            // changed, so a limits refresh with no new data skips the push.
+            let changed: Bool
+            if let previous {
+                changed = !(previous as NSDictionary).isEqual(to: stats)
+            } else {
+                changed = true
+            }
+            if changed {
+                self.environment.push("stats:push", BridgeCore.shared.statsPushPayload(stats))
+            }
         }
     }
 
