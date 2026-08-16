@@ -525,15 +525,10 @@ final class SettingsViewController: NSViewController {
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
-        stack.edgeInsets = NSEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
-        stack.wantsLayer = true
-        stack.layer?.backgroundColor = AppTheme.cardColor.cgColor
-        stack.layer?.cornerRadius = 8
-        stack.layer?.borderWidth = 1
-        stack.layer?.borderColor = AppTheme.cardBorderColor.cgColor
+        stack.edgeInsets = NSEdgeInsets(top: 12, left: 14, bottom: 10, right: 14)
         pendingWidthConstraints.append(stack.widthAnchor.constraint(equalTo: contentStack.widthAnchor))
-        let label = NSTextField(labelWithString: title)
-        label.font = AppTheme.titleFont
+        let label = NSTextField(labelWithString: title.uppercased())
+        label.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .semibold)
         label.textColor = AppTheme.textPrimary
         label.isBezeled = false
         label.drawsBackground = false

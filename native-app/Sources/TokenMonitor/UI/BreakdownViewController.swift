@@ -133,6 +133,7 @@ final class BreakdownViewController: NSViewController {
 private final class BreakdownRowView: NSView {
     private let dot = NSView()
     private let nameLabel = NSTextField(labelWithString: "")
+    private let subtitleLabel = NSTextField(labelWithString: "")
     private let tokensLabel = NSTextField(labelWithString: "")
     private let costLabel = NSTextField(labelWithString: "")
     private let barBg = NSView()
@@ -142,6 +143,7 @@ private final class BreakdownRowView: NSView {
     private var tracking: NSTrackingArea?
     private var hover = false
     private var hasAccordion = false
+    private var barFillWidth: NSLayoutConstraint?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -162,30 +164,47 @@ private final class BreakdownRowView: NSView {
         dot.translatesAutoresizingMaskIntoConstraints = false
 
         configureLabel(nameLabel, font: AppTheme.bodyFont, color: AppTheme.textPrimary)
-        configureLabel(tokensLabel, font: AppTheme.monoFont, color: AppTheme.textPrimary)
-        configureLabel(costLabel, font: AppTheme.smallFont, color: AppTheme.textTertiary)
+        configureLabel(subtitleLabel, font: AppTheme.microFont, color: AppTheme.textSecondary)
+        subtitleLabel.isHidden = true
+        configureLabel(tokensLabel, font: AppTheme.bodyFont, color: AppTheme.textPrimary)
+        configureLabel(costLabel, font: AppTheme.microFont, color: AppTheme.textSecondary)
+        tokensLabel.alignment = .right
+        costLabel.alignment = .right
 
+        // 名称列（mark + 标题/副标题）
+        let labelStack = NSStackView(views: [nameLabel, subtitleLabel])
+        labelStack.orientation = .vertical
+        labelStack.alignment = .leading
+        labelStack.spacing = 1
+        nameLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+
+        let nameRow = NSStackView(views: [dot, labelStack])
+        nameRow.orientation = .horizontal
+        nameRow.alignment = .top
+        nameRow.spacing = 8
+        nameRow.setContentHuggingPriority(.defaultLow, for: .horizontal)
+
+        // 指标列（value + cost 右对齐堆叠）
+        let metrics = NSStackView(views: [tokensLabel, costLabel])
+        metrics.orientation = .vertical
+        metrics.alignment = .trailing
+        metrics.spacing = 2
+        metrics.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+
+        let head = NSStackView(views: [nameRow, metrics])
+        head.orientation = .horizontal
+        head.alignment = .centerY
+        head.spacing = 10
+
+        // 进度条（原版 .bar：6px 全宽）
         barBg.wantsLayer = true
-        barBg.layer?.backgroundColor = AppTheme.cardBorderColor.cgColor
-        barBg.layer?.cornerRadius = 2
+        barBg.layer?.backgroundColor = NSColor(calibratedRed: 4/255, green: 8/255, blue: 13/255, alpha: 0.46).cgColor
+        barBg.layer?.cornerRadius = 3
         barBg.translatesAutoresizingMaskIntoConstraints = false
         barFill.wantsLayer = true
-        barFill.layer?.cornerRadius = 2
+        barFill.layer?.cornerRadius = 3
         barFill.translatesAutoresizingMaskIntoConstraints = false
         barBg.addSubview(barFill)
-
-        let topRow = NSStackView(views: [dot, nameLabel, tokensLabel, costLabel])
-        topRow.orientation = .horizontal
-        topRow.alignment = .centerY
-        topRow.spacing = 6
-        nameLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        tokensLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
-        costLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
-
-        let bottomRow = NSStackView(views: [barBg])
-        bottomRow.orientation = .horizontal
-        bottomRow.alignment = .centerY
-        barBg.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
         accordionStack.orientation = .vertical
         accordionStack.alignment = .leading
@@ -193,25 +212,36 @@ private final class BreakdownRowView: NSView {
         accordionStack.translatesAutoresizingMaskIntoConstraints = false
         accordionStack.isHidden = true
 
-        let stack = NSStackView(views: [topRow, bottomRow, accordionStack])
+        let stack = NSStackView(views: [head, barBg, accordionStack])
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 4
-        stack.edgeInsets = NSEdgeInsets(top: 7, left: 14, bottom: 7, right: 14)
+        stack.spacing = 6
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
+
+        // 底部发丝线（原版 .row border-bottom）
+        let sep = NSView()
+        sep.wantsLayer = true
+        sep.layer?.backgroundColor = AppTheme.hairlineColor.cgColor
+        sep.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(sep)
+
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: trailingAnchor),
-            stack.topAnchor.constraint(equalTo: topAnchor),
-            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+            stack.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
             dot.widthAnchor.constraint(equalToConstant: 8),
             dot.heightAnchor.constraint(equalToConstant: 8),
-            barBg.heightAnchor.constraint(equalToConstant: 4),
-            barBg.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -28),
+            barBg.heightAnchor.constraint(equalToConstant: 6),
+            barBg.widthAnchor.constraint(equalTo: stack.widthAnchor),
             barFill.leadingAnchor.constraint(equalTo: barBg.leadingAnchor),
             barFill.topAnchor.constraint(equalTo: barBg.topAnchor),
             barFill.bottomAnchor.constraint(equalTo: barBg.bottomAnchor),
+            sep.leadingAnchor.constraint(equalTo: leadingAnchor),
+            sep.trailingAnchor.constraint(equalTo: trailingAnchor),
+            sep.bottomAnchor.constraint(equalTo: bottomAnchor),
+            sep.heightAnchor.constraint(equalToConstant: 1),
         ])
     }
 
@@ -228,7 +258,9 @@ private final class BreakdownRowView: NSView {
 
     func configure(id: String, tokens: Int, cost: Double, maxTokens: Int, isClient: Bool, settings: [String: Any], cacheRead: Int = 0, output: Int = 0) {
         nameLabel.stringValue = isClient ? AppTheme.clientLabel(id) : id
-        tokensLabel.stringValue = Fmt.tokens(tokens)
+        subtitleLabel.stringValue = ""
+        subtitleLabel.isHidden = true
+        tokensLabel.stringValue = Fmt.tokensExact(tokens)
         costLabel.stringValue = Fmt.money(cost, settings: settings)
         let color = isClient ? AppTheme.clientColor(id) : AppTheme.modelColor(id)
         dot.layer?.backgroundColor = color.cgColor
@@ -240,7 +272,7 @@ private final class BreakdownRowView: NSView {
 
         hasAccordion = tokens > 0 && (cacheRead > 0 || output > 0)
         if hasAccordion {
-            renderAccordion(tokens: tokens, cacheRead: cacheRead, output: output, color: color)
+            renderAccordion(tokens: tokens, cacheRead: cacheRead, output: output)
         } else {
             accordionStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
             accordionStack.isHidden = true
@@ -248,9 +280,7 @@ private final class BreakdownRowView: NSView {
         }
     }
 
-    private var barFillWidth: NSLayoutConstraint?
-
-    private func renderAccordion(tokens: Int, cacheRead: Int, output: Int, color: NSColor) {
+    private func renderAccordion(tokens: Int, cacheRead: Int, output: Int) {
         accordionStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         let cacheMiss = max(0, tokens - cacheRead - output)
         let inputTokens = cacheRead + cacheMiss
@@ -267,19 +297,19 @@ private final class BreakdownRowView: NSView {
             row.alignment = .centerY
             row.spacing = 6
             let l = NSTextField(labelWithString: pct.isEmpty ? label : "\(label) \(pct)")
-            l.font = AppTheme.smallFont
+            l.font = AppTheme.microFont
             l.textColor = AppTheme.textSecondary
             l.isBezeled = false
             l.drawsBackground = false
             l.setContentHuggingPriority(.defaultLow, for: .horizontal)
-            let v = NSTextField(labelWithString: Fmt.tokens(value))
-            v.font = AppTheme.monoFont
+            let v = NSTextField(labelWithString: Fmt.tokensExact(value))
+            v.font = AppTheme.microFont
             v.textColor = AppTheme.textPrimary
             v.isBezeled = false
             v.drawsBackground = false
             row.addArrangedSubview(l)
             row.addArrangedSubview(v)
-            row.edgeInsets = NSEdgeInsets(top: 3, left: 14, bottom: 3, right: 0)
+            row.edgeInsets = NSEdgeInsets(top: 2, left: 16, bottom: 2, right: 0)
             accordionStack.addArrangedSubview(row)
             row.widthAnchor.constraint(equalTo: accordionStack.widthAnchor).isActive = true
         }
@@ -296,19 +326,18 @@ private final class BreakdownRowView: NSView {
 
     override func mouseEntered(with event: NSEvent) {
         hover = true
-        layer?.backgroundColor = AppTheme.hoverColor.cgColor
+        layer?.backgroundColor = AppTheme.panelColor.cgColor
     }
 
     override func mouseExited(with event: NSEvent) {
         hover = false
-        layer?.backgroundColor = expanded ? AppTheme.hoverColor.withAlphaComponent(0.5).cgColor : .clear
+        layer?.backgroundColor = .clear
     }
 
     override func mouseDown(with event: NSEvent) {
         guard hasAccordion else { return }
         expanded.toggle()
         accordionStack.isHidden = !expanded
-        layer?.backgroundColor = expanded ? AppTheme.hoverColor.withAlphaComponent(0.5).cgColor : (hover ? AppTheme.hoverColor.cgColor : .clear)
         needsLayout = true
     }
 }

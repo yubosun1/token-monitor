@@ -7,9 +7,10 @@ protocol TotalBarDelegate: AnyObject {
     func totalBarDidClickClose()
 }
 
-/// 主窗口顶部条：Σ 标记 + 标题 + live dot（按住看 token 速率）+ 状态 +
-/// 周期切换(DAY/MONTH/TOTAL) + Total tokens/cost + 刷新/设置/关闭按钮。
-/// 取代原 index.html 的 titlebar + total-panel。
+/// 主窗口顶部（原版 titlebar + total-panel）：
+/// 第一行 = 标题（Σ + Token Monitor + live dot + 速率揭示）+ 右侧周期胶囊
+/// 切换（DAY/MONTH/TOTAL，带滑动指示块）+ 关闭按钮；第二行 = 总计面板
+/// （TOTAL TOKENS 标签 + 大数字 + 成本）。
 final class TotalBarView: NSView {
     weak var delegate: TotalBarDelegate?
     private(set) var period = "today"
@@ -19,13 +20,10 @@ final class TotalBarView: NSView {
     private let liveDot = LiveDotView()
     private let rateReveal = NSTextField(labelWithString: "")
     private let statusLabel = NSTextField(labelWithString: "Starting")
+    private let periodPill = PeriodPillView()
+    private let closeBtn = HoverButton(title: "×")
     private let totalLabel = NSTextField(labelWithString: "0")
     private let costLabel = NSTextField(labelWithString: "$0.00")
-    private let periodStack = NSStackView()
-    private let refreshBtn = HoverButton(title: "↻")
-    private let settingsBtn = HoverButton(title: "⚙")
-    private let closeBtn = HoverButton(title: "×")
-    private var periodButtons: [(String, HoverButton)] = []
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -41,24 +39,29 @@ final class TotalBarView: NSView {
         wantsLayer = true
         layer?.backgroundColor = .clear
 
-        sigmaLabel.font = NSFont.systemFont(ofSize: 13, weight: .medium)
-        sigmaLabel.textColor = AppTheme.textTertiary
+        sigmaLabel.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .bold)
+        sigmaLabel.textColor = AppTheme.textPrimary
         sigmaLabel.isBezeled = false
         sigmaLabel.drawsBackground = false
         sigmaLabel.setContentHuggingPriority(.required, for: .horizontal)
 
-        configureLabel(titleLabel, font: AppTheme.titleFont, color: AppTheme.textPrimary)
+        titleLabel.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .bold)
+        titleLabel.textColor = AppTheme.textPrimary
+        titleLabel.isBezeled = false
+        titleLabel.drawsBackground = false
+        titleLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
         rateReveal.font = AppTheme.microFont
-        rateReveal.textColor = AppTheme.accent
+        rateReveal.textColor = AppTheme.textSecondary
         rateReveal.isBezeled = false
         rateReveal.drawsBackground = false
         rateReveal.isHidden = true
         rateReveal.setContentHuggingPriority(.defaultHigh, for: .horizontal)
 
-        configureLabel(statusLabel, font: AppTheme.microFont, color: AppTheme.textTertiary)
-        configureLabel(totalLabel, font: AppTheme.bigNumberFont, color: AppTheme.textPrimary)
-        configureLabel(costLabel, font: AppTheme.bodyFont, color: AppTheme.textSecondary)
+        statusLabel.font = AppTheme.smallFont
+        statusLabel.textColor = AppTheme.textSecondary
+        statusLabel.isBezeled = false
+        statusLabel.drawsBackground = false
 
         liveDot.translatesAutoresizingMaskIntoConstraints = false
         liveDot.onRateChange = { [weak self] text in
@@ -74,46 +77,54 @@ final class TotalBarView: NSView {
         let titleStack = NSStackView(views: [titleRow, statusLabel])
         titleStack.orientation = .vertical
         titleStack.alignment = .leading
-        titleStack.spacing = 1
+        titleStack.spacing = 3
 
-        refreshBtn.target = self; refreshBtn.action = #selector(refreshClick)
-        settingsBtn.target = self; settingsBtn.action = #selector(settingsClick)
-        closeBtn.target = self; closeBtn.action = #selector(closeClick)
-
-        let actionStack = NSStackView(views: [refreshBtn, settingsBtn, closeBtn])
-        actionStack.orientation = .horizontal
-        actionStack.spacing = 2
-
-        let topRow = NSStackView(views: [titleStack, actionStack])
-        topRow.orientation = .horizontal
-        topRow.distribution = .fill
-        topRow.setHuggingPriority(NSLayoutConstraint.Priority.defaultHigh, for: .horizontal)
-
-        periodStack.orientation = .horizontal
-        periodStack.distribution = .fillEqually
-        periodStack.spacing = 0
-        for (title, key) in [("DAY", "today"), ("MONTH", "month"), ("TOTAL", "allTime")] {
-            let btn = HoverButton(title: title)
-            btn.font = AppTheme.tabFont
-            btn.target = self
-            btn.action = #selector(periodClick(_:))
-            btn.identifier = NSUserInterfaceItemIdentifier(key)
-            periodStack.addArrangedSubview(btn)
-            periodButtons.append((key, btn))
+        // 周期胶囊 + 关闭（原版 title-controls）
+        periodPill.onSelect = { [weak self] key in
+            self?.selectPeriod(key)
         }
+        periodPill.translatesAutoresizingMaskIntoConstraints = false
+        periodPill.heightAnchor.constraint(equalToConstant: 28).isActive = true
 
-        let totalRow = NSStackView(views: [totalLabel, costLabel])
-        totalRow.orientation = .horizontal
-        totalRow.alignment = .centerY
-        totalRow.distribution = .fill
-        costLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
-        costLabel.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
+        closeBtn.target = self
+        closeBtn.action = #selector(closeClick)
 
-        let stack = NSStackView(views: [topRow, periodStack, totalRow])
+        let controls = NSStackView(views: [periodPill, closeBtn])
+        controls.orientation = .horizontal
+        controls.alignment = .centerY
+        controls.spacing = 4
+
+        let topRow = NSStackView(views: [titleStack, controls])
+        topRow.orientation = .horizontal
+        topRow.alignment = .centerY
+        topRow.distribution = .fill
+        topRow.spacing = 10
+
+        // 总计面板（原版 total-panel）
+        let labelRow = NSTextField(labelWithString: "TOTAL TOKENS")
+        labelRow.font = AppTheme.smallFont
+        labelRow.textColor = AppTheme.textSecondary
+        labelRow.isBezeled = false
+        labelRow.drawsBackground = false
+
+        totalLabel.font = AppTheme.numberFont
+        totalLabel.textColor = AppTheme.numberColor
+        totalLabel.isBezeled = false
+        totalLabel.drawsBackground = false
+        totalLabel.usesSingleLineMode = true
+
+        costLabel.font = AppTheme.smallFont
+        costLabel.textColor = AppTheme.textSecondary
+        costLabel.isBezeled = false
+        costLabel.drawsBackground = false
+
+        let stack = NSStackView(views: [topRow, labelRow, totalLabel, costLabel])
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 10
-        stack.edgeInsets = NSEdgeInsets(top: 12, left: 14, bottom: 10, right: 14)
+        stack.spacing = 2
+        stack.setCustomSpacing(8, after: topRow)
+        stack.setCustomSpacing(6, after: totalLabel)
+        stack.edgeInsets = NSEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         NSLayoutConstraint.activate([
@@ -121,36 +132,22 @@ final class TotalBarView: NSView {
             stack.trailingAnchor.constraint(equalTo: trailingAnchor),
             stack.topAnchor.constraint(equalTo: topAnchor),
             stack.bottomAnchor.constraint(equalTo: bottomAnchor),
-            liveDot.widthAnchor.constraint(equalToConstant: 8),
-            liveDot.heightAnchor.constraint(equalToConstant: 8),
+            liveDot.widthAnchor.constraint(equalToConstant: 4),
+            liveDot.heightAnchor.constraint(equalToConstant: 4),
+            totalLabel.widthAnchor.constraint(lessThanOrEqualTo: stack.widthAnchor, constant: -28),
         ])
-        applyPeriodSelection()
     }
 
-    private func configureLabel(_ label: NSTextField, font: NSFont, color: NSColor) {
-        label.font = font
-        label.textColor = color
-        label.isBezeled = false
-        label.drawsBackground = false
-        label.isSelectable = false
-        label.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-    }
-
-    private func applyPeriodSelection() {
-        for (key, btn) in periodButtons {
-            let selected = key == period
-            let color: NSColor = selected ? AppTheme.accent : AppTheme.textTertiary
-            btn.attributedTitle = NSAttributedString(string: btn.title, attributes: [
-                .font: AppTheme.tabFont, .foregroundColor: color,
-            ])
-            btn.selectedBackground = selected ? AppTheme.accent.withAlphaComponent(0.16) : .clear
-        }
+    private func selectPeriod(_ key: String) {
+        guard key != period else { return }
+        period = key
+        periodPill.selected = key
+        delegate?.totalBarDidSelectPeriod(key)
     }
 
     func setSelectedPeriod(_ p: String) {
         period = p
-        applyPeriodSelection()
+        periodPill.selected = p
     }
 
     private func showRate(_ text: String?) {
@@ -163,7 +160,7 @@ final class TotalBarView: NSView {
         let periodDict = periods?[period] as? [String: Any]
         let tokens = UsageCore.intValue(periodDict?["totalTokens"])
         let costUsd = UsageCore.doubleValue(periodDict?["costUsd"])
-        totalLabel.stringValue = Fmt.tokens(tokens)
+        totalLabel.stringValue = Fmt.tokensExact(tokens)
         costLabel.stringValue = Fmt.money(costUsd, settings: settings)
 
         liveDot.update(period: periodDict, settings: settings)
@@ -180,18 +177,99 @@ final class TotalBarView: NSView {
         }
     }
 
-    // MARK: - Actions
+    @objc private func closeClick() { delegate?.totalBarDidClickClose() }
+}
 
-    @objc private func periodClick(_ sender: NSButton) {
-        guard let key = sender.identifier?.rawValue else { return }
-        period = key
-        applyPeriodSelection()
-        delegate?.totalBarDidSelectPeriod(key)
+// MARK: - 周期胶囊切换（原版 .tabs + .tab-indicator）
+
+final class PeriodPillView: NSView {
+    var onSelect: ((String) -> Void)?
+    var selected = "today"
+
+    private let indicator = NSView()
+    private var buttons: [(key: String, button: HoverButton)] = []
+    private var lastIndex: CGFloat = 0
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.backgroundColor = AppTheme.panelColor.cgColor
+        layer?.cornerRadius = 10
+        layer?.borderWidth = 1
+        layer?.borderColor = AppTheme.lineColor.withAlphaComponent(0.65).cgColor
+
+        indicator.wantsLayer = true
+        indicator.layer?.cornerRadius = 6
+        indicator.layer?.borderWidth = 1
+        indicator.layer?.borderColor = AppTheme.lineColor.withAlphaComponent(0.95).cgColor
+        indicator.layer?.backgroundColor = AppTheme.controlColor.cgColor
+        indicator.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(indicator)
+
+        let stack = NSStackView()
+        stack.orientation = .horizontal
+        stack.distribution = .fillEqually
+        stack.spacing = 2
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+
+        for (title, key) in [("DAY", "today"), ("MONTH", "month"), ("TOTAL", "allTime")] {
+            let btn = HoverButton(title: title)
+            btn.font = AppTheme.tabFont
+            btn.target = self
+            btn.action = #selector(click(_:))
+            btn.identifier = NSUserInterfaceItemIdentifier(key)
+            btn.heightAnchor.constraint(equalToConstant: 22).isActive = true
+            stack.addArrangedSubview(btn)
+            buttons.append((key, btn))
+        }
+
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 3),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -3),
+            stack.topAnchor.constraint(equalTo: topAnchor, constant: 3),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -3),
+        ])
+        applySelection(animated: false)
     }
 
-    @objc private func refreshClick() { delegate?.totalBarDidClickRefresh() }
-    @objc private func settingsClick() { delegate?.totalBarDidClickSettings() }
-    @objc private func closeClick() { delegate?.totalBarDidClickClose() }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func layout() {
+        super.layout()
+        applySelection(animated: false)
+    }
+
+    @objc private func click(_ sender: NSButton) {
+        guard let key = sender.identifier?.rawValue, key != selected else { return }
+        selected = key
+        applySelection(animated: true)
+        onSelect?(key)
+    }
+
+    private func applySelection(animated: Bool) {
+        guard bounds.width > 10 else { return }
+        let index = buttons.firstIndex { $0.key == selected } ?? 0
+        let width = (bounds.width - 8) / 3
+        let target = CGPoint(x: 3 + CGFloat(index) * (width + 2), y: 3)
+        if animated {
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.22
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                indicator.animator().frame.origin = target
+                indicator.animator().frame.size = CGSize(width: width, height: bounds.height - 6)
+            }
+        } else {
+            indicator.frame = CGRect(x: target.x, y: target.y, width: width, height: bounds.height - 6)
+        }
+        for (key, btn) in buttons {
+            let isSelected = key == selected
+            btn.attributedTitle = NSAttributedString(string: btn.title, attributes: [
+                .font: AppTheme.tabFont,
+                .foregroundColor: isSelected ? AppTheme.accent : AppTheme.textSecondary,
+            ])
+        }
+    }
 }
 
 // MARK: - Live dot + token rate reveal
@@ -221,8 +299,8 @@ final class LiveDotView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.cornerRadius = 4
-        layer?.backgroundColor = NSColor(calibratedWhite: 0.35, alpha: 1).cgColor
+        layer?.cornerRadius = 2
+        layer?.backgroundColor = NSColor(calibratedWhite: 0.36, alpha: 1).cgColor
         toolTip = "按住显示 token 速率；点击切换 秒/分钟"
     }
 
@@ -242,15 +320,18 @@ final class LiveDotView: NSView {
         let wasLive = live
         live = period != nil && (UsageCore.intValue(period?["totalTokens"]) > 0 || baseRate > 0)
         if live != wasLive {
-            layer?.backgroundColor = (live ? AppTheme.positive : NSColor(calibratedWhite: 0.35, alpha: 1)).cgColor
+            layer?.backgroundColor = (live ? AppTheme.accent : NSColor(calibratedWhite: 0.36, alpha: 1)).cgColor
+            if live {
+                layer?.shadowColor = AppTheme.accent.cgColor
+                layer?.shadowRadius = 3
+                layer?.shadowOpacity = 0.55
+            } else {
+                layer?.shadowOpacity = 0
+            }
         }
         if !boosting && !settling {
             onRateChange?(nil)
         }
-    }
-
-    private func currentRate() -> Double {
-        return baseRate
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -278,7 +359,6 @@ final class LiveDotView: NSView {
             return
         }
         if settling {
-            // 上次的回落动画被打断：直接重新开始新的回落。
             settling = false
             stopBoostTimer()
             onRateChange?(nil)

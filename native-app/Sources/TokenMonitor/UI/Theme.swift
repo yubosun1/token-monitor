@@ -1,39 +1,65 @@
 import AppKit
 
-/// 原生 UI 主题：固定深色玻璃风格。
+/// 原生 UI 主题：端口原版 styles.css 的深色设计令牌。
 ///
-/// 窗口外壳仍是 `NSVisualEffectView(.hudWindow)` 玻璃面板；在其上叠一层半透明
-/// 深色 overlay，使内容在 light/dark 系统外观下都保持一致的深底浅字观感
-/// （对齐原版固定 dark 主题，避免跟随系统在浅色下白字不可读）。
+/// 主窗口为等宽字体（原版 body 用 ui-monospace）、薄荷绿 accent（#b7ead4）、
+/// 平板分区 + 发丝线（无卡片阴影）；独立 Dashboard 为无衬线字体（原版
+/// dashboard.css body 用 -apple-system）。
 enum AppTheme {
-    static let overlayColor = NSColor(white: 0.06, alpha: 0.60)
-    static let cardColor = NSColor(white: 1, alpha: 0.05)
-    static let cardBorderColor = NSColor(white: 1, alpha: 0.10)
-    static let separatorColor = NSColor(white: 1, alpha: 0.07)
-    static let hoverColor = NSColor(white: 1, alpha: 0.08)
+    // 背景/线条（原版 :root）
+    static let overlayColor = NSColor(white: 0.05, alpha: 0.55)          // 玻璃上的深色叠加
+    static let glassColor = NSColor(calibratedRed: 48/255, green: 52/255, blue: 56/255, alpha: 0.68)
+    static let lineRGB = (232, 238, 244)
+    static let hairlineColor = NSColor(calibratedRed: 232/255, green: 238/255, blue: 244/255, alpha: 0.12)
+    static let lineColor = NSColor(calibratedRed: 232/255, green: 238/255, blue: 244/255, alpha: 0.138)
+    static let lineStrongColor = NSColor(calibratedRed: 232/255, green: 238/255, blue: 244/255, alpha: 0.238)
+    static let sunkenColor = NSColor(calibratedRed: 4/255, green: 8/255, blue: 13/255, alpha: 1)
+    static let panelColor = NSColor(calibratedWhite: 1, alpha: 0.03)     // 工具条/统计卡等浅面板
+    static let controlColor = NSColor(calibratedWhite: 1, alpha: 0.049)  // 控件底（control-alpha）
+    static let hoverColor = NSColor(calibratedWhite: 1, alpha: 0.07)
+    static let cardColor = NSColor(calibratedWhite: 1, alpha: 0.03)
+    static let cardBorderColor = NSColor(calibratedRed: 232/255, green: 238/255, blue: 244/255, alpha: 0.22)
 
-    static let textPrimary = NSColor.white
-    static let textSecondary = NSColor(calibratedWhite: 0.80, alpha: 1)
-    static let textTertiary = NSColor(calibratedWhite: 0.56, alpha: 1)
-    static let accent = NSColor(calibratedRed: 0.36, green: 0.62, blue: 1.00, alpha: 1)
-    static let positive = NSColor(calibratedRed: 0.30, green: 0.80, blue: 0.50, alpha: 1)
-    static let warning = NSColor(calibratedRed: 0.96, green: 0.70, blue: 0.33, alpha: 1)
-    static let danger = NSColor(calibratedRed: 0.95, green: 0.45, blue: 0.45, alpha: 1)
+    // 文字（原版 --text / --muted / --number）
+    static let textPrimary = NSColor(calibratedRed: 0xEE/255.0, green: 0xF5/255.0, blue: 0xFB/255.0, alpha: 1)
+    static let textSecondary = NSColor(calibratedRed: 0xA3/255.0, green: 0xAD/255.0, blue: 0xBB/255.0, alpha: 1) // muted
+    static let textTertiary = NSColor(calibratedRed: 0xA3/255.0, green: 0xAD/255.0, blue: 0xBB/255.0, alpha: 0.68)
+    static let numberColor = NSColor(calibratedRed: 0xF3/255.0, green: 0xFB/255.0, blue: 0xF7/255.0, alpha: 1)
 
-    static let titleFont = NSFont.systemFont(ofSize: 12.5, weight: .semibold)
-    static let bodyFont = NSFont.systemFont(ofSize: 12, weight: .regular)
-    static let monoFont = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-    static let bigNumberFont = NSFont.monospacedDigitSystemFont(ofSize: 27, weight: .medium)
-    static let smallFont = NSFont.systemFont(ofSize: 10.5, weight: .regular)
-    static let microFont = NSFont.systemFont(ofSize: 9.5, weight: .regular)
-    static let tabFont = NSFont.systemFont(ofSize: 10, weight: .semibold)
-    static let buttonFont = NSFont.systemFont(ofSize: 12, weight: .regular)
+    // 语义色（原版 --accent / --blue / --orange / --purple / --yellow / --red）
+    static let accent = NSColor(calibratedRed: 0xB7/255.0, green: 0xEA/255.0, blue: 0xD4/255.0, alpha: 1) // 薄荷绿
+    static let blue = NSColor(calibratedRed: 0x73/255.0, green: 0xBD/255.0, blue: 0xF5/255.0, alpha: 1)
+    static let orange = NSColor(calibratedRed: 0xF4/255.0, green: 0xA0/255.0, blue: 0x73/255.0, alpha: 1)
+    static let purple = NSColor(calibratedRed: 0xB3/255.0, green: 0x94/255.0, blue: 0xF4/255.0, alpha: 1)
+    static let yellow = NSColor(calibratedRed: 0xF1/255.0, green: 0xD9/255.0, blue: 0x73/255.0, alpha: 1)
+    static let red = NSColor(calibratedRed: 0xF4/255.0, green: 0x77/255.0, blue: 0x88/255.0, alpha: 1)
 
-    /// 客户端配色（对齐原版 usageCharts.clientColors 的品牌色；深色品牌色
-    /// 经 displayColor 抬亮，避免在深底上不可见）。
+    static let positive = NSColor(calibratedRed: 0xB7/255.0, green: 0xEA/255.0, blue: 0xD4/255.0, alpha: 1) // success
+    static let warning = NSColor(calibratedRed: 0xF1/255.0, green: 0xD9/255.0, blue: 0x73/255.0, alpha: 1)
+    static let danger = NSColor(calibratedRed: 0xF4/255.0, green: 0x77/255.0, blue: 0x88/255.0, alpha: 1)
+    static let candleUp = NSColor(calibratedRed: 0x4E/255.0, green: 0xC7/255.0, blue: 0x7F/255.0, alpha: 1)
+    static let candleDown = NSColor(calibratedRed: 0xF0/255.0, green: 0x6A/255.0, blue: 0x7B/255.0, alpha: 1)
+
+    // 字体（主窗口对齐原版 ui-monospace；数字用等宽数字）
+    static func mono(_ size: CGFloat, _ weight: NSFont.Weight = .regular) -> NSFont {
+        return NSFont.monospacedSystemFont(ofSize: size, weight: weight)
+    }
+
+    static let titleFont = mono(13, .semibold)
+    static let bodyFont = mono(12, .regular)
+    static let monoFont = mono(12, .regular)
+    static let bigNumberFont = mono(30, .medium)           // total 大数字（原版 clamp 30–46px）
+    static let numberFont = mono(30, .medium)
+    static let smallFont = mono(11, .regular)
+    static let microFont = mono(10, .regular)
+    static let tabFont = mono(9, .semibold)
+    static let buttonFont = mono(12, .regular)
+    static let separatorColor = hairlineColor
+
+    // 客户端配色（对齐原版 usageCharts.clientColors 的品牌色；深色品牌色
+    // 经 displayColor 抬亮，避免在深底上不可见）。
     static func clientColor(_ id: String) -> NSColor {
-        let hex = clientHex(id)
-        return color(hex: hex)
+        return color(hex: clientHex(id))
     }
 
     /// 品牌色 hex（原版 clientColors 表）。
@@ -45,7 +71,21 @@ enum AppTheme {
         case "workbuddy": return "#0DC8A5"
         case "proma":     return "#000000"
         case "hanako":    return "#E8A33D"
-        default:          return "#6ab4f0"
+        default:          return "#73bdf5"
+        }
+    }
+
+    static func clientLabel(_ id: String) -> String {
+        switch id {
+        case "claude":    return "Claude Code"
+        case "codex":     return "Codex"
+        case "opencode":  return "OpenCode"
+        case "workbuddy": return "WorkBuddy"
+        case "proma":     return "Proma"
+        case "hanako":    return "Hanako"
+        case "dsh":       return "DeepSeek Harness"
+        case "deepseek":  return "DeepSeek"
+        default:          return id.capitalized
         }
     }
 
@@ -98,33 +138,20 @@ enum AppTheme {
 
         let vendorHex: [String: String] = [
             "claude": "#cc7c5e", "codex": "#49a3b0", "hermes": "#d4af37", "gemini": "#4285f4",
-            "deepseek": "#4d6bfe", "cursor": "#6ab4f0", "opencode": "#6ab4f0", "xai": "#6ab4f0",
-            "meta": "#1d65c1", "mistral": "#fa520f", "qwen": "#615ced", "kimi": "#6ab4f0",
-            "zai": "#6ab4f0", "cohere": "#39594d", "xiaomi": "#ff6700", "minimax": "#f23f5d",
+            "deepseek": "#4d6bfe", "cursor": "#73bdf5", "opencode": "#73bdf5", "xai": "#73bdf5",
+            "meta": "#1d65c1", "mistral": "#fa520f", "qwen": "#615ced", "kimi": "#73bdf5",
+            "zai": "#73bdf5", "cohere": "#39594d", "xiaomi": "#ff6700", "minimax": "#f23f5d",
             "doubao": "#1E37FC", "hunyuan": "#0053E0",
         ]
         if let vendor, let hex = vendorHex[vendor] { return color(hex: hex) }
 
         // 哈希回退调色板（原版 fallbackModelColors）。
-        let palette = ["#6ab4f0", "#cc7c5e", "#a57df0", "#49a3b0", "#f0d66a", "#f06a7b"]
+        let palette = ["#73bdf5", "#cc7c5e", "#a57df0", "#49a3b0", "#f1d973", "#f06a7b"]
         var hash = 0
         for scalar in name.unicodeScalars {
             hash = (hash &* 31 &+ Int(scalar.value)) & 0x7FFFFFFF
         }
         return color(hex: palette[abs(hash) % palette.count])
-    }
-
-    static func clientLabel(_ id: String) -> String {
-        switch id {
-        case "claude":    return "Claude Code"
-        case "codex":     return "Codex"
-        case "opencode":  return "OpenCode"
-        case "workbuddy": return "WorkBuddy"
-        case "proma":     return "Proma"
-        case "hanako":    return "Hanako"
-        case "dsh":       return "DeepSeek Harness"
-        default:          return id.capitalized
-        }
     }
 }
 

@@ -106,17 +106,14 @@ private final class LimitCardView: NSView {
 
     private func build() {
         wantsLayer = true
-        layer?.backgroundColor = AppTheme.cardColor.cgColor
-        layer?.cornerRadius = 8
-        layer?.borderWidth = 1
-        layer?.borderColor = AppTheme.cardBorderColor.cgColor
+        layer?.backgroundColor = .clear
 
-        configureLabel(titleLabel, font: AppTheme.titleFont, color: AppTheme.textPrimary)
-        configureLabel(statusLabel, font: AppTheme.microFont, color: AppTheme.textTertiary)
+        configureLabel(titleLabel, font: AppTheme.bodyFont, color: AppTheme.textPrimary)
+        configureLabel(statusLabel, font: AppTheme.microFont, color: AppTheme.textPrimary)
         statusLabel.wantsLayer = true
         statusLabel.layer?.cornerRadius = 4
-        statusLabel.layer?.backgroundColor = AppTheme.cardBorderColor.cgColor
         statusLabel.alignment = .center
+        statusLabel.textColor = .white
 
         let header = NSStackView(views: [titleLabel, statusLabel])
         header.orientation = .horizontal
@@ -128,20 +125,30 @@ private final class LimitCardView: NSView {
 
         bodyStack.orientation = .vertical
         bodyStack.alignment = .leading
-        bodyStack.spacing = 6
+        bodyStack.spacing = 5
 
         let stack = NSStackView(views: [header, bodyStack])
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 8
-        stack.edgeInsets = NSEdgeInsets(top: 10, left: 12, bottom: 10, right: 12)
+        stack.spacing = 7
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
+
+        let sep = NSView()
+        sep.wantsLayer = true
+        sep.layer?.backgroundColor = AppTheme.hairlineColor.cgColor
+        sep.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(sep)
+
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: trailingAnchor),
-            stack.topAnchor.constraint(equalTo: topAnchor),
-            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+            stack.topAnchor.constraint(equalTo: topAnchor, constant: 10),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
+            sep.leadingAnchor.constraint(equalTo: leadingAnchor),
+            sep.trailingAnchor.constraint(equalTo: trailingAnchor),
+            sep.bottomAnchor.constraint(equalTo: bottomAnchor),
+            sep.heightAnchor.constraint(equalToConstant: 1),
         ])
     }
 
@@ -165,8 +172,8 @@ private final class LimitCardView: NSView {
             title += "  [\(source)]"
         }
         titleLabel.stringValue = title
-        statusLabel.stringValue = statusText(status)
-        statusLabel.layer?.backgroundColor = statusColor(status).cgColor
+        statusLabel.stringValue = " " + statusText(status) + " "
+        statusLabel.layer?.backgroundColor = statusColor(status).withAlphaComponent(0.85).cgColor
         statusLabel.textColor = .white
 
         bodyStack.arrangedSubviews.forEach { $0.removeFromSuperview() }

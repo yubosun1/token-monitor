@@ -49,12 +49,6 @@ final class MainViewController: NSViewController, TotalBarDelegate, WindowHostCo
         totalBar.delegate = self
         totalBar.translatesAutoresizingMaskIntoConstraints = false
 
-        let separator = NSView()
-        separator.wantsLayer = true
-        separator.layer?.backgroundColor = AppTheme.separatorColor.cgColor
-        separator.translatesAutoresizingMaskIntoConstraints = false
-        separator.heightAnchor.constraint(equalToConstant: 1).isActive = true
-
         contentContainer.wantsLayer = true
         contentContainer.layer?.backgroundColor = .clear
         contentContainer.translatesAutoresizingMaskIntoConstraints = false
@@ -64,13 +58,7 @@ final class MainViewController: NSViewController, TotalBarDelegate, WindowHostCo
         switcherBar.onSettings = { [weak self] in self?.openSettings() }
         switcherBar.translatesAutoresizingMaskIntoConstraints = false
 
-        let footerSeparator = NSView()
-        footerSeparator.wantsLayer = true
-        footerSeparator.layer?.backgroundColor = AppTheme.separatorColor.cgColor
-        footerSeparator.translatesAutoresizingMaskIntoConstraints = false
-        footerSeparator.heightAnchor.constraint(equalToConstant: 1).isActive = true
-
-        let mainStack = NSStackView(views: [totalBar, separator, contentContainer, footerSeparator, switcherBar])
+        let mainStack = NSStackView(views: [totalBar, contentContainer, switcherBar])
         mainStack.orientation = .vertical
         mainStack.alignment = .leading
         mainStack.spacing = 0

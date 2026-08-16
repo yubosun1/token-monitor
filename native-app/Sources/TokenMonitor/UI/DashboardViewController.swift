@@ -45,7 +45,7 @@ final class DashboardViewController: NSViewController, WindowHostConsumer, Windo
 
         // Header
         let title = NSTextField(labelWithString: "用量面板")
-        title.font = AppTheme.titleFont
+        title.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
         title.textColor = AppTheme.textPrimary
         title.isBezeled = false
         title.drawsBackground = false
@@ -67,10 +67,10 @@ final class DashboardViewController: NSViewController, WindowHostConsumer, Windo
         root.addSubview(header)
 
         // Tabs
-        overviewTab.font = AppTheme.tabFont
+        overviewTab.font = NSFont.systemFont(ofSize: 12, weight: .regular)
         overviewTab.target = self; overviewTab.action = #selector(tabClick(_:))
         overviewTab.identifier = NSUserInterfaceItemIdentifier("overview")
-        trendsTab.font = AppTheme.tabFont
+        trendsTab.font = NSFont.systemFont(ofSize: 12, weight: .regular)
         trendsTab.target = self; trendsTab.action = #selector(tabClick(_:))
         trendsTab.identifier = NSUserInterfaceItemIdentifier("trends")
         let tabs = NSStackView(views: [overviewTab, trendsTab])
@@ -122,7 +122,8 @@ final class DashboardViewController: NSViewController, WindowHostConsumer, Windo
 
         // Heatmap block
         let heatTitle = NSTextField(labelWithString: "Token Activity")
-        heatTitle.font = AppTheme.titleFont
+        heatTitle.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        heatTitle.alphaValue = 0.9
         heatTitle.textColor = AppTheme.textPrimary
         heatTitle.isBezeled = false
         heatTitle.drawsBackground = false
@@ -167,7 +168,7 @@ final class DashboardViewController: NSViewController, WindowHostConsumer, Windo
             cardsStack.leadingAnchor.constraint(equalTo: overviewPane.leadingAnchor, constant: 16),
             cardsStack.trailingAnchor.constraint(equalTo: overviewPane.trailingAnchor, constant: -16),
             cardsStack.topAnchor.constraint(equalTo: overviewPane.topAnchor, constant: 10),
-            cardsStack.heightAnchor.constraint(equalToConstant: 52),
+            cardsStack.heightAnchor.constraint(equalToConstant: 78),
             heatHeader.leadingAnchor.constraint(equalTo: overviewPane.leadingAnchor, constant: 16),
             heatHeader.trailingAnchor.constraint(equalTo: overviewPane.trailingAnchor, constant: -16),
             heatHeader.topAnchor.constraint(equalTo: cardsStack.bottomAnchor, constant: 14),
@@ -210,6 +211,12 @@ final class DashboardViewController: NSViewController, WindowHostConsumer, Windo
         modeSeg.selectedSegment = 0
         modeSeg.font = AppTheme.smallFont
 
+        for seg in [stackSeg, modeSeg] {
+            seg.wantsLayer = true
+            seg.layer?.cornerRadius = 7
+            seg.layer?.backgroundColor = NSColor(calibratedWhite: 1, alpha: 0.05).cgColor
+            seg.font = NSFont.systemFont(ofSize: 11, weight: .regular)
+        }
         let controls = NSStackView(views: [rangeStack, stackSeg, modeSeg])
         controls.orientation = .horizontal
         controls.alignment = .centerY
@@ -304,38 +311,70 @@ final class DashboardViewController: NSViewController, WindowHostConsumer, Windo
             ("消息数", Fmt.tokensExact(Int(UsageCore.doubleValue(summary["messages"])))),
         ]
         cardsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        for (key, value) in stats {
+        // 原版 .dash-cards：单条带边框面板，卡间竖分隔线
+        let strip = NSView()
+        strip.wantsLayer = true
+        strip.layer?.backgroundColor = AppTheme.panelColor.cgColor
+        strip.layer?.cornerRadius = 12
+        strip.layer?.borderWidth = 1
+        strip.layer?.borderColor = NSColor(calibratedWhite: 1, alpha: 0.08).cgColor
+        strip.translatesAutoresizingMaskIntoConstraints = false
+        cardsStack.addArrangedSubview(strip)
+        let inner = NSStackView()
+        inner.orientation = .horizontal
+        inner.alignment = .centerY
+        inner.distribution = .fillEqually
+        inner.translatesAutoresizingMaskIntoConstraints = false
+        strip.addSubview(inner)
+        NSLayoutConstraint.activate([
+            inner.leadingAnchor.constraint(equalTo: strip.leadingAnchor),
+            inner.trailingAnchor.constraint(equalTo: strip.trailingAnchor),
+            inner.topAnchor.constraint(equalTo: strip.topAnchor),
+            inner.bottomAnchor.constraint(equalTo: strip.bottomAnchor),
+        ])
+        for (index, (key, value)) in stats.enumerated() {
             let card = NSView()
             card.wantsLayer = true
-            card.layer?.backgroundColor = AppTheme.cardColor.cgColor
-            card.layer?.cornerRadius = 6
-            card.layer?.borderWidth = 1
-            card.layer?.borderColor = AppTheme.cardBorderColor.cgColor
+            card.layer?.backgroundColor = .clear
+            if index > 0 {
+                let divider = NSView()
+                divider.wantsLayer = true
+                divider.layer?.backgroundColor = NSColor(calibratedWhite: 1, alpha: 0.06).cgColor
+                divider.translatesAutoresizingMaskIntoConstraints = false
+                card.addSubview(divider)
+                NSLayoutConstraint.activate([
+                    divider.leadingAnchor.constraint(equalTo: card.leadingAnchor),
+                    divider.topAnchor.constraint(equalTo: card.topAnchor, constant: 8),
+                    divider.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -8),
+                    divider.widthAnchor.constraint(equalToConstant: 1),
+                ])
+            }
             let v = NSTextField(labelWithString: value)
-            v.font = NSFont.monospacedDigitSystemFont(ofSize: 14, weight: .medium)
+            v.font = NSFont.systemFont(ofSize: 19, weight: .semibold)
             v.textColor = AppTheme.textPrimary
             v.isBezeled = false
             v.drawsBackground = false
             v.lineBreakMode = .byTruncatingTail
-            let k = NSTextField(labelWithString: key)
-            k.font = AppTheme.microFont
-            k.textColor = AppTheme.textTertiary
+            let k = NSTextField(labelWithString: key.uppercased())
+            k.font = NSFont.systemFont(ofSize: 10, weight: .regular)
+            k.textColor = AppTheme.textSecondary
             k.isBezeled = false
             k.drawsBackground = false
+            k.alphaValue = 0.55
             let stack = NSStackView(views: [v, k])
             stack.orientation = .vertical
             stack.alignment = .leading
-            stack.spacing = 1
-            stack.edgeInsets = NSEdgeInsets(top: 6, left: 8, bottom: 6, right: 8)
+            stack.spacing = 5
+            stack.edgeInsets = NSEdgeInsets(top: 14, left: 14, bottom: 14, right: 14)
             stack.translatesAutoresizingMaskIntoConstraints = false
             card.addSubview(stack)
             NSLayoutConstraint.activate([
-                stack.leadingAnchor.constraint(equalTo: card.leadingAnchor),
+                stack.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: index > 0 ? 2 : 0),
                 stack.trailingAnchor.constraint(equalTo: card.trailingAnchor),
                 stack.topAnchor.constraint(equalTo: card.topAnchor),
                 stack.bottomAnchor.constraint(equalTo: card.bottomAnchor),
             ])
-            cardsStack.addArrangedSubview(card)
+            inner.addArrangedSubview(card)
         }
 
         // Heatmap（今日实时值补进最后一格）
@@ -404,19 +443,22 @@ final class DashboardViewController: NSViewController, WindowHostConsumer, Windo
             let swatch = NSView()
             swatch.wantsLayer = true
             swatch.layer?.cornerRadius = 3
+            swatch.layer?.borderWidth = 1
+            swatch.layer?.borderColor = NSColor(calibratedWhite: 1, alpha: 0.18).cgColor
             let color = isClient ? AppTheme.clientColor(key) : AppTheme.modelColor(key)
             swatch.layer?.backgroundColor = color.cgColor
             swatch.translatesAutoresizingMaskIntoConstraints = false
             let name = NSTextField(labelWithString: key)
-            name.font = AppTheme.bodyFont
+            name.font = NSFont.systemFont(ofSize: 12, weight: .regular)
             name.textColor = AppTheme.textPrimary
             name.isBezeled = false
             name.drawsBackground = false
             name.lineBreakMode = .byTruncatingTail
+            name.alphaValue = 0.9
             name.setContentHuggingPriority(.defaultLow, for: .horizontal)
             let barBg = NSView()
             barBg.wantsLayer = true
-            barBg.layer?.backgroundColor = AppTheme.cardBorderColor.cgColor
+            barBg.layer?.backgroundColor = NSColor(calibratedWhite: 1, alpha: 0.06).cgColor
             barBg.layer?.cornerRadius = 2
             barBg.translatesAutoresizingMaskIntoConstraints = false
             let barFill = NSView()
@@ -426,20 +468,23 @@ final class DashboardViewController: NSViewController, WindowHostConsumer, Windo
             barFill.translatesAutoresizingMaskIntoConstraints = false
             barBg.addSubview(barFill)
             let valueLabel = NSTextField(labelWithString: Fmt.tokens(Int(value)))
-            valueLabel.font = AppTheme.monoFont
+            valueLabel.font = NSFont.systemFont(ofSize: 12, weight: .regular)
             valueLabel.textColor = AppTheme.textPrimary
             valueLabel.isBezeled = false
             valueLabel.drawsBackground = false
-            valueLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+            valueLabel.alignment = .right
+            valueLabel.alphaValue = 0.8
             let pctLabel = NSTextField(labelWithString: grand > 0 ? String(format: "%.1f%%", value / grand * 100) : "—")
-            pctLabel.font = AppTheme.smallFont
-            pctLabel.textColor = AppTheme.textTertiary
+            pctLabel.font = NSFont.systemFont(ofSize: 12, weight: .regular)
+            pctLabel.textColor = AppTheme.textSecondary
             pctLabel.isBezeled = false
             pctLabel.drawsBackground = false
+            pctLabel.alignment = .right
+            pctLabel.alphaValue = 0.55
             let line = NSStackView(views: [swatch, name, barBg, valueLabel, pctLabel])
             line.orientation = .horizontal
             line.alignment = .centerY
-            line.spacing = 5
+            line.spacing = 12
             line.translatesAutoresizingMaskIntoConstraints = false
             row.addSubview(line)
             NSLayoutConstraint.activate([
@@ -447,14 +492,16 @@ final class DashboardViewController: NSViewController, WindowHostConsumer, Windo
                 line.trailingAnchor.constraint(equalTo: row.trailingAnchor),
                 line.topAnchor.constraint(equalTo: row.topAnchor),
                 line.bottomAnchor.constraint(equalTo: row.bottomAnchor),
-                swatch.widthAnchor.constraint(equalToConstant: 6),
-                swatch.heightAnchor.constraint(equalToConstant: 6),
-                barBg.widthAnchor.constraint(equalToConstant: 46),
+                swatch.widthAnchor.constraint(equalToConstant: 11),
+                swatch.heightAnchor.constraint(equalToConstant: 11),
+                barBg.widthAnchor.constraint(equalToConstant: 160),
                 barBg.heightAnchor.constraint(equalToConstant: 4),
                 barFill.leadingAnchor.constraint(equalTo: barBg.leadingAnchor),
                 barFill.topAnchor.constraint(equalTo: barBg.topAnchor),
                 barFill.bottomAnchor.constraint(equalTo: barBg.bottomAnchor),
                 barFill.widthAnchor.constraint(equalTo: barBg.widthAnchor, multiplier: CGFloat(max(0.02, value / maxVal))),
+                valueLabel.widthAnchor.constraint(equalToConstant: 54),
+                pctLabel.widthAnchor.constraint(equalToConstant: 42),
             ])
             col.addArrangedSubview(row)
             row.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
@@ -548,33 +595,42 @@ final class DashboardViewController: NSViewController, WindowHostConsumer, Windo
             let swatch = NSView()
             swatch.wantsLayer = true
             swatch.layer?.cornerRadius = 3
+            swatch.layer?.borderWidth = 1
+            swatch.layer?.borderColor = NSColor(calibratedWhite: 1, alpha: 0.18).cgColor
             let color = stackBy == "model" ? AppTheme.modelColor(key) : AppTheme.clientColor(key)
             swatch.layer?.backgroundColor = color.cgColor
             swatch.translatesAutoresizingMaskIntoConstraints = false
             let name = NSTextField(labelWithString: key)
-            name.font = AppTheme.smallFont
-            name.textColor = AppTheme.textSecondary
+            name.font = NSFont.systemFont(ofSize: 12, weight: .regular)
+            name.textColor = AppTheme.textPrimary
             name.isBezeled = false
             name.drawsBackground = false
             name.lineBreakMode = .byTruncatingTail
+            name.alphaValue = 0.9
             name.setContentHuggingPriority(.defaultLow, for: .horizontal)
             let valueLabel = NSTextField(labelWithString: Fmt.tokens(Int(value)))
-            valueLabel.font = AppTheme.monoFont
+            valueLabel.font = NSFont.systemFont(ofSize: 12, weight: .regular)
             valueLabel.textColor = AppTheme.textPrimary
             valueLabel.isBezeled = false
             valueLabel.drawsBackground = false
+            valueLabel.alignment = .right
+            valueLabel.alphaValue = 0.8
             let pctLabel = NSTextField(labelWithString: grand > 0 ? String(format: "%.1f%%", value / grand * 100) : "—")
-            pctLabel.font = AppTheme.smallFont
-            pctLabel.textColor = AppTheme.textTertiary
+            pctLabel.font = NSFont.systemFont(ofSize: 12, weight: .regular)
+            pctLabel.textColor = AppTheme.textSecondary
             pctLabel.isBezeled = false
             pctLabel.drawsBackground = false
+            pctLabel.alignment = .right
+            pctLabel.alphaValue = 0.55
+            pctLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 50).isActive = true
             row.addArrangedSubview(swatch)
             row.addArrangedSubview(name)
             row.addArrangedSubview(valueLabel)
             row.addArrangedSubview(pctLabel)
+            row.edgeInsets = NSEdgeInsets(top: 2, left: 4, bottom: 2, right: 4)
             NSLayoutConstraint.activate([
-                swatch.widthAnchor.constraint(equalToConstant: 8),
-                swatch.heightAnchor.constraint(equalToConstant: 8),
+                swatch.widthAnchor.constraint(equalToConstant: 11),
+                swatch.heightAnchor.constraint(equalToConstant: 11),
             ])
             legendStack.addArrangedSubview(row)
         }
@@ -586,19 +642,25 @@ final class DashboardViewController: NSViewController, WindowHostConsumer, Windo
         let overview = tab == "overview"
         overviewPane.isHidden = !overview
         trendsPane.isHidden = overview
-        overviewTab.selectedBackground = overview ? AppTheme.accent.withAlphaComponent(0.16) : .clear
-        trendsTab.selectedBackground = overview ? .clear : AppTheme.accent.withAlphaComponent(0.16)
+        overviewTab.selectedBackground = overview ? NSColor(calibratedWhite: 1, alpha: 0.06) : .clear
+        trendsTab.selectedBackground = overview ? .clear : NSColor(calibratedWhite: 1, alpha: 0.06)
+        overviewTab.layer?.cornerRadius = 7
+        trendsTab.layer?.cornerRadius = 7
+        overviewTab.alphaValue = overview ? 1 : 0.55
+        trendsTab.alphaValue = overview ? 0.55 : 1
         if overview { refreshOverview() } else { refreshTrends() }
     }
 
     private func applyRangeSelection() {
         for btn in rangeStack.arrangedSubviews.compactMap({ $0 as? HoverButton }) {
             let selected = btn.identifier?.rawValue == range
-            btn.selectedBackground = selected ? AppTheme.accent.withAlphaComponent(0.16) : .clear
+            btn.selectedBackground = selected ? NSColor(calibratedWhite: 1, alpha: 0.12) : .clear
+            btn.layer?.cornerRadius = 6
             btn.attributedTitle = NSAttributedString(string: btn.title, attributes: [
-                .font: AppTheme.smallFont,
-                .foregroundColor: selected ? AppTheme.accent : AppTheme.textTertiary,
+                .font: NSFont.systemFont(ofSize: 12, weight: .regular),
+                .foregroundColor: AppTheme.textPrimary,
             ])
+            btn.alphaValue = selected ? 1 : 0.65
         }
     }
 

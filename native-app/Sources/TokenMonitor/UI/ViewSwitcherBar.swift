@@ -1,13 +1,15 @@
 import AppKit
 
-/// 底部视图切换条（取代原版 footer 的 viewSwitcher + utility actions）。
-/// 左侧：当前视图按钮（点击弹出视图菜单），右侧：刷新/设置。
+/// 底部视图切换条（原版 footer + view-switcher）：
+/// 左侧 = 当前视图 + 展开箭头组成的分段控件（点击弹出视图菜单），
+/// 右侧 = 刷新 / 设置 按钮（30px，原版 .icon-button 风格）。
 final class ViewSwitcherBar: NSView {
     var onSelectView: ((String) -> Void)?
     var onRefresh: (() -> Void)?
     var onSettings: (() -> Void)?
 
     private let switchButton = HoverButton(title: "")
+    private let disclosureBtn = HoverButton(title: "")
     private let refreshBtn = HoverButton(title: "↻")
     private let settingsBtn = HoverButton(title: "⚙")
     private let popover = NSPopover()
@@ -26,24 +28,78 @@ final class ViewSwitcherBar: NSView {
         wantsLayer = true
         layer?.backgroundColor = .clear
 
+        // 分段控件容器（原版 .view-switcher-current + .view-switcher-disclosure）
+        let segmented = NSView()
+        segmented.wantsLayer = true
+        segmented.layer?.cornerRadius = 7
+        segmented.layer?.borderWidth = 1
+        segmented.layer?.borderColor = AppTheme.lineStrongColor.cgColor
+        segmented.layer?.backgroundColor = AppTheme.controlColor.cgColor
+        segmented.translatesAutoresizingMaskIntoConstraints = false
+
         switchButton.font = AppTheme.bodyFont
         switchButton.target = self
         switchButton.action = #selector(toggleMenu)
-        switchButton.hoverBackground = AppTheme.hoverColor
+        switchButton.hoverBackground = AppTheme.accent.withAlphaComponent(0.08)
         switchButton.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        switchButton.heightAnchor.constraint(equalToConstant: 30).isActive = true
 
-        refreshBtn.target = self; refreshBtn.action = #selector(refreshClick)
-        settingsBtn.target = self; settingsBtn.action = #selector(settingsClick)
+        let chevron = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: nil) ?? NSImage()
+        disclosureBtn.image = chevron.withTint(AppTheme.textSecondary)
+        disclosureBtn.target = self
+        disclosureBtn.action = #selector(toggleMenu)
+        disclosureBtn.hoverBackground = AppTheme.accent.withAlphaComponent(0.08)
+        disclosureBtn.widthAnchor.constraint(equalToConstant: 24).isActive = true
+        disclosureBtn.heightAnchor.constraint(equalToConstant: 30).isActive = true
+        disclosureBtn.toolTip = "选择视图"
+
+        let divider = NSView()
+        divider.wantsLayer = true
+        divider.layer?.backgroundColor = AppTheme.lineStrongColor.cgColor
+        divider.translatesAutoresizingMaskIntoConstraints = false
+        divider.widthAnchor.constraint(equalToConstant: 1).isActive = true
+
+        segmented.addSubview(switchButton)
+        segmented.addSubview(divider)
+        segmented.addSubview(disclosureBtn)
+        NSLayoutConstraint.activate([
+            switchButton.leadingAnchor.constraint(equalTo: segmented.leadingAnchor, constant: 1),
+            switchButton.topAnchor.constraint(equalTo: segmented.topAnchor, constant: 1),
+            switchButton.bottomAnchor.constraint(equalTo: segmented.bottomAnchor, constant: -1),
+            divider.leadingAnchor.constraint(equalTo: switchButton.trailingAnchor),
+            divider.topAnchor.constraint(equalTo: segmented.topAnchor, constant: 6),
+            divider.bottomAnchor.constraint(equalTo: segmented.bottomAnchor, constant: -6),
+            disclosureBtn.leadingAnchor.constraint(equalTo: divider.trailingAnchor),
+            disclosureBtn.trailingAnchor.constraint(equalTo: segmented.trailingAnchor, constant: -1),
+            disclosureBtn.topAnchor.constraint(equalTo: segmented.topAnchor, constant: 1),
+            disclosureBtn.bottomAnchor.constraint(equalTo: segmented.bottomAnchor, constant: -1),
+        ])
+        segmented.heightAnchor.constraint(equalToConstant: 32).isActive = true
+
+        // 右侧动作按钮（原版 .icon-button：26×26，圆角 6）
+        for btn in [refreshBtn, settingsBtn] {
+            btn.font = NSFont.systemFont(ofSize: 14, weight: .regular)
+            btn.target = self
+            btn.hoverBackground = AppTheme.hoverColor
+            btn.widthAnchor.constraint(equalToConstant: 30).isActive = true
+            btn.heightAnchor.constraint(equalToConstant: 30).isActive = true
+            btn.layer?.borderWidth = 1
+            btn.layer?.borderColor = AppTheme.lineColor.withAlphaComponent(0.35).cgColor
+            btn.layer?.backgroundColor = AppTheme.controlColor.cgColor
+            btn.layer?.cornerRadius = 7
+        }
+        refreshBtn.action = #selector(refreshClick)
+        settingsBtn.action = #selector(settingsClick)
 
         let actions = NSStackView(views: [refreshBtn, settingsBtn])
         actions.orientation = .horizontal
-        actions.spacing = 2
+        actions.spacing = 4
 
-        let stack = NSStackView(views: [switchButton, actions])
+        let stack = NSStackView(views: [segmented, actions])
         stack.orientation = .horizontal
         stack.alignment = .centerY
         stack.spacing = 8
-        stack.edgeInsets = NSEdgeInsets(top: 4, left: 12, bottom: 4, right: 12)
+        stack.edgeInsets = NSEdgeInsets(top: 5, left: 12, bottom: 5, right: 12)
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         NSLayoutConstraint.activate([
@@ -69,13 +125,11 @@ final class ViewSwitcherBar: NSView {
         currentViewId = id
         let def = AppViews.def(id)
         let icon = NSImage(systemSymbolName: def.symbol, accessibilityDescription: def.label) ?? NSImage()
-        let chevron = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: nil) ?? NSImage()
         let attr = NSMutableAttributedString()
-        attr.append(NSAttributedString(attachment: Self.attachment(image: icon.withTint(AppTheme.textSecondary))))
+        attr.append(NSAttributedString(attachment: Self.attachment(image: icon.withTint(AppTheme.textPrimary))))
         attr.append(NSAttributedString(string: "  \(def.label)  ", attributes: [
             .font: AppTheme.bodyFont, .foregroundColor: AppTheme.textPrimary,
         ]))
-        attr.append(NSAttributedString(attachment: Self.attachment(image: chevron.withTint(AppTheme.textTertiary))))
         switchButton.attributedTitle = attr
         if persist {
             var lastView = BridgeCore.shared.settings.snapshot()["lastViewState"] as? [String: Any] ?? [:]
@@ -115,7 +169,7 @@ final class ViewSwitcherBar: NSView {
     @objc private func settingsClick() { onSettings?() }
 }
 
-// MARK: - Menu content
+// MARK: - Menu content（原版 .view-switcher-menu）
 
 private final class ViewSwitcherMenuVC: NSViewController {
     var onSelect: ((String) -> Void)?
@@ -126,15 +180,15 @@ private final class ViewSwitcherMenuVC: NSViewController {
     override func loadView() {
         let root = NSView()
         root.wantsLayer = true
-        root.layer?.backgroundColor = AppTheme.cardColor.cgColor
-        root.layer?.cornerRadius = 8
+        root.layer?.backgroundColor = NSColor(calibratedWhite: 0.09, alpha: 0.92).cgColor
+        root.layer?.cornerRadius = 7
         root.layer?.borderWidth = 1
-        root.layer?.borderColor = AppTheme.cardBorderColor.cgColor
+        root.layer?.borderColor = AppTheme.lineStrongColor.cgColor
 
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 0
-        stack.edgeInsets = NSEdgeInsets(top: 5, left: 5, bottom: 5, right: 5)
+        stack.spacing = 2
+        stack.edgeInsets = NSEdgeInsets(top: 4, left: 4, bottom: 4, right: 4)
         stack.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(stack)
         NSLayoutConstraint.activate([
@@ -158,7 +212,7 @@ private final class ViewSwitcherMenuVC: NSViewController {
             stack.addArrangedSubview(row)
             row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
-        preferredContentSize = NSSize(width: 208, height: CGFloat(views.count) * 34 + 10)
+        preferredContentSize = NSSize(width: 190, height: CGFloat(views.count) * 30 + 10)
     }
 }
 
@@ -175,7 +229,7 @@ private final class MenuRowView: NSView {
     init(view: AppViews.ViewDef, isCurrent: Bool) {
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.backgroundColor = .clear
+        layer?.backgroundColor = isCurrent ? AppTheme.accent.withAlphaComponent(0.08).cgColor : .clear
         layer?.cornerRadius = 5
 
         let icon = NSImage(systemSymbolName: view.symbol, accessibilityDescription: view.label) ?? NSImage()
@@ -184,7 +238,7 @@ private final class MenuRowView: NSView {
 
         label.stringValue = view.label
         label.font = AppTheme.bodyFont
-        label.textColor = isCurrent ? AppTheme.accent : AppTheme.textPrimary
+        label.textColor = isCurrent ? AppTheme.accent : AppTheme.textSecondary
         label.isBezeled = false
         label.drawsBackground = false
 
@@ -193,12 +247,14 @@ private final class MenuRowView: NSView {
         eyeBtn.toolTip = "隐藏该视图（可在设置中恢复）"
         eyeBtn.target = self
         eyeBtn.action = #selector(eyeClick)
+        eyeBtn.widthAnchor.constraint(equalToConstant: 22).isActive = true
+        eyeBtn.heightAnchor.constraint(equalToConstant: 24).isActive = true
 
         let stack = NSStackView(views: [iconView, label, eyeBtn])
         stack.orientation = .horizontal
         stack.alignment = .centerY
-        stack.spacing = 8
-        stack.edgeInsets = NSEdgeInsets(top: 6, left: 8, bottom: 6, right: 4)
+        stack.spacing = 7
+        stack.edgeInsets = NSEdgeInsets(top: 0, left: 7, bottom: 0, right: 4)
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         NSLayoutConstraint.activate([
@@ -206,8 +262,9 @@ private final class MenuRowView: NSView {
             stack.trailingAnchor.constraint(equalTo: trailingAnchor),
             stack.topAnchor.constraint(equalTo: topAnchor),
             stack.bottomAnchor.constraint(equalTo: bottomAnchor),
-            iconView.widthAnchor.constraint(equalToConstant: 15),
-            iconView.heightAnchor.constraint(equalToConstant: 15),
+            iconView.widthAnchor.constraint(equalToConstant: 14),
+            iconView.heightAnchor.constraint(equalToConstant: 14),
+            heightAnchor.constraint(equalToConstant: 30),
         ])
     }
 
@@ -227,12 +284,12 @@ private final class MenuRowView: NSView {
 
     override func mouseEntered(with event: NSEvent) {
         hover = true
-        layer?.backgroundColor = AppTheme.hoverColor.cgColor
+        layer?.backgroundColor = (hover ? AppTheme.panelColor : AppTheme.accent.withAlphaComponent(0.08)).cgColor
     }
 
     override func mouseExited(with event: NSEvent) {
         hover = false
-        layer?.backgroundColor = .clear
+        layer?.backgroundColor = AppTheme.accent.withAlphaComponent(0.08).cgColor
     }
 
     override func mouseDown(with event: NSEvent) {

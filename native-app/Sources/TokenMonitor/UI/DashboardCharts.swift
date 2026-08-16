@@ -11,11 +11,11 @@ final class HeatmapView: NSView {
 
     static func levelColor(_ level: Int, metric: String) -> NSColor {
         switch level {
-        case 4: return NSColor(calibratedRed: 0.36, green: 0.62, blue: 1.00, alpha: 0.95)
-        case 3: return NSColor(calibratedRed: 0.30, green: 0.52, blue: 0.95, alpha: 0.85)
-        case 2: return NSColor(calibratedRed: 0.28, green: 0.42, blue: 0.85, alpha: 0.65)
-        case 1: return NSColor(calibratedRed: 0.30, green: 0.38, blue: 0.70, alpha: 0.45)
-        default: return NSColor(white: 1, alpha: 0.07)
+        case 4: return NSColor(calibratedRed: 180/255, green: 230/255, blue: 255/255, alpha: 1)
+        case 3: return NSColor(calibratedRed: 150/255, green: 210/255, blue: 255/255, alpha: 0.8)
+        case 2: return NSColor(calibratedRed: 120/255, green: 190/255, blue: 255/255, alpha: 0.45)
+        case 1: return NSColor(calibratedRed: 90/255, green: 170/255, blue: 255/255, alpha: 0.18)
+        default: return NSColor(white: 1, alpha: 0.03)
         }
     }
 
@@ -168,7 +168,9 @@ final class DashboardChartView: NSView {
     }
 
     private func drawGrid(ctx: CGContext, plot: CGRect, maxVal: Double) {
-        ctx.setStrokeColor(AppTheme.separatorColor.cgColor)
+        let gridColor = AppTheme.lineColor.withAlphaComponent(0.5)
+        let axisColor = AppTheme.lineColor.withAlphaComponent(1.3)
+        ctx.setStrokeColor(gridColor.cgColor)
         ctx.setLineWidth(1)
         for i in 0...4 {
             let y = plot.minY + plot.height * CGFloat(i) / 4
@@ -177,12 +179,12 @@ final class DashboardChartView: NSView {
             ctx.strokePath()
             let value = maxVal * Double(4 - i) / 4
             let text = NSAttributedString(string: Fmt.tokens(Int(value)), attributes: [
-                .font: AppTheme.microFont, .foregroundColor: AppTheme.textTertiary,
+                .font: AppTheme.microFont, .foregroundColor: AppTheme.textSecondary.withAlphaComponent(0.5),
             ])
             text.draw(at: NSPoint(x: plot.minX - 4 - text.size().width, y: y - 4))
         }
         // 基线
-        ctx.setStrokeColor(AppTheme.textTertiary.withAlphaComponent(0.5).cgColor)
+        ctx.setStrokeColor(axisColor.cgColor)
         ctx.move(to: CGPoint(x: plot.minX, y: plot.maxY))
         ctx.addLine(to: CGPoint(x: plot.maxX, y: plot.maxY))
         ctx.strokePath()
@@ -240,7 +242,7 @@ final class DashboardChartView: NSView {
 
         for (i, c) in model.candles.enumerated() {
             let up = c.up
-            let bodyColor = up ? AppTheme.positive : AppTheme.danger
+            let bodyColor = up ? AppTheme.candleUp : AppTheme.candleDown
             ctx.setStrokeColor(bodyColor.withAlphaComponent(0.85).cgColor)
             ctx.setLineWidth(1)
             // 影线
@@ -341,10 +343,10 @@ final class ChartTooltipView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.backgroundColor = NSColor(white: 0.08, alpha: 0.96).cgColor
-        layer?.cornerRadius = 6
+        layer?.backgroundColor = NSColor(calibratedRed: 16/255, green: 21/255, blue: 30/255, alpha: 0.96).cgColor
+        layer?.cornerRadius = 9
         layer?.borderWidth = 1
-        layer?.borderColor = AppTheme.cardBorderColor.cgColor
+        layer?.borderColor = NSColor(calibratedWhite: 1, alpha: 0.1).cgColor
     }
 
     required init?(coder: NSCoder) { fatalError() }

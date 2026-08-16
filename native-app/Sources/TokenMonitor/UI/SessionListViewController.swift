@@ -109,6 +109,9 @@ private final class SessionRowView: NSView {
     private let detailLabel = NSTextField(labelWithString: "")
     private let tokensLabel = NSTextField(labelWithString: "")
     private let costLabel = NSTextField(labelWithString: "")
+    private let barBg = NSView()
+    private let barFill = NSView()
+    private var barFillWidth: NSLayoutConstraint?
     private var hover = false
     private var tracking: NSTrackingArea?
 
@@ -127,56 +130,85 @@ private final class SessionRowView: NSView {
         layer?.backgroundColor = .clear
 
         dot.wantsLayer = true
-        dot.layer?.cornerRadius = 4
+        dot.layer?.cornerRadius = 3.5
         dot.translatesAutoresizingMaskIntoConstraints = false
 
         configureLabel(titleLabel, font: AppTheme.bodyFont, color: AppTheme.textPrimary)
-        configureLabel(metaLabel, font: AppTheme.microFont, color: AppTheme.textTertiary)
-        configureLabel(detailLabel, font: AppTheme.microFont, color: AppTheme.textTertiary)
-        configureLabel(tokensLabel, font: AppTheme.monoFont, color: AppTheme.textPrimary)
-        configureLabel(costLabel, font: AppTheme.smallFont, color: AppTheme.textTertiary)
+        configureLabel(metaLabel, font: AppTheme.microFont, color: AppTheme.textSecondary)
+        configureLabel(detailLabel, font: AppTheme.microFont, color: AppTheme.textSecondary)
+        configureLabel(tokensLabel, font: AppTheme.bodyFont, color: AppTheme.textPrimary)
+        configureLabel(costLabel, font: AppTheme.microFont, color: AppTheme.textSecondary)
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.maximumNumberOfLines = 1
         titleLabel.cell?.truncatesLastVisibleLine = true
+        detailLabel.lineBreakMode = .byWordWrapping
+        detailLabel.maximumNumberOfLines = 2
+        detailLabel.alphaValue = 0.84
+        tokensLabel.alignment = .right
+        costLabel.alignment = .right
 
-        let leftStack = NSStackView(views: [dot, titleLabel])
-        leftStack.orientation = .horizontal
-        leftStack.alignment = .centerY
-        leftStack.spacing = 6
+        let labelStack = NSStackView(views: [titleLabel, metaLabel, detailLabel])
+        labelStack.orientation = .vertical
+        labelStack.alignment = .leading
+        labelStack.spacing = 1
         titleLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+
+        let nameRow = NSStackView(views: [dot, labelStack])
+        nameRow.orientation = .horizontal
+        nameRow.alignment = .top
+        nameRow.spacing = 7
 
         let metrics = NSStackView(views: [tokensLabel, costLabel])
         metrics.orientation = .vertical
         metrics.alignment = .trailing
-        metrics.spacing = 1
-        tokensLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
-        costLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        metrics.spacing = 2
+        metrics.widthAnchor.constraint(greaterThanOrEqualToConstant: 66).isActive = true
 
-        let stack = NSStackView(views: [leftStack, metrics])
-        stack.orientation = .horizontal
-        stack.alignment = .centerY
-        stack.spacing = 8
-        stack.edgeInsets = NSEdgeInsets(top: 8, left: 14, bottom: 8, right: 14)
+        let head = NSStackView(views: [nameRow, metrics])
+        head.orientation = .horizontal
+        head.alignment = .top
+        head.spacing = 8
+        nameRow.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        metrics.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+
+        barBg.wantsLayer = true
+        barBg.layer?.backgroundColor = NSColor(calibratedRed: 4/255, green: 8/255, blue: 13/255, alpha: 0.46).cgColor
+        barBg.layer?.cornerRadius = 2.5
+        barBg.translatesAutoresizingMaskIntoConstraints = false
+        barFill.wantsLayer = true
+        barFill.layer?.cornerRadius = 2.5
+        barFill.translatesAutoresizingMaskIntoConstraints = false
+        barBg.addSubview(barFill)
+
+        let stack = NSStackView(views: [head, barBg])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 5
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
 
-        let metaRow = NSStackView(views: [metaLabel, detailLabel])
-        metaRow.orientation = .horizontal
-        metaRow.alignment = .centerY
-        metaRow.spacing = 6
-        metaRow.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(metaRow)
+        let sep = NSView()
+        sep.wantsLayer = true
+        sep.layer?.backgroundColor = AppTheme.hairlineColor.cgColor
+        sep.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(sep)
 
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: trailingAnchor),
-            stack.topAnchor.constraint(equalTo: topAnchor),
-            dot.widthAnchor.constraint(equalToConstant: 8),
-            dot.heightAnchor.constraint(equalToConstant: 8),
-            metaRow.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 28),
-            metaRow.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
-            metaRow.topAnchor.constraint(equalTo: stack.bottomAnchor, constant: 1),
-            metaRow.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -5),
+            stack.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+            dot.widthAnchor.constraint(equalToConstant: 7),
+            dot.heightAnchor.constraint(equalToConstant: 7),
+            barBg.heightAnchor.constraint(equalToConstant: 5),
+            barBg.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            barFill.leadingAnchor.constraint(equalTo: barBg.leadingAnchor),
+            barFill.topAnchor.constraint(equalTo: barBg.topAnchor),
+            barFill.bottomAnchor.constraint(equalTo: barBg.bottomAnchor),
+            sep.leadingAnchor.constraint(equalTo: leadingAnchor),
+            sep.trailingAnchor.constraint(equalTo: trailingAnchor),
+            sep.bottomAnchor.constraint(equalTo: bottomAnchor),
+            sep.heightAnchor.constraint(equalToConstant: 1),
         ])
     }
 
@@ -197,7 +229,7 @@ private final class SessionRowView: NSView {
         let modelLabel = modelNames.count == 1 ? modelNames[0] : modelNames.count > 1 ? "\(modelNames.count) 个模型" : ""
         let suffix = !modelLabel.isEmpty ? modelLabel : (!projectLabel.isEmpty ? projectLabel : String(sessionId.prefix(8)))
         titleLabel.stringValue = "\(label) · \(suffix)"
-        tokensLabel.stringValue = Fmt.tokens(tokens)
+        tokensLabel.stringValue = Fmt.tokensExact(tokens)
         costLabel.stringValue = Fmt.money(cost, settings: settings)
 
         let time = compactSessionTime(lastUsedMs)
@@ -207,6 +239,11 @@ private final class SessionRowView: NSView {
         let detail = sessionIdLabel(sessionId)
         detailLabel.stringValue = detail
         detailLabel.isHidden = detail.isEmpty
+
+        let fraction = tokens > 0 ? min(1.0, CGFloat(tokens) / 500_000) : 0
+        barFillWidth?.isActive = false
+        barFillWidth = barFill.widthAnchor.constraint(equalTo: barBg.widthAnchor, multiplier: max(0.02, fraction))
+        barFillWidth?.isActive = true
     }
 
     /// 原版 compactSessionTime：今天显示 HH:mm，否则 MM/dd HH:mm。
@@ -249,7 +286,7 @@ private final class SessionRowView: NSView {
         addTrackingArea(area)
     }
 
-    override func mouseEntered(with event: NSEvent) { hover = true; layer?.backgroundColor = AppTheme.hoverColor.cgColor }
+    override func mouseEntered(with event: NSEvent) { hover = true; layer?.backgroundColor = AppTheme.panelColor.cgColor }
     override func mouseExited(with event: NSEvent) { hover = false; layer?.backgroundColor = .clear }
     override func mouseDown(with event: NSEvent) { onSelect?() }
 }
