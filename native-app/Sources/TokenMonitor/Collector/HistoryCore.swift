@@ -47,12 +47,21 @@ enum HistoryCore {
     }
 
     static func mergeAdapterContributions(_ contributions: [Adapters.HistoryContribution], into days: inout [Day]) {
+        // Build a date->index map once so each contribution is an O(1)
+        // lookup instead of a linear firstIndex scan (was O(n^2) total).
+        var indexByDate: [String: Int] = [:]
+        for (i, day) in days.enumerated() {
+            indexByDate[day.date] = i
+        }
         for c in contributions {
-            let index = days.firstIndex { $0.date == c.date }
-            if index == nil {
+            let i: Int
+            if let existing = indexByDate[c.date] {
+                i = existing
+            } else {
                 days.append(Day(date: c.date))
+                i = days.count - 1
+                indexByDate[c.date] = i
             }
-            let i = index ?? days.count - 1
             let tokens = Double(c.input + c.output + c.cacheRead + c.cacheWrite)
             days[i].tokens += tokens
             days[i].cost += c.cost
