@@ -954,19 +954,42 @@ final class Collector {
 
     static func scanTokscalePeriods(clients: [String], settings: [String: Any], now: Date) -> [String: [String: Any]]? {
         guard !clients.isEmpty else { return emptyTokscalePeriods() }
-        do {
-            var result: [String: [String: Any]] = [:]
-            let since = settings["allTimeSince"] as? String ?? "2024-01-01"
-            for period in ["today", "month", "allTime"] {
-                let entries = try TokscaleRunner.shared.usage(clients: clients, period: period, allTimeSince: since)
-                let rows = entries.map(UsageCore.rowFromTokscaleEntry)
-                result[period] = UsageCore.extractPeriod(entries: rows)
+        let since = settings["allTimeSince"] as? String ?? "2024-01-01"
+        let periods = ["today", "month", "allTime"]
+
+        // Parallel spawn: the three period scans read the same files but
+        // are independent — running them concurrently cuts first-tick
+        // wall-clock from ~3x single-scan to ~1x. TokscaleRunner.run is
+        // thread-safe (runningProcesses/pricingCache are lock-guarded).
+        let lock = NSLock()
+        var results: [String: [String: Any]] = [:]
+        var firstError: Error?
+        let group = DispatchGroup()
+        for period in periods {
+            group.enter()
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    let entries = try TokscaleRunner.shared.usage(clients: clients, period: period, allTimeSince: since)
+                    let rows = entries.map(UsageCore.rowFromTokscaleEntry)
+                    let periodResult = UsageCore.extractPeriod(entries: rows)
+                    lock.lock()
+                    results[period] = periodResult
+                    lock.unlock()
+                } catch {
+                    lock.lock()
+                    if firstError == nil { firstError = error }
+                    lock.unlock()
+                }
+                group.leave()
             }
-            return result
-        } catch {
+        }
+        group.wait()
+
+        if let error = firstError {
             NSLog("[collector] tokscale scan failed: %@", String(describing: error))
             return nil
         }
+        return results
     }
 
     static func scanTokscaleGraph(clients: [String]) -> (days: [HistoryCore.Day], activeTimeMs: Double?)? {
