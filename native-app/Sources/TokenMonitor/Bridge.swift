@@ -515,8 +515,29 @@ final class Bridge: NSObject, WKScriptMessageHandler {
     }
 
     static func jsQuote(_ string: String) -> String {
-        guard let data = try? JSONSerialization.data(withJSONObject: [string]) else { return "\"\"" }
-        let encoded = String(data: data, encoding: .utf8) ?? "\"\""
-        return String(encoded.dropFirst().dropLast())
+        // Escape a string for safe embedding in a JS string literal.
+        // Manual escaping avoids a JSONSerialization.data call (array
+        // allocation + serialization + Data to String copy) on every
+        // push/invoke. Output is JSON-compatible (quoted, escaped).
+        var out = "\""
+        for ch in string.unicodeScalars {
+            switch ch {
+            case "\"": out += "\\\""
+            case "\\": out += "\\\\"
+            case "\n": out += "\\n"
+            case "\r": out += "\\r"
+            case "\t": out += "\\t"
+            case "\u{08}": out += "\\b"
+            case "\u{0C}": out += "\\f"
+            default:
+                if ch.value < 0x20 {
+                    out += String(format: "\\u%04x", ch.value)
+                } else {
+                    out.append(Character(ch))
+                }
+            }
+        }
+        out += "\""
+        return out
     }
 }
