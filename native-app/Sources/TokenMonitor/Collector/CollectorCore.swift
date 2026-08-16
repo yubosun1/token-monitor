@@ -152,6 +152,11 @@ final class Collector {
     private var mergedAdapterPeriods: [String: [String: Any]]?
     var tokscaleSnapshot: TokscaleSnapshot?
     private var lastFullCheckAt = Date.distantPast
+    // Per-client timestamp of the last actual source re-read. Used to smooth
+    // CPU when a client (e.g. dsh) is actively appending: a changed
+    // fingerprint within the re-read window is deferred to the next tick so
+    // re-decompression/parsing happens at most once per adapterRecheckMs.
+    private var lastAdapterReadAt: [String: Date] = [:]
     private var periodFailures = 0
     private var graphFailures = 0
     private var periodRetryAfter = Date.distantPast
@@ -263,6 +268,15 @@ final class Collector {
         let raw = UsageCore.doubleValue(environment.settings()["collectionIntervalMs"])
         let ms = raw > 0 ? raw : 300000
         return max(refreshInterval(), ms / 1000.0)
+    }
+
+    /// Minimum gap between actual source re-reads for adapter clients.
+    /// Bound tight to the tick cadence so a 15s tick never re-reads more
+    /// often than the window, but a longer window still applies.
+    private func adapterRecheckInterval(_ settings: [String: Any]) -> TimeInterval {
+        let raw = UsageCore.doubleValue(settings["adapterRecheckMs"])
+        let ms = raw > 0 ? raw : 30000
+        return max(1.0, ms / 1000.0)
     }
 
     private func rebuildTimer() {
@@ -506,6 +520,15 @@ final class Collector {
             let raw: RawSnapshot
             if let cached = rawSnapshots[client], cached.fingerprint == fp.signature {
                 raw = cached
+            } else if let prior = rawSnapshots[client],
+                      now.timeIntervalSince(lastAdapterReadAt[client] ?? .distantPast) < adapterRecheckInterval(settings) {
+                // Low-CPU mode: the source changed while a session is actively
+                // appending, but a fresh read happened within the cooldown
+                // window — reuse the previous snapshot and let the next tick
+                // pick up the new data. Stats trail the source by at most the
+                // window; re-decompression/parsing is bounded to 1/window.
+                raw = prior
+                PerfDiag.log(String(format: "source %@: changed but within re-read cooldown (%.0fs), reusing previous rows", client, adapterRecheckInterval(settings)))
             } else {
                 let rows = environment.adapterRows(client)
                 raw = RawSnapshot(
@@ -514,6 +537,7 @@ final class Collector {
                     models: Self.distinctModelIds(rows)
                 )
                 rawSnapshots[client] = raw
+                lastAdapterReadAt[client] = now
                 PerfDiag.log(String(format: "source %@: changed (%d files), re-read", client, fp.files.count))
             }
             resolvePricing(models: raw.models, policy: pricingPolicy, now: now)
@@ -989,7 +1013,6 @@ final class Collector {
             "receivedAt": nowIso,
             "agentVersion": "0.44.0-native",
             "agentRuntime": "native",
-            "projectsEnabled": false,
             "trackedClients": clients,
             "clientStatus": clientStatus,
             "periodWindows": windows,
@@ -1003,7 +1026,6 @@ final class Collector {
             "updatedAt": nowIso,
             "periods": ["today": today, "month": month, "allTime": allTime],
             "devices": [device],
-            "projectsIncomplete": false,
             "limits": limitsSummary
         ]
         if let history {

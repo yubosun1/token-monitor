@@ -99,7 +99,6 @@ final class BridgeCore {
             "updatedAt": now,
             "periods": ["today": period, "month": period, "allTime": period],
             "devices": [Any](),
-            "projectsIncomplete": false,
             "limits": ["providers": [Any](), "updatedAt": NSNull()]
         ]
     }
@@ -185,7 +184,18 @@ final class BridgeCore {
             )
 
         case "pricing:lookup":
-            return NSNull()
+            guard let modelId = args.first as? String, !modelId.isEmpty else {
+                return ["ok": false, "error": "missing model id"]
+            }
+            // Same contract as the Electron main process: { ok, result: TokscalePricing }.
+            // Resolve may spawn a tokscale subprocess, so this case runs on the
+            // async dispatch list in Bridge.userContentController (never main).
+            if let pricing = TokscaleRunner.shared.pricing(for: modelId),
+               let data = try? JSONEncoder().encode(pricing),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                return ["ok": true, "result": json]
+            }
+            return ["ok": false, "error": "no pricing available for \(modelId)"]
 
         case "dashboard:getHistory", "getDashboardHistory":
             return Collector.shared.history() ?? ["days": [Any](), "monthly": [Any](), "summary": [String: Any]()]
@@ -227,15 +237,9 @@ final class BridgeCore {
             NSWorkspace.shared.activateFileViewerSelecting([settings.fileURL])
             return ["ok": true]
 
-        case "appearance:preview":
-            return [String: Any]()
-
-        case "sessionUsageArchive:clear":
-            return ["ok": true]
-
         case "subscriptions:save":
             let list = Subscriptions.normalizeSubscriptions(args.first)
-            settings.update(["subscriptions": list, "subscriptionsCacheHub": ""])
+            settings.update(["subscriptions": list])
             push("settings:push", rendererSettingsSnapshot())
             push("stats:push", BridgeCore.shared.statsPushPayload(Collector.shared.latestStats() ?? emptyStats()))
             return rendererSettingsSnapshot()
@@ -245,34 +249,33 @@ final class BridgeCore {
             settings.update(["subscriptionsOrphaned": [Any]()])
             return ["ok": true]
 
-        case "floatingBubble:expand", "floatingBubble:peek", "floatingBubble:collapseIfIdle",
-             "floatingBubble:setCollapsedSize", "floatingBubble:move":
+        case "floatingBubble:setCollapsedSize":
             return [String: Any]()
 
         case "tray:setIcons":
             return true
 
-        case "hub:getInfo":
-            return ["mode": "local", "hubUrl": "", "secret": "", "hostPort": 17321, "connected": false]
-
-        case "hub:regenerateSecret":
-            return ["ok": false]
-
         // Account/profile surfaces for tools the native app no longer manages.
         case "mimo:accounts", "mimo:addAccount", "mimo:openConsole", "mimo:removeAccount",
              "mimo:setAccountEnabled":
             return [String: Any]()
-        case "cursor:loginManual", "cursor:logout", "cursor:status",
-             "claude:saveCookie", "ollama:validateCookie":
-            return [String: Any]()
         case "opencode:getProfiles", "openrouter:getProfiles", "thirdparty:getProfiles":
             if method == "opencode:getProfiles" {
-                let profiles = CredentialStore.shared.opencodeProfiles().map {
-                    ["name": $0.name, "enabled": $0.enabled]
+                // Same shape as the Electron app: an object keyed by profile
+                // name with capability flags only — credentials never cross
+                // to the renderer.
+                var safe: [String: Any] = [:]
+                for profile in CredentialStore.shared.opencodeProfiles() {
+                    safe[profile.name] = [
+                        "enabled": profile.enabled,
+                        "hasApiKey": !profile.apiKey.isEmpty,
+                        "hasCookie": !profile.cookie.isEmpty,
+                        "usesAmbientKey": false
+                    ]
                 }
-                return ["profiles": profiles]
+                return ["profiles": safe, "hasEnvVar": false, "hasAmbientKey": false]
             }
-            return ["profiles": [Any]()]
+            return ["profiles": [String: Any]()]
         case "opencode:saveProfile":
             let name = args.first as? String ?? ""
             let cookie = args.count > 1 ? (args[1] as? String ?? "") : ""
@@ -301,16 +304,28 @@ final class BridgeCore {
             return ["ok": true]
         case "opencode:status":
             let profiles = CredentialStore.shared.opencodeProfiles()
-            let configured = profiles.contains { $0.enabled && !$0.cookie.isEmpty }
-            return ["status": configured ? "configured" : "notConfigured", "profiles": profiles.map { ["name": $0.name, "enabled": $0.enabled] }]
+            let configured = profiles.contains { $0.enabled && (!$0.cookie.isEmpty || !$0.apiKey.isEmpty) }
+            // Object keyed by profile name, matching what the renderer's
+            // updateOpenCodeProfilesStatus expects (per-name status entries).
+            var byName: [String: Any] = [:]
+            for profile in profiles {
+                let linked = !profile.cookie.isEmpty || !profile.apiKey.isEmpty
+                byName[profile.name] = [
+                    "enabled": profile.enabled,
+                    "linked": linked,
+                    "hasBalance": false,
+                    "balanceUsd": NSNull(),
+                    "error": NSNull()
+                ]
+            }
+            return ["status": configured ? "configured" : "notConfigured", "profiles": byName]
         case "openrouter:saveProfile", "openrouter:deleteProfile", "openrouter:renameProfile",
              "openrouter:setProfileEnabled",
              "thirdparty:saveProfile", "thirdparty:deleteProfile", "thirdparty:renameProfile",
              "thirdparty:setProfileEnabled",
              "codex:accounts", "codex:addAccount", "codex:selectWorkspace", "codex:cancelLogin",
              "codex:removeAccount", "codex:setAccountEnabled", "codex:switchSystemAccount",
-             "codex:refreshAccountLimits",
-             "copilot:signIn", "copilot:cancelSignIn":
+             "codex:refreshAccountLimits":
             return [String: Any]()
 
         default:
@@ -325,13 +340,6 @@ final class BridgeCore {
         case "window:contentReady":
             push("settings:push", rendererSettingsSnapshot())
             push("stats:push", BridgeCore.shared.statsPushPayload(Collector.shared.latestStats() ?? emptyStats()))
-        case "window:viewState", "setViewState":
-            if let patch = args.first as? [String: Any] {
-                let current = settings.snapshot()["lastViewState"] as? [String: Any] ?? [:]
-                var merged = current
-                merged.merge(patch) { _, new in new }
-                settings.update(["lastViewState": merged])
-            }
         case "window:diagResult":
             if let payload = args.first as? String {
                 NSLog("[diag] interaction: %@", payload)
@@ -342,17 +350,11 @@ final class BridgeCore {
             let line = args.count > 2 ? (args[2] as? Int ?? 0) : 0
             let detail = args.count > 3 ? (args[3] as? String ?? "") : ""
             NSLog("[renderer] %@ (%@:%d) %@", message, file, line, detail)
-        case "window:minimize":
-            window?.miniaturize(nil)
         case "window:close", "dashboard:close":
             // Fallback when the per-window Bridge did not intercept the
             // close (it normally does, to route through the owning
             // controller's close semantics).
             window?.orderOut(nil)
-        case "dashboard:ready", "dashboard:minimize":
-            if method == "dashboard:minimize" {
-                window?.miniaturize(nil)
-            }
         default:
             break
         }
@@ -482,7 +484,8 @@ final class Bridge: NSObject, WKScriptMessageHandler {
 
         if let id = body["id"] as? Int {
             if method == "session:getDetail" || method == "getSessionDetail"
-                || method == "serviceStatus:get" || method == "getServiceStatus" {
+                || method == "serviceStatus:get" || method == "getServiceStatus"
+                || method == "pricing:lookup" {
                 // Heavy or network-bound invokes run off the main thread and
                 // resolve asynchronously (the old Electron app used a worker
                 // for session detail and a background fetch for status).

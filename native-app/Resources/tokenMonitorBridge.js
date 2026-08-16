@@ -83,9 +83,7 @@
     saveSubscriptions: function (subscriptions, base) { return invoke('subscriptions:save', [subscriptions, base]); },
     adoptOrphanedSubscriptions: function () { return invoke('subscriptions:adoptOrphans'); },
     discardOrphanedSubscriptions: function () { return invoke('subscriptions:discardOrphans'); },
-    clearSessionUsageArchive: function () { return invoke('sessionUsageArchive:clear'); },
     lookupModelPricing: function (modelId) { return invoke('pricing:lookup', [modelId]); },
-    previewAppearance: function (patch) { return invoke('appearance:preview', [patch]); },
     getStats: function (options) { return invoke('stats:get', [options]); },
     getSessionDetail: function (args) { return invoke('session:getDetail', [args]); },
     getStreamStatus: function () { return invoke('stream:status'); },
@@ -95,17 +93,12 @@
     onDashboardHistoryChanged: function (callback) { return on('dashboard:historyChanged', callback); },
     dashboard: {
       ready: function () { send('dashboard:ready'); },
-      minimize: function () { send('dashboard:minimize'); },
       close: function () { send('dashboard:close'); }
     },
-    getHubInfo: function () { return invoke('hub:getInfo'); },
-    regenerateHubSecret: function () { return invoke('hub:regenerateSecret'); },
-    onHubPush: function (callback) { return on('hub:push', callback); },
-    onStatsPush: function (callback) { return on('stats:push', callback); },
-    onVisibility: function (callback) { return on('window:visibility', callback); },
-    onSettingsPush: function (callback) { return on('settings:push', callback); },
     onOpenSettings: function (callback) { return on('settings:open', callback); },
-    onOpenView: function (callback) { return on('view:open', callback); },
+    onVisibility: function (callback) { return on('window:visibility', callback); },
+    onStatsPush: function (callback) { return on('stats:push', callback); },
+    onSettingsPush: function (callback) { return on('settings:push', callback); },
     getAppInfo: function () { return invoke('app:getInfo'); },
     copyText: function (text) { return invoke('clipboard:write', [text]); },
     clientSources: function (clientId) { return invoke('usage:clientSources', [clientId]); },
@@ -118,29 +111,12 @@
       addAccount: function (cookieHeader) { return invoke('mimo:addAccount', [cookieHeader]); },
       openConsole: function () { return invoke('mimo:openConsole'); },
       removeAccount: function (id) { return invoke('mimo:removeAccount', [id]); },
-      setAccountEnabled: function (id, enabled) { return invoke('mimo:setAccountEnabled', [id, enabled]); },
-      onAccounts: function (callback) { return on('mimo:accounts', callback); }
+      setAccountEnabled: function (id, enabled) { return invoke('mimo:setAccountEnabled', [id, enabled]); }
     },
-    expandFloatingBubble: function () { return invoke('floatingBubble:expand'); },
-    moveFloatingBubble: function (delta) { return invoke('floatingBubble:move', [delta]); },
+    setFloatingBubbleCollapsedSize: function (size) { return invoke('floatingBubble:setCollapsedSize', [size]); },
     signalContentReady: function () { send('window:contentReady'); },
     setViewState: function (patch) { send('window:viewState', [patch]); },
-    peekFloatingBubble: function () { return invoke('floatingBubble:peek'); },
-    collapseFloatingBubbleIfIdle: function () { return invoke('floatingBubble:collapseIfIdle'); },
-    setFloatingBubbleCollapsedSize: function (size) { return invoke('floatingBubble:setCollapsedSize', [size]); },
-    onFloatingBubbleState: function (callback) { return on('floatingBubble:state', callback); },
     setTrayIcons: function (icons) { return invoke('tray:setIcons', [icons]); },
-    cursor: {
-      loginManual: function (token) { return invoke('cursor:loginManual', [token]); },
-      logout: function () { return invoke('cursor:logout'); },
-      status: function () { return invoke('cursor:status'); }
-    },
-    claude: {
-      saveCookie: function (cookie) { return invoke('claude:saveCookie', [cookie]); }
-    },
-    ollama: {
-      validateCookie: function (cookie) { return invoke('ollama:validateCookie', [cookie]); }
-    },
     opencode: {
       saveCookie: function (cookie) { return invoke('opencode:saveCookie', [cookie]); },
       logout: function () { return invoke('opencode:logout'); },
@@ -173,15 +149,8 @@
       removeAccount: function (id) { return invoke('codex:removeAccount', [id]); },
       setAccountEnabled: function (id, enabled) { return invoke('codex:setAccountEnabled', [id, enabled]); },
       switchSystemAccount: function (id) { return invoke('codex:switchSystemAccount', [id]); },
-      refreshAccountLimits: function (id) { return invoke('codex:refreshAccountLimits', [id]); },
-      onLoginStatus: function (callback) { return on('codex:loginStatus', callback); }
+      refreshAccountLimits: function (id) { return invoke('codex:refreshAccountLimits', [id]); }
     },
-    copilot: {
-      signIn: function (options) { return invoke('copilot:signIn', [options]); },
-      cancelSignIn: function (options) { return invoke('copilot:cancelSignIn', [options]); },
-      onLoginStatus: function (callback) { return on('copilot:loginStatus', callback); }
-    },
-    minimize: function () { send('window:minimize'); },
     close: function () { send('window:close'); }
   };
 

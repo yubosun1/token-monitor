@@ -63,26 +63,25 @@ final class SettingsStore {
         return [
             // Window
             "windowBehavior": "floating",
-            "alwaysOnTop": true,
-            // Fixed default appearance; the renderer maps appearanceMode
-            // (dark/light/auto) onto its theme presets.
-            "appearanceMode": "dark",
             "glassOpacity": 68,
             "glassBlur": 32,
             "systemGlass": true,
             "reduceMotion": "system",
             // Collectors
             "refreshMs": 15000,
+            // Low-CPU collection: when a local source (e.g. an actively
+            // appending dsh session) changes between refreshes, defer the
+            // re-read for at least this many ms so re-decompression/parsing
+            // happens at most once per window instead of on every tick.
+            "adapterRecheckMs": 30000,
             "collectionIntervalMs": 300000,
             "clients": "claude,codex,opencode,workbuddy,proma,hanako,dsh",
             "clientDisplayOrder": "claude,codex,opencode,proma,workbuddy,hanako,dsh",
             "hiddenClients": "",
             "pinnedClients": "",
-            "projectsEnabled": true,
             "historyEnabled": true,
             "historyIntervalMs": 900000,
             "sessionUsageArchiveEnabled": true,
-            "archivedClientUsage": ["version": 1, "clients": [String: Any]()],
             "allTimeSince": "2024-01-01",
             "customModelPricing": [Any](),
             // Limits
@@ -100,7 +99,6 @@ final class SettingsStore {
             // Subscriptions
             "subscriptions": [Any](),
             "subscriptionsOrphaned": [Any](),
-            "subscriptionsCacheHub": "",
             // UI
             "showLiveDot": true,
             "showToolIcons": true,
@@ -116,7 +114,6 @@ final class SettingsStore {
             "hiddenHomeModules": "tool",
             "viewDisplayOrder": "",
             "hiddenViews": "status",
-            "lastViewState": ["period": "today", "breakdown": "tool"],
             // Misc
             "deviceId": "macbook-pro-local",
             "language": "zh-CN",
@@ -130,8 +127,7 @@ final class SettingsStore {
             "trayContent": "icon",
             "showTrayIcon": true,
             "trayMode": true,
-            "settingsInTitlebar": false,
-            "dashboardFlat": false
+            "settingsInTitlebar": false
         ]
     }
 

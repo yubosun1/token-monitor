@@ -144,9 +144,20 @@ enum Adapters {
         ) else { return [] }
         var files: [URL] = []
         for case let file as URL in enumerator {
-            if file.pathExtension == "jsonl" { files.append(file) }
+            // Skip non-session artifacts that land in the data dirs (e.g.
+            // the upstream repo's session-diag-*.jsonl benchmark files):
+            // synthetic rows would pollute usage totals and active-day
+            // counts. Must mirror SourceScanner.included exactly.
+            if file.pathExtension == "jsonl", !isDiagArtifact(file.path) { files.append(file) }
         }
         return files
+    }
+
+    /// Whether a file is a synthetic diagnostic artifact rather than a real
+    /// session. Shared with SourceScanner.included so fingerprints and the
+    /// parsed row set always agree.
+    static func isDiagArtifact(_ path: String) -> Bool {
+        return URL(fileURLWithPath: path).lastPathComponent.hasPrefix("session-diag-")
     }
 
     static func parseJsonlLines(_ data: Data) -> [JSON] {

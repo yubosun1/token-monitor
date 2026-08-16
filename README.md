@@ -86,7 +86,8 @@ assets/icons/              客户端图标
 
 ## 已知取舍
 
-- 界面主题固定为默认外观；项目分组视图（projects）暂未移植（默认关闭）。
+- 界面主题固定为默认外观；项目分组视图（projects）已移除（不做按项目统计）。
+- 模型单价由 tokscale 内置价格库自动检测（`pricing-cache.json`，6 小时 TTL）；如需调整某个模型的价格，在「设置 → 采集 → 自定义模型定价」中覆盖（写入 `~/.config/tokscale/custom-pricing.json`）。
 - 会话详情弹窗对 Proma/Hanako/DSH 及 tokscale 类客户端有数据；逐消息详情覆盖范围以代码为准。
 - 版本号沿用 0.44.0-native，不提供自动更新。
 

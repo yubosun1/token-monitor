@@ -36,9 +36,16 @@ ls .../www/*.js .../www/*.css                                       # 实际文�
 
 - 基线提交（aef03dfe）已删除 Electron 专属代码/资源（.github 资产、windowsBackdropMode、
   wslStatusPresentation、diagnosticsPanel、floatingBubbleBoot、未用 icons 等，共 -3522 行）。
-- 本轮删除 `Collector.cachedAdapterRows`（只写不读）。
-- 桥接方法 `pricing:lookup`、`appearance:preview`、floatingBubble/tray 系列虽返回占位值，
-  但 renderer（app.js:12612 等）仍在调用，属于行为契约，不删。
+- 冗余清理轮（macos-native 2026-08）：项目功能残留（accordionRows 分支、project CSS/图标/i18n）、
+  语言设置 i18n 族、reasonix.native.* i18n、~110 条死 CSS 规则、SettingsStore 6 个死字段、
+  projectsEnabled/projectsIncomplete 残留字段、桥死通道（window:minimize/dashboard:minimize、
+  appearance:preview、floatingBubble 除 setCollapsedSize、hub:getInfo/regenerateSecret、
+  sessionUsageArchive:clear、cursor/claude/ollama/copilot 账号面）、setupCursorAccountUI 14 个
+  死账号块（app.js -2062 行）、休眠监听（onOpenView/onFloatingBubbleState/onHubPush）、
+  会话归档 UI（原生无归档后端）、重复实现（hashKey→CredentialHash、formatCompactNumber 去重）。
+- 保留的行为契约：`pricing:lookup`（经 TokscaleRunner 查价，命中 6h 缓存或拉起 tokscale 子进程，
+  异步执行不阻塞主线程，供「自定义模型定价」表单预填当前单价）；`floatingBubble:setCollapsedSize`
+  （tray 内容合成链调用）；`codex/mimo/openrouter/thirdparty` 账号面（limits 面板仍在调用）。
 
 ## 验证结果
 

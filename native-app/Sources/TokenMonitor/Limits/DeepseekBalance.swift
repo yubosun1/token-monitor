@@ -55,8 +55,13 @@ enum DeepseekBalance {
                 "balance": [
                     "amount": row.amount,
                     "currency": row.currency,
+                    // 当前可用余额 = total_balance（含赠金）；总充值余额 =
+                    // topped_up_balance。渲染层用这两个数分别展示。
+                    "toppedUpBalance": row.paid,
                     "todaySpend": spend.todaySpend,
+                    "yesterdaySpend": spend.yesterdaySpend,
                     "weekSpend": spend.weekSpend,
+                    "month30Spend": spend.month30Spend,
                     "monthSpend": spend.monthSpend,
                     "allTimeSpend": spend.allTimeSpend,
                     "trackingSince": spend.trackingSince,
@@ -158,7 +163,12 @@ enum DeepseekBalance {
 
     struct Spend {
         let todaySpend: Double
+        let yesterdaySpend: Double
+        /// 近7天（含今天）
         let weekSpend: Double
+        /// 近30天（含今天）
+        let month30Spend: Double
+        /// 本月（自然月）
         let monthSpend: Double
         let allTimeSpend: Double
         let trackingSince: String
@@ -176,7 +186,11 @@ enum DeepseekBalance {
         } else if let lastPaid = number(entry["lastPaid"]), lastPaid != paid {
             let drop = max(0, lastPaid - paid)
             addDailySpend(&entry, timestamp: now, amount: drop)
-            entry["allTimeSpend"] = round2(number(entry["allTimeSpend"]) ?? 0 + drop)
+            // Parentheses matter: `??` binds looser than `+`, so the unparenthesized
+            // form `number(...) ?? 0 + drop` parsed as `?? (0 + drop)` and the drop
+            // was silently dropped whenever an entry already existed — the port of
+            // `round2(Number(entry.allTimeSpend || 0) + drop)` in the JS original.
+            entry["allTimeSpend"] = round2((number(entry["allTimeSpend"]) ?? 0) + drop)
             entry["lastPaid"] = paid
             changed = true
         }
@@ -235,7 +249,9 @@ enum DeepseekBalance {
         guard amount > 0 else { return }
         let key = localDayKey(timestamp)
         var daily = entry["dailySpend"] as? JSON ?? JSON()
-        daily[key] = round2(number(daily[key]) ?? 0 + amount)
+        // Same precedence trap as allTimeSpend above: without the parentheses the
+        // second drop of a day was discarded (port of `Number(daily[key] || 0) + amount`).
+        daily[key] = round2((number(daily[key]) ?? 0) + amount)
         entry["dailySpend"] = daily
     }
 
@@ -251,18 +267,26 @@ enum DeepseekBalance {
 
     private static func computeConsumption(_ entry: JSON, daily: JSON, now: Int64) -> Spend {
         let todayKey = localDayKey(now)
+        let yesterdayKey = localDayKey(startOfLocalDay(now) - 24 * 60 * 60 * 1000)
         let weekStartKey = localDayKey(startOfLocalDay(now) - 6 * 24 * 60 * 60 * 1000)
+        let month30StartKey = localDayKey(startOfLocalDay(now) - 29 * 24 * 60 * 60 * 1000)
         let monthKey = String(localDayKey(now).prefix(7))
         var weekSpend = 0.0
+        var month30Spend = 0.0
         var monthSpend = 0.0
         for (key, value) in daily {
+            // Day keys are zero-padded local dates ("yyyy-MM-dd"), so string
+            // comparison is chronological.
             if key >= weekStartKey && key <= todayKey { weekSpend += number(value) ?? 0 }
+            if key >= month30StartKey && key <= todayKey { month30Spend += number(value) ?? 0 }
             if key.hasPrefix(monthKey) { monthSpend += number(value) ?? 0 }
         }
         let trackingSince = int64FromJson(entry["trackingSince"])
         return Spend(
             todaySpend: round2(number(daily[todayKey]) ?? 0),
+            yesterdaySpend: round2(number(daily[yesterdayKey]) ?? 0),
             weekSpend: round2(weekSpend),
+            month30Spend: round2(month30Spend),
             monthSpend: round2(monthSpend),
             allTimeSpend: round2(number(entry["allTimeSpend"]) ?? 0),
             trackingSince: isoFromMs(trackingSince),
@@ -326,12 +350,6 @@ enum DeepseekBalance {
     }
 
     static func hashKey(_ parts: String...) -> String {
-        var hasher = CryptoKit.SHA256()
-        for part in parts {
-            hasher.update(data: Data(part.utf8))
-            hasher.update(data: Data([0]))
-        }
-        let digest = hasher.finalize()
-        return "sha256:\(digest.map { String(format: "%02x", $0) }.joined())"
+        CredentialHash.key(parts)
     }
 }

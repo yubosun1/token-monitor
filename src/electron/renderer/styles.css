@@ -99,97 +99,7 @@ html.is-mac-legacy .shell {
   border-radius: 10px;
   clip-path: inset(0 round 10px);
 }
-.floating-bubble-tab {
-  -webkit-app-region: no-drag;
-  -webkit-appearance: none;
-  appearance: none;
-  position: fixed;
-  inset: 0;
-  z-index: 20;
-  display: none;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  height: 100%;
-  padding: 0;
-  overflow: hidden;
-  border: 0;
-  border-radius: var(--floating-bubble-radius);
-  background: var(--glass);
-  color: var(--number);
-  cursor: grab;
-  outline: none;
-  -webkit-backdrop-filter: var(--glass-filter);
-  backdrop-filter: var(--glass-filter);
-}
-.system-glass-disabled .floating-bubble-tab {
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
-}
-.floating-bubble-tab span {
-  display: block;
-  font-size: 13px;
-  font-weight: 700;
-  line-height: 1;
-  max-width: 100%;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: clip;
-  padding: 0 2px;
-}
-.floating-bubble-tab span.bars { padding: 0; }
-.floating-bubble-tab span.bars img {
-  display: block;
-  width: auto;
-  height: 24px;
-}
-.floating-bubble-tab.dragging { cursor: grabbing; }
-html.floating-bubble-collapsed-left,
-body.floating-bubble-collapsed-left,
-html.floating-bubble-collapsed-right,
-body.floating-bubble-collapsed-right {
-  background: transparent;
-}
-html.floating-bubble-collapsed-left,
-body.floating-bubble-collapsed-left {
-  border-radius: var(--floating-bubble-radius);
-}
-html.floating-bubble-collapsed-right,
-body.floating-bubble-collapsed-right {
-  border-radius: var(--floating-bubble-radius);
-}
-html.floating-bubble-collapsed-left body .shell,
-html.floating-bubble-collapsed-right body .shell,
-body.floating-bubble-collapsed-left .shell,
-body.floating-bubble-collapsed-right .shell {
-  opacity: 0;
-  pointer-events: none;
-}
-html.floating-bubble-collapsed-left body .floating-bubble-tab,
-body.floating-bubble-collapsed-left .floating-bubble-tab {
-  display: flex;
-  border-radius: var(--floating-bubble-radius);
-}
-html.floating-bubble-collapsed-right body .floating-bubble-tab,
-body.floating-bubble-collapsed-right .floating-bubble-tab {
-  display: flex;
-  border-radius: var(--floating-bubble-radius);
-}
-html.is-windows.floating-bubble-collapsed-left,
-html.is-windows.floating-bubble-collapsed-right,
-html.is-windows body.floating-bubble-collapsed-left,
-html.is-windows body.floating-bubble-collapsed-right,
-html.is-windows.floating-bubble-collapsed-left body .floating-bubble-tab,
-html.is-windows.floating-bubble-collapsed-right body .floating-bubble-tab,
-body.is-windows.floating-bubble-collapsed-left .floating-bubble-tab,
-body.is-windows.floating-bubble-collapsed-right .floating-bubble-tab {
-  border-radius: 8px;
-}
-.floating-bubble-tab:hover {
-  color: var(--text);
-}
 .titlebar {
-  -webkit-app-region: drag;
   position: relative;
   z-index: 1;
   display: flex;
@@ -198,7 +108,6 @@ body.is-windows.floating-bubble-collapsed-right .floating-bubble-tab {
   gap: 12px;
   min-height: 30px;
 }
-.shell.desktop-mode .titlebar { -webkit-app-region: no-drag; }
 .titlebar > div:first-child { min-width: 0; flex: 1 1 auto; }
 .app-title {
   display: flex;
@@ -259,10 +168,6 @@ body.is-windows.floating-bubble-collapsed-right .floating-bubble-tab {
    enlarged hover targets are scoped to them. Unscoped, the live dot — which is shown in
    every state — would punch a permanent ~16px no-drag hole into the frameless window's
    drag region right beside the title, for users who can never see the reveal. */
-.shell.title-collapsed .app-title-mark,
-.shell.title-collapsed .live-dot,
-.shell.title-icon-only .app-title-mark,
-.shell.title-icon-only .live-dot { -webkit-app-region: no-drag; }
 /* Both toggle the reveal between the speed and burn readings, so both get a pointer: the
    hover target and the click target must be the same surface, and an area of the titlebar
    that refuses to drag reads as broken unless it visibly announces itself as a control. */
@@ -285,7 +190,6 @@ body.is-windows.floating-bubble-collapsed-right .floating-bubble-tab {
   content: '';
   position: absolute;
   inset: -6px;
-  -webkit-app-region: no-drag;
 }
 .shell.title-collapsed .app-title-mark::before,
 .shell.title-icon-only .app-title-mark::before { inset: -6px -7px; }
@@ -345,7 +249,6 @@ body.is-windows.floating-bubble-collapsed-right .floating-bubble-tab {
 .status { display: none; margin-top: 4px; color: var(--muted); font-size: 11px; }
 .status.error { display: block; }
 .title-controls {
-  -webkit-app-region: no-drag;
   position: relative;
   flex: 0 1 148px;
   min-width: 100px;
@@ -1252,35 +1155,6 @@ span.settings-note.settings-item-desc {
   color: var(--red);
   background: rgba(255, 91, 91, 0.12);
 }
-.codex-login-output {
-  max-height: 120px;
-  margin: 0;
-  padding: 7px 8px;
-  overflow: auto;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: rgba(var(--sunken-rgb), 0.36);
-  color: var(--muted);
-  font-size: 9px;
-  line-height: 1.4;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-.codex-login-output.hidden { display: none; }
-.codex-login-details {
-  min-width: 0;
-  color: var(--muted);
-  font-size: 10px;
-}
-.codex-login-details summary {
-  width: max-content;
-  cursor: pointer;
-  user-select: none;
-}
-.codex-login-details .codex-login-output { margin-top: 6px; }
-.codex-login-details.hidden,
-#codexLoginUrlActions.hidden,
-#codexLoginStatus.hidden { display: none; }
 .settings-note { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
 .settings-note code { padding: 1px 5px; border-radius: 3px; background: rgba(var(--overlay-rgb), 0.06); font-size: 10px; }
 .kimi-cookie-steps { text-wrap: pretty; }
@@ -1366,7 +1240,6 @@ span.settings-note.settings-item-desc {
 .hub-secret-row { display: flex; min-width: 0; align-items: center; gap: 6px; }
 .settings-panel .hub-secret-row input { flex: 1 1 0; width: 0; min-width: 0; }
 .hub-secret-row .icon-button { width: 30px; height: 30px; flex: 0 0 auto; font-size: 13px; }
-#secretPasteButton { font-size: 17px; }
 .shortcut-recorder {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -4444,10 +4317,8 @@ html.is-windows .limit-live-badge {
 .view-icon-tool { -webkit-mask-image: url("icons/views/tool.svg"); mask-image: url("icons/views/tool.svg"); }
 .view-icon-status { -webkit-mask-image: url("icons/views/status.svg"); mask-image: url("icons/views/status.svg"); }
 .view-icon-model { -webkit-mask-image: url("icons/views/model.svg"); mask-image: url("icons/views/model.svg"); }
-.view-icon-project { -webkit-mask-image: url("icons/views/project.svg"); mask-image: url("icons/views/project.svg"); }
 .view-icon-session { -webkit-mask-image: url("icons/views/session.svg"); mask-image: url("icons/views/session.svg"); }
 
-.row-icon-project { -webkit-mask-image: url("icons/views/project-row.svg"); mask-image: url("icons/views/project-row.svg"); }
 .view-icon-limits { -webkit-mask-image: url("icons/views/limits.svg"); mask-image: url("icons/views/limits.svg"); }
 .view-icon-trends { -webkit-mask-image: url("icons/views/trends.svg"); mask-image: url("icons/views/trends.svg"); }
 .mode-button { width: auto; max-width: 52%; min-width: 0; height: 30px; padding: 0 10px; overflow: hidden; color: var(--muted); text-align: left; text-overflow: ellipsis; white-space: nowrap; }
@@ -4501,128 +4372,22 @@ html.is-windows .limit-live-badge {
   .service-status-panel { display: none; }
 }
 
-#claudeManualPanel.hidden,
-#cursorManualPanel.hidden,
-#opencodeManualPanel.hidden,
 #deepseekManualPanel.hidden,
-#minimaxManualPanel.hidden,
-#zaiManualPanel.hidden,
-#zaiteamManualPanel.hidden,
-#volcengineManualPanel.hidden,
-#qoderManualPanel.hidden,
-#ollamaManualPanel.hidden,
-#mimoManualPanel.hidden,
-#kimiManualPanel.hidden,
-#copilotManualPanel.hidden,
-#copilotManualDetails.hidden,
-#cursorErrorMessage.hidden,
 #opencodeErrorMessage.hidden,
-#openrouterErrorMessage.hidden,
-#thirdpartyErrorMessage.hidden,
-#thirdpartyAccessTokenRow.hidden,
-#thirdpartyUserIdRow.hidden,
-#thirdpartyApiKeyRow.hidden,
-#thirdpartyModeField.hidden,
-#thirdpartyCustomConfig.hidden,
-#deepseekErrorMessage.hidden,
-#minimaxErrorMessage.hidden,
-#zaiErrorMessage.hidden,
-#zaiteamErrorMessage.hidden,
-#volcengineErrorMessage.hidden,
-#qoderErrorMessage.hidden,
-#ollamaErrorMessage.hidden,
-#kimiErrorMessage.hidden,
-#copilotErrorMessage.hidden,
-#copilotLoginStatus.hidden { display: none; }
-#claudeManualPanel,
-#cursorManualPanel,
-#opencodeManualPanel,
-#deepseekManualPanel,
-#minimaxManualPanel,
-#zaiManualPanel,
-#zaiteamManualPanel,
-#volcengineManualPanel,
-#qoderManualPanel,
-#ollamaManualPanel,
-#mimoManualPanel,
-#kimiManualPanel,
-#copilotManualPanel {
+#deepseekErrorMessage.hidden { display: none; }
+#deepseekManualPanel {
   min-width: 0;
 }
-#claudeManualPanel > .accordion-animation-inner,
-#cursorManualPanel > .accordion-animation-inner,
-#opencodeManualPanel > .accordion-animation-inner,
-#deepseekManualPanel > .accordion-animation-inner,
-#minimaxManualPanel > .accordion-animation-inner,
-#zaiManualPanel > .accordion-animation-inner,
-#zaiteamManualPanel > .accordion-animation-inner,
-#volcengineManualPanel > .accordion-animation-inner,
-#qoderManualPanel > .accordion-animation-inner,
-#ollamaManualPanel > .accordion-animation-inner,
-#mimoManualPanel > .accordion-animation-inner,
-#kimiManualPanel > .accordion-animation-inner {
+#deepseekManualPanel > .accordion-animation-inner {
   display: grid;
   min-width: 0;
   gap: 8px;
 }
-#claudeManualPanel textarea,
-#cursorManualPanel textarea,
-#opencodeManualPanel textarea,
-#openrouterApiKeyInput,
-#thirdpartyPlatformInput,
-#thirdpartyModeInput,
-#thirdpartyAuthModeInput,
-#thirdpartyBaseUrlInput,
-#thirdpartyAccessTokenInput,
-#thirdpartyUserIdInput,
-#thirdpartyApiKeyInput,
-#thirdpartyEndpointPathInput,
-#thirdpartyRemainingPathInput,
-#thirdpartyUsedPathInput,
-#thirdpartyTotalPathInput,
-#thirdpartyCurrencyInput,
-#thirdpartyDivisorInput,
-#deepseekManualPanel input,
-#minimaxManualPanel input,
-#zaiManualPanel input,
-#zaiteamManualPanel input,
-#zaiApiRegionInput,
-#volcengineManualPanel input,
-#qoderManualPanel textarea,
-#qoderManualPanel select,
-#ollamaManualPanel textarea,
-#mimoManualPanel input,
-#mimoManualPanel textarea,
-#kimiManualPanel input,
-#copilotManualDetails input {
+#deepseekManualPanel input {
   width: 100%;
   font-size: 12px;
 }
-#claudeManualPanel textarea,
-#cursorManualPanel textarea,
-#opencodeManualPanel textarea,
-#openrouterApiKeyInput,
-#thirdpartyBaseUrlInput,
-#thirdpartyAccessTokenInput,
-#thirdpartyUserIdInput,
-#thirdpartyApiKeyInput,
-#thirdpartyEndpointPathInput,
-#thirdpartyRemainingPathInput,
-#thirdpartyUsedPathInput,
-#thirdpartyTotalPathInput,
-#thirdpartyCurrencyInput,
-#thirdpartyDivisorInput,
-#deepseekManualPanel input,
-#minimaxManualPanel input,
-#zaiManualPanel input,
-#zaiteamManualPanel input,
-#volcengineManualPanel input,
-#qoderManualPanel textarea,
-#ollamaManualPanel textarea,
-#mimoManualPanel input,
-#mimoManualPanel textarea,
-#kimiManualPanel input,
-#copilotManualDetails input {
+#deepseekManualPanel input {
   font-family: monospace;
 }
 .link-button {
@@ -4905,19 +4670,10 @@ html.is-windows .limit-live-badge {
   opacity: 0.85;
   text-align: right;
 }
-.project-tool-breakdown { gap: 5px; }
 @media (prefers-reduced-motion: reduce) {
   .row-accordion,
   .row-accordion-inner { transition: none; }
 }
-.project-tool-row { align-items: center; }
-.project-tool-mark {
-  width: 7px;
-  height: 7px;
-  flex: 0 0 auto;
-  border-radius: 50%;
-}
-
 .custom-pricing-form {
   display: flex;
   flex-direction: column;
@@ -5187,82 +4943,6 @@ html.is-windows .limit-live-badge {
   font-size: 12px;
 }
 
-.thirdparty-add-body {
-  gap: 9px;
-}
-.thirdparty-add-body .thirdparty-intro {
-  line-height: 1.45;
-}
-.thirdparty-choice-grid,
-.thirdparty-credential-grid,
-.thirdparty-custom-request-grid,
-.thirdparty-custom-mapping-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  min-width: 0;
-}
-.thirdparty-choice-grid.single-field,
-.thirdparty-credential-grid.single-field {
-  grid-template-columns: minmax(0, 1fr);
-}
-.thirdparty-field {
-  display: grid;
-  min-width: 0;
-  gap: 4px;
-}
-.thirdparty-field label {
-  color: var(--muted);
-  font-size: 10px;
-  line-height: 1.2;
-}
-.thirdparty-field :is(input, select) {
-  width: 100%;
-  min-width: 0;
-  height: 30px;
-  box-sizing: border-box;
-  font-size: 11px;
-}
-.thirdparty-mode-hint {
-  min-height: 30px;
-  box-sizing: border-box;
-  padding: 7px 9px;
-  border: 1px solid rgba(var(--accent-rgb), 0.22);
-  border-radius: 5px;
-  background: rgba(var(--accent-rgb), 0.055);
-  line-height: 1.4;
-}
-#thirdpartyApiKeyRow {
-  grid-column: 1 / -1;
-}
-.thirdparty-custom-config {
-  display: grid;
-  gap: 8px;
-}
-.thirdparty-custom-mapping {
-  display: grid;
-  gap: 7px;
-  padding: 8px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: rgba(var(--overlay-rgb), 0.025);
-}
-.thirdparty-custom-mapping-heading {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  color: var(--text);
-  font-size: 10px;
-}
-.thirdparty-custom-mapping-heading span:last-child {
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 9px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 /* Custom tray/bubble composer ------------------------------------------------
    The preview is deliberately a menu-bar-like recessed strip. Its children
    are real canvas renders from the same path used by Electron's tray icon. */
@@ -5418,8 +5098,8 @@ html.is-windows .limit-live-badge {
 }
 .tray-composer-live-preview .tray-composer-preview-image {
   max-width: 210px;
-  /* Matches .floating-bubble-tab span.bars img so the preview is the size the
-     bubble actually draws; the tray surface overrides this to its own 20px. */
+  /* Preview sized to what the bubble actually draws (24px glyph);
+     the tray surface overrides this to its own 20px. */
   height: 24px;
 }
 .tray-composer[data-surface="tray"]:not(.is-editing) .tray-composer-live-preview {

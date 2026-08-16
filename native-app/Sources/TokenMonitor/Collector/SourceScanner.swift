@@ -73,7 +73,10 @@ enum SourceScanner {
     static func included(_ client: String, path: String) -> Bool {
         switch client {
         case "proma", "hanako":
-            return path.hasSuffix(".jsonl")
+            // Mirror Adapters.isDiagArtifact so the fingerprint and the
+            // parsed row set always agree (session-diag-*.jsonl are
+            // synthetic benchmark artifacts, not real sessions).
+            return path.hasSuffix(".jsonl") && !Adapters.isDiagArtifact(path)
         case "dsh":
             return path.hasSuffix("session.jsonl.zstd")
         default:

@@ -133,7 +133,6 @@
 
   function windowToggleShortcutAction(state = {}) {
     if (state.trayMode === true) return 'togglePopover';
-    if (state.floatingBubbleCollapsed === true) return 'expandFloatingBubble';
     if (state.visible === true && state.minimized !== true) return 'hideWindow';
     return 'focusExistingWindow';
   }

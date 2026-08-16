@@ -797,12 +797,10 @@
   }
 
   function formatCompactNumber(value, options) {
+    // Canonical formatter lives in trayText (delegates to compactTokens);
+    // keep a plain fallback only for standalone loads without trayText.
     if (trayTextApi?.formatCompactNumber) return trayTextApi.formatCompactNumber(value, options);
-    const number = Math.round(Number(value) || 0);
-    if (number >= 1_000_000_000) return `${(number / 1_000_000_000).toFixed(2)}B`;
-    if (number >= 1_000_000) return `${(number / 1_000_000).toFixed(1)}M`;
-    if (number >= 1_000) return `${(number / 1_000).toFixed(1)}K`;
-    return String(number);
+    return String(Math.round(Number(value) || 0));
   }
 
   function formatCost(value, item, options) {

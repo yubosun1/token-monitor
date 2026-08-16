@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, BridgeDelegate {
         // The renderer opens the dashboard from the Activity/Trends modules
         // via window.tokenMonitor.openDashboard() → dashboard:open → delegate.
         BridgeCore.shared.delegate = self
+        buildMainMenu()
         buildStatusItem()
         // Global toggle hotkey (Carbon; works while the LSUIElement app is in
         // the background, like the Electron globalShortcut it replaces).
@@ -150,6 +151,70 @@ final class AppDelegate: NSObject, NSApplicationDelegate, BridgeDelegate {
         TokscaleRunner.shared.terminateAll()
         SingleInstanceCoordinator.shared.unregisterActivationObserver()
         SingleInstanceCoordinator.shared.release()
+    }
+
+    // MARK: - Main menu
+
+    /// Install the application main menu. The app is LSUIElement (no visible
+    /// menu bar), but key equivalents resolve against NSApp.mainMenu, so the
+    /// standard editing shortcuts (Cmd+C/V/X/A/Z etc.) only reach the
+    /// WKWebView's field editor when an Edit menu exists — Electron shipped a
+    /// default menu that did exactly this; without it, pasting into the
+    /// settings inputs does nothing. Menu items target the responder chain
+    /// (nil target) so the web view's own paste:/copy:/cut: handlers run.
+    private func buildMainMenu() {
+        let mainMenu = NSMenu()
+
+        let appMenuItem = NSMenuItem()
+        mainMenu.addItem(appMenuItem)
+        let appMenu = NSMenu(title: "Token Monitor")
+        let about = appMenu.addItem(
+            withTitle: "关于 Token Monitor",
+            action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
+            keyEquivalent: ""
+        )
+        about.target = NSApp
+        appMenu.addItem(NSMenuItem.separator())
+        let hide = appMenu.addItem(
+            withTitle: "隐藏 Token Monitor",
+            action: #selector(NSApplication.hide(_:)),
+            keyEquivalent: "h"
+        )
+        hide.target = NSApp
+        appMenu.addItem(NSMenuItem.separator())
+        let quit = appMenu.addItem(
+            withTitle: "退出 Token Monitor",
+            action: #selector(NSApplication.terminate(_:)),
+            keyEquivalent: "q"
+        )
+        quit.target = NSApp
+        appMenuItem.submenu = appMenu
+
+        let editMenuItem = NSMenuItem()
+        mainMenu.addItem(editMenuItem)
+        let editMenu = NSMenu(title: "编辑")
+        editMenu.addItem(withTitle: "撤销", action: Selector(("undo:")), keyEquivalent: "z")
+        editMenu.addItem(withTitle: "重做", action: Selector(("redo:")), keyEquivalent: "Z")
+        editMenu.addItem(NSMenuItem.separator())
+        editMenu.addItem(withTitle: "剪切", action: Selector(("cut:")), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "复制", action: Selector(("copy:")), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "粘贴", action: Selector(("paste:")), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "删除", action: Selector(("delete:")), keyEquivalent: "")
+        editMenu.addItem(withTitle: "全选", action: Selector(("selectAll:")), keyEquivalent: "a")
+        editMenuItem.submenu = editMenu
+
+        NSApp.mainMenu = mainMenu
+
+        if ProcessInfo.processInfo.environment["TOKEN_MONITOR_DIAG"] != nil {
+            let sections = (NSApp.mainMenu?.items ?? []).compactMap { item -> String? in
+                guard let submenu = item.submenu else { return nil }
+                let entries = submenu.items
+                    .map { "\($0.title)[\($0.keyEquivalent)]" }
+                    .joined(separator: ",")
+                return "\(submenu.title): \(entries)"
+            }
+            NSLog("[diag] main menu installed: %@", sections.joined(separator: " | "))
+        }
     }
 
     // MARK: - Status item

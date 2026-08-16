@@ -1539,13 +1539,7 @@ enum OpencodeLimits {
     // MARK: - Shared low-level helpers
 
     private static func hashKey(_ parts: String...) -> String {
-        var hasher = SHA256()
-        for part in parts {
-            hasher.update(data: Data(part.utf8))
-            hasher.update(data: Data([0]))
-        }
-        let digest = hasher.finalize()
-        return "sha256:" + digest.map { String(format: "%02x", $0) }.joined()
+        CredentialHash.key(parts)
     }
 
     private static func sha256HexPrefix(_ value: String, _ length: Int) -> String {

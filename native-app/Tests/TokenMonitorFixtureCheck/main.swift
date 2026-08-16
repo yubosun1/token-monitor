@@ -1143,6 +1143,43 @@ func runCollectorStateTests() {
         checkEqual(world.customPricingSyncCalls, 2, "T14 changed setting syncs exactly once more")
         checkEqual(world.pricingLookups["model-a"] ?? 0, 2, "T14 pricing generation invalidated and re-resolved")
     }
+
+    // T15: the adapter re-read cooldown defers re-reads while a source is
+    // actively appending; stats may lag by the window, and the re-read
+    // happens once the window elapses.
+    do {
+        let world = FakeCollectorWorld(
+            now: shanghaiDate(2026, 8, 15, 12, 0),
+            settings: stateSettings(clients: "proma")
+        )
+        world.rowsByClient["proma"] = [
+            stateRow(client: "proma", session: "s1", model: "model-a", input: 100, output: 50, startedAt: "2026-08-15T11:00:00+08:00")
+        ]
+        let (collector, queue) = world.makeCollector()
+        collector.requestRefresh(.cheap, reason: .startup)
+        world.waitIdle(collector, queue)
+        checkEqual(world.rawReads["proma"] ?? 0, 1, "T15 one raw read at startup")
+        checkEqual(UsageCore.intValue(world.period(collector, "today")["totalTokens"]), 150, "T15 initial tokens")
+
+        // Fingerprint changes, but the last read was < 30s ago: the tick
+        // defers the re-read and keeps publishing the previous snapshot.
+        world.adapterFingerprints["proma"] = "fp-v2"
+        world.rowsByClient["proma"] = [
+            stateRow(client: "proma", session: "s1", model: "model-a", input: 200, output: 100, startedAt: "2026-08-15T11:00:00+08:00")
+        ]
+        world.now = world.now.addingTimeInterval(10)
+        collector.requestRefresh(.cheap, reason: .timer)
+        world.waitIdle(collector, queue)
+        checkEqual(world.rawReads["proma"] ?? 0, 1, "T15 no re-read inside cooldown")
+        checkEqual(UsageCore.intValue(world.period(collector, "today")["totalTokens"]), 150, "T15 stats still show previous snapshot")
+
+        // Past the 30s window the next tick re-reads and picks up the data.
+        world.now = world.now.addingTimeInterval(40)
+        collector.requestRefresh(.cheap, reason: .timer)
+        world.waitIdle(collector, queue)
+        checkEqual(world.rawReads["proma"] ?? 0, 2, "T15 re-read after cooldown elapses")
+        checkEqual(UsageCore.intValue(world.period(collector, "today")["totalTokens"]), 300, "T15 fresh data after re-read")
+    }
 }
 
 // MARK: - DSH cache lifecycle tests (round-4 Phase 5)
