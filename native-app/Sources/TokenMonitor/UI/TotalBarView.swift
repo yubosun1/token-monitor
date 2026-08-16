@@ -5,15 +5,73 @@ protocol TotalBarDelegate: AnyObject {
     func totalBarDidClickRefresh()
     func totalBarDidClickSettings()
     func totalBarDidClickClose()
+    func totalBarDidClickMinimize()
+    func totalBarDidClickPin()
 }
 
-/// 主窗口顶部（原版 titlebar + total-panel）：
-/// 第一行 = 标题（Σ + Token Monitor + live dot + 速率揭示）+ 右侧周期胶囊
-/// 切换（DAY/MONTH/TOTAL，带滑动指示块）+ 关闭按钮；第二行 = 总计面板
-/// （TOTAL TOKENS 标签 + 大数字 + 成本）。
+// MARK: - Top-anchored scroll view
+
+/// `NSScrollView` whose content starts at the top even when it is shorter than
+/// the viewport. AppKit's clip view is not flipped, so a short document view is
+/// laid out from the bottom-left and leaves blank space above it — every list
+/// in this UI wants the opposite.
+final class TopAnchoredScrollView: NSScrollView {
+    private final class FlippedClipView: NSClipView {
+        override var isFlipped: Bool { true }
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        contentView = FlippedClipView()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+}
+
+// MARK: - Hover slot
+
+/// 固定尺寸的容器，只负责把 hover 状态报出去（原版 .actions-hotspot +
+/// `.title-controls:has(...)` 的等价物）。
+final class HoverSlotView: NSView {
+    var onHoverChange: ((Bool) -> Void)?
+    private var tracking: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.activeAlways, .inVisibleRect, .mouseEnteredAndExited],
+            owner: self, userInfo: nil
+        )
+        tracking = area
+        addTrackingArea(area)
+    }
+
+    override func mouseEntered(with event: NSEvent) { onHoverChange?(true) }
+    override func mouseExited(with event: NSEvent) { onHoverChange?(false) }
+}
+
+/// 主窗口顶部（原版 titlebar + total-panel）。
+///
+/// 第一行 = 标题（`titleIconOnly` 时只显示 Σ，否则 "Token Monitor" + Σ）+
+/// live dot + 速率揭示；右侧是一个固定 148pt 的控件槽（原版 .title-controls），
+/// 周期胶囊与窗口按钮（⇧/−/×）在这个槽里交叉淡入淡出 —— 鼠标移到槽上显示
+/// 窗口按钮、隐藏周期胶囊，移开则相反。第二行 = 总计面板（TOTAL TOKENS 标签 +
+/// 大数字 + 成本）。
 final class TotalBarView: NSView {
     weak var delegate: TotalBarDelegate?
     private(set) var period = "today"
+
+    /// 原版 .title-controls 是 148px 宽、30px 高的固定槽。
+    private enum Metrics {
+        static let controlsWidth: CGFloat = 148
+        static let controlsHeight: CGFloat = 30
+        /// 原版 .shell padding: 12px 14px 14px。
+        static let horizontalInset: CGFloat = 14
+        static let topInset: CGFloat = 12
+    }
 
     private let sigmaLabel = NSTextField(labelWithString: "Σ")
     private let titleLabel = NSTextField(labelWithString: "Token Monitor")
@@ -21,9 +79,14 @@ final class TotalBarView: NSView {
     private let rateReveal = NSTextField(labelWithString: "")
     private let statusLabel = NSTextField(labelWithString: "Starting")
     private let periodPill = PeriodPillView()
+    private let controlsSlot = HoverSlotView()
+    private let windowActions = NSStackView()
+    private let pinBtn = HoverButton(title: "⇧")
+    private let minBtn = HoverButton(title: "−")
     private let closeBtn = HoverButton(title: "×")
     private let totalLabel = NSTextField(labelWithString: "0")
     private let costLabel = NSTextField(labelWithString: "$0.00")
+    private var lastTotalFontWidth: CGFloat = 0
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -39,13 +102,15 @@ final class TotalBarView: NSView {
         wantsLayer = true
         layer?.backgroundColor = .clear
 
-        sigmaLabel.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .bold)
+        // 原版 .app-title：clamp(13px, 4.5vw, 16px) / weight 700。
+        let titleFont = NSFont.monospacedSystemFont(ofSize: 14, weight: .bold)
+        sigmaLabel.font = titleFont
         sigmaLabel.textColor = AppTheme.textPrimary
         sigmaLabel.isBezeled = false
         sigmaLabel.drawsBackground = false
         sigmaLabel.setContentHuggingPriority(.required, for: .horizontal)
 
-        titleLabel.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .bold)
+        titleLabel.font = titleFont
         titleLabel.textColor = AppTheme.textPrimary
         titleLabel.isBezeled = false
         titleLabel.drawsBackground = false
@@ -68,52 +133,94 @@ final class TotalBarView: NSView {
             self?.showRate(text)
         }
 
-        let titleRow = NSStackView(views: [sigmaLabel, titleLabel, liveDot, rateReveal])
+        // 原版把 Σ 放在标题文字之后（titleIconOnly 时只留 Σ）。
+        let titleRow = NSStackView(views: [titleLabel, sigmaLabel, liveDot, rateReveal])
         titleRow.orientation = .horizontal
         titleRow.alignment = .centerY
         titleRow.spacing = 5
         titleLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+
+        // 原版 .status 默认 display:none，只在出错时出现。
+        statusLabel.isHidden = true
 
         let titleStack = NSStackView(views: [titleRow, statusLabel])
         titleStack.orientation = .vertical
         titleStack.alignment = .leading
         titleStack.spacing = 3
 
-        // 周期胶囊 + 关闭（原版 title-controls）
+        // 固定宽度的控件槽：周期胶囊与窗口按钮叠在一起交叉淡入（原版
+        // .title-controls / .tabs / .window-actions）。
         periodPill.onSelect = { [weak self] key in
             self?.selectPeriod(key)
         }
         periodPill.translatesAutoresizingMaskIntoConstraints = false
-        periodPill.heightAnchor.constraint(equalToConstant: 28).isActive = true
 
-        closeBtn.target = self
+        for btn in [pinBtn, minBtn, closeBtn] {
+            btn.target = self
+            // 原版 .icon-button：34×28、圆角 7、发丝线边框。
+            btn.font = NSFont.systemFont(ofSize: 14, weight: .regular)
+            btn.layer?.cornerRadius = 7
+            btn.layer?.borderWidth = 1
+            btn.layer?.borderColor = AppTheme.lineColor.cgColor
+            btn.layer?.backgroundColor = AppTheme.controlColor.cgColor
+            btn.widthAnchor.constraint(equalToConstant: 34).isActive = true
+            btn.heightAnchor.constraint(equalToConstant: 28).isActive = true
+        }
+        pinBtn.action = #selector(pinClick)
+        pinBtn.toolTip = "切换窗口层级"
+        minBtn.action = #selector(minimizeClick)
+        minBtn.toolTip = "最小化"
         closeBtn.action = #selector(closeClick)
+        closeBtn.toolTip = "关闭"
 
-        let controls = NSStackView(views: [periodPill, closeBtn])
-        controls.orientation = .horizontal
-        controls.alignment = .centerY
-        controls.spacing = 4
+        windowActions.orientation = .horizontal
+        windowActions.alignment = .centerY
+        windowActions.spacing = 6
+        windowActions.setViews([pinBtn, minBtn, closeBtn], in: .leading)
+        windowActions.translatesAutoresizingMaskIntoConstraints = false
+        windowActions.alphaValue = 0
 
-        let topRow = NSStackView(views: [titleStack, controls])
+        controlsSlot.translatesAutoresizingMaskIntoConstraints = false
+        controlsSlot.addSubview(periodPill)
+        controlsSlot.addSubview(windowActions)
+        controlsSlot.onHoverChange = { [weak self] hovering in
+            self?.setWindowActionsRevealed(hovering)
+        }
+        NSLayoutConstraint.activate([
+            controlsSlot.widthAnchor.constraint(equalToConstant: Metrics.controlsWidth),
+            controlsSlot.heightAnchor.constraint(equalToConstant: Metrics.controlsHeight),
+            periodPill.leadingAnchor.constraint(equalTo: controlsSlot.leadingAnchor),
+            periodPill.trailingAnchor.constraint(equalTo: controlsSlot.trailingAnchor),
+            periodPill.centerYAnchor.constraint(equalTo: controlsSlot.centerYAnchor),
+            periodPill.heightAnchor.constraint(equalToConstant: 28),
+            windowActions.trailingAnchor.constraint(equalTo: controlsSlot.trailingAnchor),
+            windowActions.centerYAnchor.constraint(equalTo: controlsSlot.centerYAnchor),
+        ])
+
+        let topRow = NSStackView(views: [titleStack, controlsSlot])
         topRow.orientation = .horizontal
         topRow.alignment = .centerY
         topRow.distribution = .fill
-        topRow.spacing = 10
+        topRow.spacing = 12
+        controlsSlot.setContentHuggingPriority(.required, for: .horizontal)
+        controlsSlot.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-        // 总计面板（原版 total-panel）
+        // 总计面板（原版 .total-panel：padding 2px 2px 12px，无卡片）
         let labelRow = NSTextField(labelWithString: "TOTAL TOKENS")
         labelRow.font = AppTheme.smallFont
         labelRow.textColor = AppTheme.textSecondary
         labelRow.isBezeled = false
         labelRow.drawsBackground = false
 
-        totalLabel.font = AppTheme.numberFont
+        totalLabel.font = AppTheme.bigNumberFont
         totalLabel.textColor = AppTheme.numberColor
         totalLabel.isBezeled = false
         totalLabel.drawsBackground = false
         totalLabel.usesSingleLineMode = true
+        totalLabel.lineBreakMode = .byTruncatingTail
+        totalLabel.cell?.truncatesLastVisibleLine = true
 
-        costLabel.font = AppTheme.smallFont
+        costLabel.font = AppTheme.bodyFont
         costLabel.textColor = AppTheme.textSecondary
         costLabel.isBezeled = false
         costLabel.drawsBackground = false
@@ -122,9 +229,14 @@ final class TotalBarView: NSView {
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 2
+        // 原版 .shell gap 8px；.total-number margin-top 8px；.cost margin-top 6px。
         stack.setCustomSpacing(8, after: topRow)
+        stack.setCustomSpacing(8, after: labelRow)
         stack.setCustomSpacing(6, after: totalLabel)
-        stack.edgeInsets = NSEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
+        stack.edgeInsets = NSEdgeInsets(
+            top: Metrics.topInset, left: Metrics.horizontalInset,
+            bottom: 12, right: Metrics.horizontalInset
+        )
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         NSLayoutConstraint.activate([
@@ -134,8 +246,42 @@ final class TotalBarView: NSView {
             stack.bottomAnchor.constraint(equalTo: bottomAnchor),
             liveDot.widthAnchor.constraint(equalToConstant: 4),
             liveDot.heightAnchor.constraint(equalToConstant: 4),
-            totalLabel.widthAnchor.constraint(lessThanOrEqualTo: stack.widthAnchor, constant: -28),
+            topRow.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -Metrics.horizontalInset * 2),
+            totalLabel.widthAnchor.constraint(lessThanOrEqualTo: stack.widthAnchor, constant: -Metrics.horizontalInset * 2),
         ])
+    }
+
+    /// 交叉淡入：hover 显示窗口按钮、淡出周期胶囊（原版 CSS transition）。
+    private func setWindowActionsRevealed(_ revealed: Bool) {
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.16
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            windowActions.animator().alphaValue = revealed ? 1 : 0
+            periodPill.animator().alphaValue = revealed ? 0 : 1
+        }
+        // 隐藏的一侧不该吃点击。
+        windowActions.isHidden = false
+        periodPill.isHitTestHidden = revealed
+        windowActions.subviews.forEach { $0.isHidden = false }
+        pinBtn.isEnabled = revealed
+        minBtn.isEnabled = revealed
+        closeBtn.isEnabled = revealed
+    }
+
+    override func layout() {
+        super.layout()
+        // 原版 .total-number 的 clamp(30px, 11vw, 46px) 跟随窗口宽度。
+        let width = bounds.width
+        guard width > 0, abs(width - lastTotalFontWidth) > 1 else { return }
+        lastTotalFontWidth = width
+        totalLabel.font = AppTheme.totalNumberFont(forWidth: width)
+    }
+
+    /// 标题模式（原版 titleIconOnly：只显示 Σ）。
+    func applySettings(_ settings: [String: Any]) {
+        let iconOnly = settings["titleIconOnly"] as? Bool ?? true
+        titleLabel.isHidden = iconOnly
+        liveDot.isHidden = !(settings["showLiveDot"] as? Bool ?? true)
     }
 
     private func selectPeriod(_ key: String) {
@@ -178,6 +324,8 @@ final class TotalBarView: NSView {
     }
 
     @objc private func closeClick() { delegate?.totalBarDidClickClose() }
+    @objc private func minimizeClick() { delegate?.totalBarDidClickMinimize() }
+    @objc private func pinClick() { delegate?.totalBarDidClickPin() }
 }
 
 // MARK: - 周期胶囊切换（原版 .tabs + .tab-indicator）
@@ -185,24 +333,36 @@ final class TotalBarView: NSView {
 final class PeriodPillView: NSView {
     var onSelect: ((String) -> Void)?
     var selected = "today"
+    /// 窗口按钮显形时胶囊淡出，不该再吃点击。
+    var isHitTestHidden = false
 
     private let indicator = NSView()
     private var buttons: [(key: String, button: HoverButton)] = []
-    private var lastIndex: CGFloat = 0
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        return isHitTestHidden ? nil : super.hitTest(point)
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.backgroundColor = AppTheme.panelColor.cgColor
+        // 原版 .tabs：background rgba(255,255,255,0.026)、border rgba(line,0.09)、
+        // 圆角 10、padding 3。
+        layer?.backgroundColor = NSColor(calibratedWhite: 1, alpha: 0.026).cgColor
         layer?.cornerRadius = 10
         layer?.borderWidth = 1
-        layer?.borderColor = AppTheme.lineColor.withAlphaComponent(0.65).cgColor
+        layer?.borderColor = NSColor(
+            calibratedRed: 232/255, green: 238/255, blue: 244/255, alpha: 0.09
+        ).cgColor
 
+        // 原版 .tab-indicator：border rgba(line,0.13)、bg rgba(255,255,255,0.06)。
         indicator.wantsLayer = true
         indicator.layer?.cornerRadius = 6
         indicator.layer?.borderWidth = 1
-        indicator.layer?.borderColor = AppTheme.lineColor.withAlphaComponent(0.95).cgColor
-        indicator.layer?.backgroundColor = AppTheme.controlColor.cgColor
+        indicator.layer?.borderColor = NSColor(
+            calibratedRed: 232/255, green: 238/255, blue: 244/255, alpha: 0.13
+        ).cgColor
+        indicator.layer?.backgroundColor = NSColor(calibratedWhite: 1, alpha: 0.06).cgColor
         indicator.translatesAutoresizingMaskIntoConstraints = false
         addSubview(indicator)
 

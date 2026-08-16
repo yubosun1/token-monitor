@@ -59,19 +59,20 @@ final class TrendsViewController: NSViewController, ContentUpdatable, WindowHost
         emptyLabel.isHidden = true
         root.addSubview(emptyLabel)
 
+        // 水平内缩由 shell（contentContainer）统一提供，这里不再叠加。
         NSLayoutConstraint.activate([
-            capRow.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
-            capRow.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
-            capRow.topAnchor.constraint(equalTo: root.topAnchor, constant: 12),
-            chartView.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
-            chartView.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
+            capRow.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            capRow.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            capRow.topAnchor.constraint(equalTo: root.topAnchor, constant: 4),
+            chartView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            chartView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             chartView.topAnchor.constraint(equalTo: capRow.bottomAnchor, constant: 8),
             chartView.heightAnchor.constraint(equalToConstant: 90),
-            axisStack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
-            axisStack.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
+            axisStack.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            axisStack.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             axisStack.topAnchor.constraint(equalTo: chartView.bottomAnchor, constant: 2),
-            statsStack.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 14),
-            statsStack.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -14),
+            statsStack.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            statsStack.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             statsStack.topAnchor.constraint(equalTo: axisStack.bottomAnchor, constant: 14),
             statsStack.heightAnchor.constraint(equalToConstant: 40),
             emptyLabel.centerXAnchor.constraint(equalTo: root.centerXAnchor),
@@ -195,9 +196,12 @@ private final class TrendsSparklineView: NSView {
         needsDisplay = true
     }
 
+    override var isOpaque: Bool { false }
+
     override func draw(_ dirtyRect: NSRect) {
         guard let ctx = NSGraphicsContext.current?.cgContext, let model else { return }
-        ctx.clear(bounds)
+        // ctx.clear() 会在 cacheDisplay/离屏合成时留下白底；这里本来就透明，
+        // 不需要主动清除。
         let scaleX = bounds.width / max(1, model.width)
         let scaleY = bounds.height / max(1, model.height)
         for bar in model.bars {

@@ -4,7 +4,7 @@ import AppKit
 /// 各 provider 状态，行内显示状态点 + 名称 + 描述 + 事件数，点击行用浏览器
 /// 打开 statuspage。可见时每 60s 自动刷新。
 final class StatusViewController: NSViewController, ContentUpdatable {
-    private let scrollView = NSScrollView()
+    private let scrollView = TopAnchoredScrollView()
     private let rowsStack = NSStackView()
     private let emptyLabel = NSTextField(labelWithString: "暂无状态数据")
     private let checkedLabel = NSTextField(labelWithString: "")
@@ -12,7 +12,10 @@ final class StatusViewController: NSViewController, ContentUpdatable {
     private var lastProviderSignature = ""
 
     override func loadView() {
-        let container = NSView()
+        let container = WindowAwareView()
+        container.onWindowChange = { [weak self] hasWindow in
+            self?.viewDidMoveToWindow(hasWindow: hasWindow)
+        }
         container.wantsLayer = true
         container.layer?.backgroundColor = .clear
 
@@ -32,6 +35,9 @@ final class StatusViewController: NSViewController, ContentUpdatable {
         scrollView.drawsBackground = false
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
+        // 原版把滚动条完全隐藏（scrollbar-width: none）；overlay 样式不占布局宽度，
+        // 否则「经典」滚动条会挤掉行右侧的数值列。
+        scrollView.scrollerStyle = .overlay
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(scrollView)
 
@@ -41,41 +47,50 @@ final class StatusViewController: NSViewController, ContentUpdatable {
         container.addSubview(emptyLabel)
 
         NSLayoutConstraint.activate([
-            checkedLabel.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
+            checkedLabel.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             checkedLabel.topAnchor.constraint(equalTo: container.topAnchor, constant: 10),
             scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             scrollView.topAnchor.constraint(equalTo: checkedLabel.bottomAnchor, constant: 6),
             scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            rowsStack.leadingAnchor.constraint(equalTo: scrollView.leadingAnchor),
-            rowsStack.trailingAnchor.constraint(equalTo: scrollView.trailingAnchor),
-            rowsStack.topAnchor.constraint(equalTo: scrollView.topAnchor),
-            rowsStack.widthAnchor.constraint(equalTo: scrollView.widthAnchor),
+            rowsStack.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor),
+            rowsStack.trailingAnchor.constraint(equalTo: scrollView.contentView.trailingAnchor),
+            rowsStack.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor),
+            rowsStack.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor),
             emptyLabel.centerXAnchor.constraint(equalTo: container.centerXAnchor),
             emptyLabel.topAnchor.constraint(equalTo: container.topAnchor, constant: 40),
         ])
         view = container
     }
 
-    override func viewDidAppear() {
-        super.viewDidAppear()
-        startTimer()
-        refreshIfNeeded(force: true)
+    /// The status view is installed/removed as a plain subview by
+    /// MainViewController, so `viewDidAppear` / `viewDidDisappear` never fire.
+    /// The container view reports window changes here instead.
+    fileprivate func viewDidMoveToWindow(hasWindow: Bool) {
+        if hasWindow {
+            startTimer()
+            refreshIfNeeded(force: true)
+        } else {
+            stopTimer()
+        }
     }
 
-    override func viewDidDisappear() {
-        super.viewDidDisappear()
+    deinit {
         refreshTimer?.invalidate()
-        refreshTimer = nil
     }
 
     private func startTimer() {
-        refreshTimer?.invalidate()
+        guard refreshTimer == nil else { return }
         let timer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
             self?.refreshIfNeeded(force: true)
         }
         RunLoop.main.add(timer, forMode: .common)
         refreshTimer = timer
+    }
+
+    private func stopTimer() {
+        refreshTimer?.invalidate()
+        refreshTimer = nil
     }
 
     func update(stats: [String: Any]?, period: String, settings: [String: Any]) {
@@ -145,6 +160,20 @@ final class StatusViewController: NSViewController, ContentUpdatable {
     }
 }
 
+// MARK: - Window-aware container
+
+/// Reports window attach/detach to its owning controller — the substitute for
+/// `viewDidAppear`/`viewDidDisappear`, which do not fire for the panel-hosted
+/// child controllers in this window.
+private final class WindowAwareView: NSView {
+    var onWindowChange: ((Bool) -> Void)?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        onWindowChange?(window != nil)
+    }
+}
+
 // MARK: - Row
 
 private final class StatusRowView: NSView {
@@ -189,7 +218,8 @@ private final class StatusRowView: NSView {
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 2
-        stack.edgeInsets = NSEdgeInsets(top: 9, left: 14, bottom: 9, right: 14)
+        // 水平内缩来自 shell；行内只保留上下 padding。
+        stack.edgeInsets = NSEdgeInsets(top: 8, left: 0, bottom: 10, right: 0)
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         NSLayoutConstraint.activate([
@@ -207,7 +237,7 @@ private final class StatusRowView: NSView {
         sep.translatesAutoresizingMaskIntoConstraints = false
         addSubview(sep)
         NSLayoutConstraint.activate([
-            sep.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            sep.leadingAnchor.constraint(equalTo: leadingAnchor),
             sep.trailingAnchor.constraint(equalTo: trailingAnchor),
             sep.bottomAnchor.constraint(equalTo: bottomAnchor),
             sep.heightAnchor.constraint(equalToConstant: 1),

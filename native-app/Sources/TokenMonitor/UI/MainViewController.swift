@@ -5,7 +5,7 @@ import AppKit
 /// 取代原 index.html 的 shell：顶部 TotalBarView、底部 ViewSwitcherBar、
 /// 内容区按当前视图切换子控制器；设置与会话详情以覆盖层弹出。
 /// 数据直接监听 DataBus.statsUpdated 拉取 Collector.shared.latestStats()。
-final class MainViewController: NSViewController, TotalBarDelegate, WindowHostConsumer, SettingsHost, WindowTeardownObserver {
+final class MainViewController: NSViewController, TotalBarDelegate, WindowHostConsumer, SettingsHost, WindowTeardownObserver, WindowVisibilityObserver {
 
     // MARK: - Host wiring
 
@@ -15,6 +15,9 @@ final class MainViewController: NSViewController, TotalBarDelegate, WindowHostCo
 
     private var period: String = "today"
     private var mode: String = "home" // home|tool|status|model|project|session|limits|trends
+
+    /// Diag/snapshot readout of the currently installed view.
+    var currentMode: String { mode }
 
     // MARK: - Subviews / children
 
@@ -38,6 +41,10 @@ final class MainViewController: NSViewController, TotalBarDelegate, WindowHostCo
     private var currentContentVC: NSViewController?
     private var presentedVC: NSViewController?
     private var contentTopConstraint: NSLayoutConstraint?
+    /// Views whose data is behind the latest stats push; refreshed on switch.
+    private var staleContentIds: Set<String> = []
+    /// A stats push arrived while the window was hidden.
+    private var needsRefreshOnShow = false
 
     // MARK: - Lifecycle
 
@@ -76,8 +83,9 @@ final class MainViewController: NSViewController, TotalBarDelegate, WindowHostCo
             mainStack.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             mainStack.topAnchor.constraint(equalTo: root.topAnchor),
             mainStack.bottomAnchor.constraint(equalTo: root.bottomAnchor),
-            contentContainer.leadingAnchor.constraint(equalTo: mainStack.leadingAnchor),
-            contentContainer.trailingAnchor.constraint(equalTo: mainStack.trailingAnchor),
+            // 原版 .shell padding: 12px 14px 14px —— 内容区左右也要 14pt。
+            contentContainer.leadingAnchor.constraint(equalTo: mainStack.leadingAnchor, constant: 14),
+            contentContainer.trailingAnchor.constraint(equalTo: mainStack.trailingAnchor, constant: -14),
             modalOverlay.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             modalOverlay.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             modalOverlay.topAnchor.constraint(equalTo: root.topAnchor),
@@ -106,7 +114,19 @@ final class MainViewController: NSViewController, TotalBarDelegate, WindowHostCo
         mode = initial
         switcherBar.setCurrentView(initial)
         installContent(viewController(for: initial))
+        // A restored non-home view needs its back row on first load too, not
+        // only after the first setMode().
+        updateBackRow()
         observeData()
+    }
+
+    /// Called by the window controller when the panel is shown. `viewDidAppear`
+    /// does not fire here: the panel takes the controller's view as its
+    /// `contentView` rather than using `contentViewController`.
+    func windowDidShow() {
+        guard needsRefreshOnShow else { return }
+        needsRefreshOnShow = false
+        refresh()
     }
 
     private func viewController(for id: String) -> NSViewController {
@@ -126,15 +146,21 @@ final class MainViewController: NSViewController, TotalBarDelegate, WindowHostCo
 
     func setMode(_ newMode: String) {
         guard newMode != mode, AppViews.allIds.contains(newMode) else { return }
+        let wasStale = staleContentIds.contains(newMode)
         mode = newMode
         switcherBar.setCurrentView(newMode, persist: true)
-        installContent(viewController(for: newMode))
-        refreshContent()
+        let isNewInstall = installContent(viewController(for: newMode))
+        // A freshly installed (or stale) view needs data; an already-current one
+        // was refreshed by the last stats push.
+        if wasStale || isNewInstall { refreshContent() }
         updateBackRow()
     }
 
-    private func installContent(_ vc: NSViewController) {
-        if currentContentVC === vc { return }
+    /// Returns true when the view controller was newly attached (so it has no
+    /// data yet and needs a refresh).
+    @discardableResult
+    private func installContent(_ vc: NSViewController) -> Bool {
+        if currentContentVC === vc { return false }
         if let old = currentContentVC {
             old.view.removeFromSuperview()
             old.removeFromParent()
@@ -156,6 +182,7 @@ final class MainViewController: NSViewController, TotalBarDelegate, WindowHostCo
             v.bottomAnchor.constraint(equalTo: contentContainer.bottomAnchor),
         ])
         currentContentVC = vc
+        return true
     }
 
     // MARK: - Back row
@@ -178,35 +205,45 @@ final class MainViewController: NSViewController, TotalBarDelegate, WindowHostCo
             let row = NSView()
             row.wantsLayer = true
             row.layer?.backgroundColor = .clear
-            let btn = HoverButton(title: "‹ 返回首页")
+            // 原版 .back-home-button：26px 高、无边框、muted 11px、左对齐无内缩。
+            let btn = HoverButton(title: "‹  返回首页")
             btn.font = AppTheme.smallFont
+            btn.contentTintColor = AppTheme.textSecondary
+            btn.hoverBackground = .clear
             btn.target = self
             btn.action = #selector(backHome)
             btn.translatesAutoresizingMaskIntoConstraints = false
             row.addSubview(btn)
             NSLayoutConstraint.activate([
-                btn.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 10),
-                btn.topAnchor.constraint(equalTo: row.topAnchor, constant: 2),
-                btn.bottomAnchor.constraint(equalTo: row.bottomAnchor, constant: -2),
+                btn.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: -6),
+                btn.centerYAnchor.constraint(equalTo: row.centerYAnchor),
             ])
             backRow = row
         }
-        guard let backRow, backRow.superview !== contentContainer else { return }
-        backRow.translatesAutoresizingMaskIntoConstraints = false
-        contentContainer.addSubview(backRow)
-        NSLayoutConstraint.activate([
-            backRow.leadingAnchor.constraint(equalTo: contentContainer.leadingAnchor),
-            backRow.trailingAnchor.constraint(equalTo: contentContainer.trailingAnchor),
-            backRow.topAnchor.constraint(equalTo: contentContainer.topAnchor),
-            backRow.heightAnchor.constraint(equalToConstant: 24),
-        ])
+        guard let backRow else { return }
+        if backRow.superview !== contentContainer {
+            backRow.translatesAutoresizingMaskIntoConstraints = false
+            contentContainer.addSubview(backRow)
+            NSLayoutConstraint.activate([
+                backRow.leadingAnchor.constraint(equalTo: contentContainer.leadingAnchor),
+                backRow.trailingAnchor.constraint(equalTo: contentContainer.trailingAnchor),
+                backRow.topAnchor.constraint(equalTo: contentContainer.topAnchor),
+                backRow.heightAnchor.constraint(equalToConstant: backRowHeight),
+            ])
+        }
+        // Always re-anchor: installContent() resets the content top to 0 on every
+        // view switch, so an early return here would leave the content sitting
+        // underneath the back row.
         if let current = currentContentVC {
             contentTopConstraint?.isActive = false
-            let top = current.view.topAnchor.constraint(equalTo: contentContainer.topAnchor, constant: 24)
+            let top = current.view.topAnchor.constraint(equalTo: contentContainer.topAnchor, constant: backRowHeight)
             top.isActive = true
             contentTopConstraint = top
         }
     }
+
+    /// 原版 .view-back-row：min-height 26px，margin-top -6px / bottom -2px。
+    private let backRowHeight: CGFloat = 26
 
     @objc private func backHome() {
         setMode("home")
@@ -224,30 +261,35 @@ final class MainViewController: NSViewController, TotalBarDelegate, WindowHostCo
         })
     }
 
+    /// A stats push only needs to redraw what is on screen. The other seven
+    /// view controllers are marked stale and re-render when switched to, so a
+    /// refresh costs one view's worth of layout instead of eight.
+    ///
+    /// While the window is hidden (tray mode keeps it hidden most of the time)
+    /// nothing is redrawn at all; the pending flag makes the next show catch up.
     func refresh() {
+        guard view.window?.isVisible == true || SnapshotProbe.isEnabled else {
+            needsRefreshOnShow = true
+            return
+        }
         let stats = Collector.shared.latestStats()
         let settings = BridgeCore.shared.settings.snapshot()
         totalBar.update(stats: stats, settings: settings)
-        homeVC.update(stats: stats, period: period, settings: settings)
-        breakdownClientVC.update(stats: stats, period: period, settings: settings)
-        breakdownModelVC.update(stats: stats, period: period, settings: settings)
-        sessionListVC.update(stats: stats, period: period, settings: settings)
-        limitsVC.update(stats: stats, period: period, settings: settings)
-        projectsVC.update(stats: stats, period: period, settings: settings)
-        trendsVC.update(stats: stats, period: period, settings: settings)
-        statusVC.refreshIfNeeded()
-        refreshContent()
+        totalBar.applySettings(settings)
+        staleContentIds = Set(AppViews.allIds).subtracting([mode])
+        refreshContent(stats: stats, settings: settings)
     }
 
-    private func refreshContent() {
-        let stats = Collector.shared.latestStats()
-        let settings = BridgeCore.shared.settings.snapshot()
+    private func refreshContent(stats: [String: Any]? = nil, settings: [String: Any]? = nil) {
+        let stats = stats ?? Collector.shared.latestStats()
+        let settings = settings ?? BridgeCore.shared.settings.snapshot()
         if let vc = currentContentVC as? ContentUpdatable {
             vc.update(stats: stats, period: period, settings: settings)
         }
         if let statusVC = currentContentVC as? StatusViewController {
             statusVC.refreshIfNeeded()
         }
+        staleContentIds.remove(mode)
     }
 
     // MARK: - TotalBarDelegate
@@ -271,6 +313,24 @@ final class MainViewController: NSViewController, TotalBarDelegate, WindowHostCo
 
     func totalBarDidClickClose() {
         host?.hostRequestClose()
+    }
+
+    func totalBarDidClickMinimize() {
+        view.window?.miniaturize(nil)
+    }
+
+    /// 原版 pinButton 循环窗口层级：floating → desktop → normal。
+    func totalBarDidClickPin() {
+        let settings = BridgeCore.shared.settings.snapshot()
+        let current = settings["windowBehavior"] as? String ?? "floating"
+        let next: String
+        switch current {
+        case "floating": next = "desktop"
+        case "desktop": next = "normal"
+        default: next = "floating"
+        }
+        BridgeCore.shared.settings.update(["windowBehavior": next])
+        host?.hostApplyWindowBehavior(next)
     }
 
     // MARK: - Modal overlay (settings / session detail)

@@ -6,7 +6,7 @@ import AppKit
 final class HomeViewController: NSViewController, ContentUpdatable {
     var onOpenView: ((String) -> Void)?
 
-    private let scrollView = NSScrollView()
+    private let scrollView = TopAnchoredScrollView()
     private let modulesStack = NSStackView()
     private var moduleViews: [(id: String, view: HomeModuleCard)] = []
     private var moduleSignature = ""
@@ -16,15 +16,19 @@ final class HomeViewController: NSViewController, ContentUpdatable {
         container.wantsLayer = true
         container.layer?.backgroundColor = .clear
 
+        // 原版 .home-panel gap: 12px。
         modulesStack.orientation = .vertical
         modulesStack.alignment = .leading
-        modulesStack.spacing = 0
+        modulesStack.spacing = 12
         modulesStack.translatesAutoresizingMaskIntoConstraints = false
 
         scrollView.documentView = modulesStack
         scrollView.drawsBackground = false
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
+        // 原版把滚动条完全隐藏（scrollbar-width: none）；overlay 样式不占布局宽度，
+        // 否则「经典」滚动条会挤掉行右侧的数值列。
+        scrollView.scrollerStyle = .overlay
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(scrollView)
 
@@ -33,10 +37,10 @@ final class HomeViewController: NSViewController, ContentUpdatable {
             scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             scrollView.topAnchor.constraint(equalTo: container.topAnchor),
             scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            modulesStack.leadingAnchor.constraint(equalTo: scrollView.leadingAnchor),
-            modulesStack.trailingAnchor.constraint(equalTo: scrollView.trailingAnchor),
-            modulesStack.topAnchor.constraint(equalTo: scrollView.topAnchor),
-            modulesStack.widthAnchor.constraint(equalTo: scrollView.widthAnchor),
+            modulesStack.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor),
+            modulesStack.trailingAnchor.constraint(equalTo: scrollView.contentView.trailingAnchor),
+            modulesStack.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor),
+            modulesStack.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor),
         ])
         view = container
     }
@@ -105,12 +109,13 @@ private final class HomeModuleCard: NSView {
         wantsLayer = true
         layer?.backgroundColor = .clear
 
+        // 原版 HOME_MODULE_OPTIONS 的标签：LIMITS / TOOLS / MODELS / ACTIVITY。
         let title: String
         switch id {
         case "limits": title = "限额"
         case "tool": title = "工具"
         case "model": title = "模型"
-        default: title = "趋势"
+        default: title = "活动"
         }
         titleLabel.stringValue = title.uppercased()
         titleLabel.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .semibold)
@@ -125,16 +130,29 @@ private final class HomeModuleCard: NSView {
         jump.drawsBackground = false
         jump.alphaValue = 0.8
 
-        let head = NSStackView(views: [titleLabel, metaLabel, jump])
+        // 原版 .home-module-meta：10px muted，紧贴右侧的 › 之前。
+        metaLabel.font = AppTheme.microFont
+        metaLabel.textColor = AppTheme.textSecondary
+        metaLabel.isBezeled = false
+        metaLabel.drawsBackground = false
+        metaLabel.alignment = .right
+        metaLabel.isHidden = true
+
+        // 原版 .home-module-head：space-between，标题在左、meta + › 在右。
+        let spacer = NSView()
+        spacer.translatesAutoresizingMaskIntoConstraints = false
+        let head = NSStackView(views: [titleLabel, spacer, metaLabel, jump])
         head.orientation = .horizontal
         head.alignment = .centerY
         head.spacing = 7
-        titleLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        metaLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        titleLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        metaLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
 
+        // 原版 .home-module gap 7px。
         bodyStack.orientation = .vertical
         bodyStack.alignment = .leading
-        bodyStack.spacing = 6
+        bodyStack.spacing = 7
 
         let stack = NSStackView(views: [head, bodyStack])
         stack.orientation = .vertical
@@ -151,10 +169,14 @@ private final class HomeModuleCard: NSView {
         addSubview(sep)
 
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2),
-            stack.topAnchor.constraint(equalTo: topAnchor, constant: 10),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stack.topAnchor.constraint(equalTo: topAnchor),
+            // 原版 .home-module padding: 0 0 12px。
             stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
+            // 头部与正文都撑满，否则 space-between / 图表宽度都不成立。
+            head.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            bodyStack.widthAnchor.constraint(equalTo: stack.widthAnchor),
             sep.leadingAnchor.constraint(equalTo: leadingAnchor),
             sep.trailingAnchor.constraint(equalTo: trailingAnchor),
             sep.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -188,6 +210,13 @@ private final class HomeModuleCard: NSView {
 
     private func resetBody() {
         bodyStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        setMeta("")
+    }
+
+    /// 模块头右侧的 muted 说明（原版 .home-module-meta）。
+    private func setMeta(_ text: String) {
+        metaLabel.stringValue = text
+        metaLabel.isHidden = text.isEmpty
     }
 
     private func empty(_ text: String) {
@@ -214,7 +243,7 @@ private final class HomeModuleCard: NSView {
 
         let limit = UsageCore.intValue(settings["homeLimitAccountCount"]) > 0
             ? UsageCore.intValue(settings["homeLimitAccountCount"]) : 3
-        var accounts: [(name: String, color: NSColor, windows: [[String: Any]], lowest: Double)] = []
+        var accounts: [(name: String, color: NSColor, asset: String?, windows: [[String: Any]], lowest: Double)] = []
         for p in providers {
             let id = p["provider"] as? String ?? ""
             let label = p["accountLabel"] as? String ?? ""
@@ -228,6 +257,7 @@ private final class HomeModuleCard: NSView {
             accounts.append((
                 name: AppTheme.clientLabel(id) + (label.isEmpty ? "" : " · \(label)"),
                 color: AppTheme.clientColor(id),
+                asset: IconCatalog.clientAsset(id),
                 windows: windows,
                 lowest: lowest
             ))
@@ -241,7 +271,8 @@ private final class HomeModuleCard: NSView {
         }
         for account in accounts {
             let row = HomeLimitAccountRow()
-            row.configure(name: account.name, color: account.color, windows: account.windows, settings: settings)
+            row.configure(name: account.name, color: account.color, asset: account.asset,
+                          windows: account.windows, settings: settings)
             bodyStack.addArrangedSubview(row)
             row.widthAnchor.constraint(equalTo: bodyStack.widthAnchor).isActive = true
         }
@@ -265,10 +296,14 @@ private final class HomeModuleCard: NSView {
         } else {
             source = period?["models"] as? [String: Any] ?? [:]
         }
+        // 隐藏的客户端在首页也不该出现（与 breakdown 视图一致）。
+        let hiddenClients = mode == "client"
+            ? Set(AppViews.csvItems(settings["hiddenClients"]).map { $0.lowercased() })
+            : Set<String>()
         var rows: [(name: String, value: Double, color: NSColor)] = []
         for (key, value) in source {
             let tokens = UsageCore.doubleValue(value)
-            guard tokens > 0 else { continue }
+            guard tokens > 0, !hiddenClients.contains(key.lowercased()) else { continue }
             let color = mode == "client" ? AppTheme.clientColor(key) : AppTheme.modelColor(key)
             rows.append((name: key, value: tokens, color: color))
         }
@@ -279,42 +314,114 @@ private final class HomeModuleCard: NSView {
             empty("暂无数据")
             return
         }
+        let showIcons = settings["showToolIcons"] as? Bool ?? true
         for row in rows {
             let line = HomeListRow()
-            line.configure(name: row.name, value: row.value, share: totalTokens > 0 ? row.value / totalTokens : 0, color: row.color)
+            line.configure(
+                name: row.name,
+                value: row.value,
+                share: totalTokens > 0 ? row.value / totalTokens : 0,
+                color: row.color,
+                asset: mode == "client" ? IconCatalog.clientAsset(row.name) : IconCatalog.modelAsset(row.name),
+                showIcons: showIcons,
+                // 工具行显示客户端展示名（Claude Code），模型行保留原始模型名。
+                displayName: mode == "client" ? AppTheme.clientLabel(row.name) : row.name
+            )
             bodyStack.addArrangedSubview(line)
             line.widthAnchor.constraint(equalTo: bodyStack.widthAnchor).isActive = true
         }
     }
 
-    // 趋势模块：近 30 天 sparkline + 统计（原版 homeTrendsModule 简化）
+    /// 活动模块（原版 home.activity）：滚动年热力图 + TREND 折线小节。
+    /// 模块头右侧显示「N 活跃天数」，折线下方是首/中/末日期刻度与峰值。
     func renderTrends(stats: [String: Any]?, settings: [String: Any]) {
         resetBody()
         let preview = (stats?["historyPreview"] as? [String: Any]) ?? [:]
         let daily = (preview["daily"] as? [[String: Any]]) ?? []
         guard !daily.isEmpty else {
-            empty("暂无趋势数据")
+            empty("暂无活动数据")
             return
         }
+        let summary = (preview["summary"] as? [String: Any]) ?? [:]
+        let activeDays = Int(UsageCore.doubleValue(summary["activeDays"]))
+        setMeta(activeDays > 0 ? "\(activeDays) 活跃天数" : "")
+
+        // 热力图（metric 跟随设置里的 heatmapMetric）。
+        let metric = (settings["heatmapMetric"] as? String) == "cost" ? "cost" : "tokens"
+        let heatmap = HomeActivityHeatmap()
+        heatmap.update(daily: daily, metric: metric)
+        heatmap.translatesAutoresizingMaskIntoConstraints = false
+        bodyStack.addArrangedSubview(heatmap)
+        // 高度由 intrinsicContentSize 跟随算出的格子尺寸，不写死。
+        heatmap.widthAnchor.constraint(equalTo: bodyStack.widthAnchor).isActive = true
+
+        // TREND 小节（原版 .home-trend-head）。
+        let trendHead = NSTextField(labelWithString: "TREND")
+        trendHead.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .semibold)
+        trendHead.textColor = AppTheme.textPrimary
+        trendHead.isBezeled = false
+        trendHead.drawsBackground = false
+
+        let peak = UsageCore.doubleValue(summary["peakDayTokens"])
+        let peakLabel = NSTextField(labelWithString: peak > 0 ? "Peak \(Fmt.tokens(Int(peak)))" : "")
+        peakLabel.font = AppTheme.microFont
+        peakLabel.textColor = AppTheme.textSecondary
+        peakLabel.alignment = .right
+        peakLabel.isBezeled = false
+        peakLabel.drawsBackground = false
+
+        let headRow = NSStackView(views: [trendHead, peakLabel])
+        headRow.orientation = .horizontal
+        headRow.alignment = .lastBaseline
+        headRow.spacing = 8
+        trendHead.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        bodyStack.addArrangedSubview(headRow)
+        headRow.widthAnchor.constraint(equalTo: bodyStack.widthAnchor).isActive = true
+
         let days = Array(daily.suffix(30))
         let chart = HomeTrendChart()
-        chart.update(days: days.map { (tokens: UsageCore.doubleValue($0["tokens"]), cost: UsageCore.doubleValue($0["cost"])) })
+        chart.update(days: days.map {
+            (tokens: UsageCore.doubleValue($0["tokens"]), cost: UsageCore.doubleValue($0["cost"]))
+        })
         chart.translatesAutoresizingMaskIntoConstraints = false
-        chart.heightAnchor.constraint(equalToConstant: 46).isActive = true
+        chart.heightAnchor.constraint(equalToConstant: 56).isActive = true
         bodyStack.addArrangedSubview(chart)
         chart.widthAnchor.constraint(equalTo: bodyStack.widthAnchor).isActive = true
 
-        let summary = (preview["summary"] as? [String: Any]) ?? [:]
-        let statsRow = HomeTrendStats()
-        statsRow.configure(summary: summary)
-        bodyStack.addArrangedSubview(statsRow)
-        statsRow.widthAnchor.constraint(equalTo: bodyStack.widthAnchor).isActive = true
+        // 日期刻度：首 / 中 / 末（原版 .home-trend-dates 三列栅格）。
+        let dateRow = NSStackView()
+        dateRow.orientation = .horizontal
+        dateRow.distribution = .fillEqually
+        let keys: [[String: Any]?] = [days.first, days[days.count / 2], days.last]
+        for (index, entry) in keys.enumerated() {
+            let raw = (entry?["date"] as? String) ?? ""
+            let label = NSTextField(labelWithString: Self.shortDate(raw))
+            label.font = NSFont.monospacedSystemFont(ofSize: 9, weight: .regular)
+            label.textColor = AppTheme.textSecondary
+            label.isBezeled = false
+            label.drawsBackground = false
+            let alignment: NSTextAlignment = index == 0 ? .left : (index == 1 ? .center : .right)
+            label.alignment = alignment
+            dateRow.addArrangedSubview(label)
+        }
+        bodyStack.addArrangedSubview(dateRow)
+        dateRow.widthAnchor.constraint(equalTo: bodyStack.widthAnchor).isActive = true
+    }
+
+    /// yyyy-MM-dd → M/d（原版趋势轴刻度格式）。
+    private static func shortDate(_ raw: String) -> String {
+        let parts = raw.split(separator: "-")
+        guard parts.count >= 3 else { return raw }
+        let month = Int(parts[1]).map(String.init) ?? String(parts[1])
+        let day = Int(parts[2]).map(String.init) ?? String(parts[2])
+        return "\(month)/\(day)"
     }
 }
 
 // MARK: - 限额账户行（原版 .home-limit-account）
 
 private final class HomeLimitAccountRow: NSView {
+    private let mark = RowMarkView(size: 10)
     private let nameLabel = NSTextField(labelWithString: "")
     private let windowsStack = NSStackView()
 
@@ -329,12 +436,17 @@ private final class HomeLimitAccountRow: NSView {
         nameLabel.drawsBackground = false
         nameLabel.lineBreakMode = .byTruncatingTail
 
+        let nameRow = NSStackView(views: [mark, nameLabel])
+        nameRow.orientation = .horizontal
+        nameRow.alignment = .centerY
+        nameRow.spacing = 8
+
         windowsStack.orientation = .horizontal
         windowsStack.alignment = .top
         windowsStack.distribution = .fillEqually
         windowsStack.spacing = 12
 
-        let stack = NSStackView(views: [nameLabel, windowsStack])
+        let stack = NSStackView(views: [nameRow, windowsStack])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 4
@@ -345,12 +457,14 @@ private final class HomeLimitAccountRow: NSView {
             stack.trailingAnchor.constraint(equalTo: trailingAnchor),
             stack.topAnchor.constraint(equalTo: topAnchor),
             stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+            windowsStack.widthAnchor.constraint(equalTo: stack.widthAnchor),
         ])
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(name: String, color: NSColor, windows: [[String: Any]], settings: [String: Any]) {
+    func configure(name: String, color: NSColor, asset: String?, windows: [[String: Any]], settings: [String: Any]) {
+        mark.configure(asset: asset, color: color, showIcons: settings["showToolIcons"] as? Bool ?? true)
         nameLabel.stringValue = name
         windowsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         for window in windows {
@@ -362,7 +476,9 @@ private final class HomeLimitAccountRow: NSView {
             line.orientation = .horizontal
             line.alignment = .lastBaseline
             line.spacing = 6
-            let label = NSTextField(labelWithString: window["label"] as? String ?? "")
+            let rawLabel = window["label"] as? String ?? ""
+            let label = NSTextField(labelWithString: rawLabel.isEmpty
+                ? (window["kind"] as? String ?? "").capitalized : rawLabel)
             label.font = AppTheme.microFont
             label.textColor = AppTheme.textSecondary
             label.isBezeled = false
@@ -374,11 +490,29 @@ private final class HomeLimitAccountRow: NSView {
             value.isBezeled = false
             value.drawsBackground = false
             value.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+            value.setContentCompressionResistancePriority(.required, for: .horizontal)
             line.addArrangedSubview(label)
             line.addArrangedSubview(value)
             col.addArrangedSubview(line)
             line.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
             configureWindowValue(value, window: window, settings: settings)
+
+            // 重置时间自成一行（原版首页 .home-limit-reset）。
+            var resetText = ""
+            if let reset = window["resetsAt"] as? String, !reset.isEmpty {
+                resetText = LimitsFormat.resetText(reset)
+            }
+            if resetText.isEmpty { resetText = window["resetDescription"] as? String ?? "" }
+            if !resetText.isEmpty {
+                let resetLabel = NSTextField(labelWithString: resetText)
+                resetLabel.font = NSFont.monospacedSystemFont(ofSize: 9, weight: .regular)
+                resetLabel.textColor = AppTheme.textSecondary
+                resetLabel.isBezeled = false
+                resetLabel.drawsBackground = false
+                resetLabel.lineBreakMode = .byTruncatingTail
+                col.addArrangedSubview(resetLabel)
+                resetLabel.widthAnchor.constraint(equalTo: col.widthAnchor).isActive = true
+            }
             windowsStack.addArrangedSubview(col)
         }
         if windowsStack.arrangedSubviews.count == 1 {
@@ -386,49 +520,36 @@ private final class HomeLimitAccountRow: NSView {
         }
     }
 
+    /// 原版 formatHomeLimitWindowValue：首页也是「N% left」，与限额视图一致；
+    /// 无百分比时回落到剩余额度。
     private func configureWindowValue(_ label: NSTextField, window: [String: Any], settings: [String: Any]) {
         let showUsed = settings["showLimitUsed"] as? Bool ?? false
         let currency = window["currency"] as? String ?? ""
         let sym = Fmt.currencySymbol(currency)
-        let remaining = UsageCore.doubleValue(window["remaining"])
-        let used = UsageCore.doubleValue(window["used"])
-        let limit = UsageCore.doubleValue(window["limit"])
         let remainingPct = window["remainingPercent"] as? Double
         let usedPct = window["usedPercent"] as? Double
-        if showUsed {
-            if limit > 0 {
-                label.stringValue = "\(sym)\(Fmt.tokensExact(Int(used))) / \(sym)\(Fmt.tokensExact(Int(limit)))"
-            } else if let usedPct {
-                label.stringValue = "\(Fmt.percent(usedPct / 100))"
-            } else {
-                label.stringValue = "\(sym)\(Fmt.tokensExact(Int(used)))"
-            }
-            let pct = usedPct ?? (limit > 0 ? used / limit * 100 : nil)
-            if let pct {
-                if pct >= 80 { label.textColor = AppTheme.danger }
-                else if pct >= 50 { label.textColor = AppTheme.warning }
-            }
-        } else {
-            if limit > 0 {
-                label.stringValue = "\(sym)\(Fmt.tokensExact(Int(remaining))) / \(sym)\(Fmt.tokensExact(Int(limit)))"
-            } else if let remainingPct {
-                label.stringValue = "\(Fmt.percent(remainingPct / 100))"
-            } else {
-                label.stringValue = "\(sym)\(Fmt.tokensExact(Int(remaining)))"
-            }
-            let pct = remainingPct ?? (limit > 0 ? remaining / limit * 100 : nil)
-            if let pct {
-                if pct < 20 { label.textColor = AppTheme.danger }
-                else if pct < 50 { label.textColor = AppTheme.warning }
-            }
+
+        var percent: Double?
+        if let remainingPct {
+            percent = showUsed ? 100 - remainingPct : remainingPct
+        } else if let usedPct {
+            percent = showUsed ? usedPct : 100 - usedPct
         }
-        if let reset = window["resetsAt"] as? String, !reset.isEmpty {
-            let ms = UsageCore.timestampMs(reset)
-            if ms > 0 {
-                let f = DateFormatter()
-                f.dateFormat = "MM-dd"
-                label.stringValue += " · \(f.string(from: Date(timeIntervalSince1970: ms / 1000))) 重置"
-            }
+
+        if let percent {
+            let clamped = max(0, min(100, percent))
+            label.stringValue = "\(Int(clamped.rounded()))% \(showUsed ? "used" : "left")"
+            // 原版余量低时才染色（剩余 <20% 红、<50% 黄）。
+            let remainingShare = showUsed ? 100 - clamped : clamped
+            if remainingShare < 20 { label.textColor = AppTheme.danger }
+            else if remainingShare < 50 { label.textColor = AppTheme.warning }
+            else { label.textColor = AppTheme.textPrimary }
+        } else if let raw = window["remaining"], !(raw is NSNull) {
+            label.stringValue = "\(sym)\(Fmt.tokens(Int(UsageCore.doubleValue(raw))))"
+            label.textColor = AppTheme.textPrimary
+        } else {
+            label.stringValue = "--"
+            label.textColor = AppTheme.textSecondary
         }
     }
 }
@@ -436,7 +557,7 @@ private final class HomeLimitAccountRow: NSView {
 // MARK: - 列表行（原版 .home-list-row：mark + name + value + share）
 
 private final class HomeListRow: NSView {
-    private let dot = NSView()
+    private let mark = RowMarkView(size: 10)
     private let nameLabel = NSTextField(labelWithString: "")
     private let valueLabel = NSTextField(labelWithString: "")
     private let shareLabel = NSTextField(labelWithString: "")
@@ -445,10 +566,6 @@ private final class HomeListRow: NSView {
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.backgroundColor = .clear
-
-        dot.wantsLayer = true
-        dot.layer?.cornerRadius = 3
-        dot.translatesAutoresizingMaskIntoConstraints = false
 
         nameLabel.font = AppTheme.bodyFont
         nameLabel.textColor = AppTheme.textPrimary
@@ -471,39 +588,47 @@ private final class HomeListRow: NSView {
         shareLabel.alignment = .right
         shareLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
 
-        let stack = NSStackView(views: [dot, nameLabel, valueLabel, shareLabel])
+        // 原版 .home-list-row：mark + 名称（撑开）+ 数值 + 占比。
+        let spacer = NSView()
+        spacer.translatesAutoresizingMaskIntoConstraints = false
+        let stack = NSStackView(views: [mark, nameLabel, spacer, valueLabel, shareLabel])
         stack.orientation = .horizontal
         stack.alignment = .centerY
         stack.spacing = 8
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        nameLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        for label in [valueLabel, shareLabel] {
+            label.setContentCompressionResistancePriority(.required, for: .horizontal)
+        }
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: trailingAnchor),
             stack.topAnchor.constraint(equalTo: topAnchor),
             stack.bottomAnchor.constraint(equalTo: bottomAnchor),
-            dot.widthAnchor.constraint(equalToConstant: 6),
-            dot.heightAnchor.constraint(equalToConstant: 6),
-            valueLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 42),
             shareLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 34),
         ])
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(name: String, value: Double, share: Double, color: NSColor) {
-        dot.layer?.backgroundColor = color.cgColor
-        nameLabel.stringValue = name
+    func configure(name: String, value: Double, share: Double, color: NSColor, asset: String?, showIcons: Bool, displayName: String? = nil) {
+        mark.configure(asset: asset, color: color, showIcons: showIcons)
+        nameLabel.stringValue = displayName ?? name
         valueLabel.stringValue = Fmt.tokens(Int(value))
         shareLabel.stringValue = String(format: "%.1f%%", share * 100)
     }
 }
 
-// MARK: - 趋势小图（原版 .home-area-chart 简化：accent 色柱）
+// MARK: - 趋势折线图（原版 .home-area-chart：蓝色折线 + 面积填充）
 
+/// 原版首页趋势模块画的是折线 + 渐隐面积（不是柱），线色用 --blue。
 private final class HomeTrendChart: NSView {
     private var days: [(tokens: Double, cost: Double)] = []
     override var isFlipped: Bool { true }
+    override var isOpaque: Bool { false }
 
     func update(days: [(tokens: Double, cost: Double)]) {
         self.days = days
@@ -512,18 +637,172 @@ private final class HomeTrendChart: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
-        ctx.clear(bounds)
-        guard !days.isEmpty else { return }
+        guard days.count > 1, bounds.width > 1, bounds.height > 1 else { return }
         let maxVal = max(1, days.map(\.tokens).max() ?? 1)
-        let barWidth = max(1, bounds.width / CGFloat(days.count) - 1)
-        let gap: CGFloat = 1
-        for (i, day) in days.enumerated() {
-            let h = bounds.height * CGFloat(day.tokens / maxVal)
-            let rect = CGRect(x: CGFloat(i) * (barWidth + gap), y: bounds.height - h, width: barWidth, height: h)
-            let color = i == days.count - 1 ? AppTheme.accent : AppTheme.blue.withAlphaComponent(0.55)
-            ctx.setFillColor(color.cgColor)
-            ctx.fill(rect)
+        let stepX = bounds.width / CGFloat(days.count - 1)
+        // 顶部/底部各留 2pt，避免峰值贴边。
+        let inset: CGFloat = 2
+        let usableHeight = bounds.height - inset * 2
+
+        func point(_ i: Int) -> CGPoint {
+            let ratio = CGFloat(days[i].tokens / maxVal)
+            return CGPoint(x: CGFloat(i) * stepX, y: inset + usableHeight * (1 - ratio))
         }
+
+        let line = CGMutablePath()
+        line.move(to: point(0))
+        for i in 1..<days.count { line.addLine(to: point(i)) }
+
+        // 面积填充：折线闭合到底边。
+        let area = CGMutablePath()
+        area.addPath(line)
+        area.addLine(to: CGPoint(x: bounds.width, y: bounds.height))
+        area.addLine(to: CGPoint(x: 0, y: bounds.height))
+        area.closeSubpath()
+        ctx.saveGState()
+        ctx.addPath(area)
+        ctx.clip()
+        if let gradient = CGGradient(
+            colorsSpace: CGColorSpaceCreateDeviceRGB(),
+            colors: [
+                AppTheme.blue.withAlphaComponent(0.26).cgColor,
+                AppTheme.blue.withAlphaComponent(0).cgColor,
+            ] as CFArray,
+            locations: [0, 1]
+        ) {
+            ctx.drawLinearGradient(
+                gradient,
+                start: CGPoint(x: 0, y: 0),
+                end: CGPoint(x: 0, y: bounds.height),
+                options: []
+            )
+        }
+        ctx.restoreGState()
+
+        ctx.addPath(line)
+        ctx.setStrokeColor(AppTheme.blue.cgColor)
+        ctx.setLineWidth(1.5)
+        ctx.setLineJoin(.round)
+        ctx.setLineCap(.round)
+        ctx.strokePath()
+    }
+}
+
+// MARK: - 活动热力图（原版 .home-activity-canvas：滚动年贡献图）
+
+/// 原版首页 ACTIVITY 模块：滚动一年的日贡献热力图，蓝色四级渐变。
+private final class HomeActivityHeatmap: NSView {
+    private var model: ChartCore.HeatmapModel?
+    override var isFlipped: Bool { true }
+    override var isOpaque: Bool { false }
+
+    /// 原版 .heat.lvl-1..4 的蓝色渐变。
+    private static let levelColors: [NSColor] = [
+        NSColor(calibratedWhite: 1, alpha: 0.03),
+        NSColor(calibratedRed: 90/255, green: 170/255, blue: 255/255, alpha: 0.18),
+        NSColor(calibratedRed: 120/255, green: 190/255, blue: 255/255, alpha: 0.45),
+        NSColor(calibratedRed: 150/255, green: 210/255, blue: 255/255, alpha: 0.80),
+        NSColor(calibratedRed: 180/255, green: 230/255, blue: 255/255, alpha: 1.0),
+    ]
+
+    private var daily: [[String: Any]] = []
+    private var metric = "tokens"
+    private var builtForWidth: CGFloat = 0
+
+    func update(daily: [[String: Any]], metric: String) {
+        self.daily = daily
+        self.metric = metric
+        builtForWidth = 0
+        rebuildIfNeeded()
+    }
+
+    override func layout() {
+        super.layout()
+        rebuildIfNeeded()
+    }
+
+    /// Cell size is derived from the available width so the rolling year fits
+    /// without horizontal scrolling (the renderer scrolls its canvas instead;
+    /// a scroll view nested in this stack would fight the outer one).
+    private func rebuildIfNeeded() {
+        let width = bounds.width
+        guard width > 1, !daily.isEmpty, abs(width - builtForWidth) > 0.5 else { return }
+        builtForWidth = width
+
+        let end = ChartCore.localDayKey()
+        let window = ChartCore.rollingYearWindow(endDate: end)
+        let weeks = max(1, ChartCore.daysBetweenKeys(window.start, window.end) / 7 + 1)
+        let gap: CGFloat = 2
+        // width = weeks * cell + (weeks - 1) * gap  →  solve for cell.
+        let cell = max(4, ((width - gap * CGFloat(weeks - 1)) / CGFloat(weeks)).rounded(.down))
+
+        model = ChartCore.contribHeatmap(
+            daily, cell: cell, gap: gap,
+            startDate: window.start, endDate: window.end,
+            intensityKey: metric
+        )
+        invalidateIntrinsicContentSize()
+        needsDisplay = true
+    }
+
+    /// Height only — never a width. Reporting the grid's pixel width would widen
+    /// the enclosing stack past the scroll view's clip width and push every
+    /// other row's right-hand column out of view.
+    override var intrinsicContentSize: NSSize {
+        guard let model else { return NSSize(width: NSView.noIntrinsicMetric, height: 78) }
+        // 7 rows of cells + gaps, plus the month tick row underneath.
+        let grid = model.cell * 7 + model.gap * 6
+        return NSSize(width: NSView.noIntrinsicMetric, height: grid + 14)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let ctx = NSGraphicsContext.current?.cgContext, let model else { return }
+        // 图比可用宽度长时右对齐（原版容器横向滚动到最新一天）。
+        let offsetX = min(0, bounds.width - model.width)
+        ctx.saveGState()
+        ctx.translateBy(x: offsetX, y: 0)
+        // contribHeatmap 的 intensity 是原始度量值，不是 0–4 等级；用与原版
+        // 一致的分级函数换算（tokens 用固定档位，cost 相对峰值）。
+        let peak = model.cells.map { metric == "cost" ? $0.cost : $0.tokens }.max() ?? 0
+        for cell in model.cells {
+            let value = metric == "cost" ? cell.cost : cell.tokens
+            let level = max(0, min(
+                Self.levelColors.count - 1,
+                ChartCore.heatmapLevelForValue(value, peak, metric: metric)
+            ))
+            ctx.setFillColor(Self.levelColors[level].cgColor)
+            let rect = CGRect(x: cell.x, y: cell.y, width: cell.size, height: cell.size)
+            ctx.addPath(CGPath(roundedRect: rect, cornerWidth: 2, cornerHeight: 2, transform: nil))
+            ctx.fillPath()
+        }
+
+        // 月份刻度（原版 .heat-month：9px，fill rgba(line, 0.5)）。
+        let monthAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedSystemFont(ofSize: 9, weight: .regular),
+            .foregroundColor: AppTheme.textSecondary.withAlphaComponent(0.7),
+        ]
+        let gridHeight = model.cell * 7 + model.gap * 6
+        // monthLabels 给的是 "yyyy-MM"，原版轴上只画短月名（Feb / Mar …）；
+        // 且相邻刻度距离太近时跳过，避免叠字。
+        var lastLabelEnd: CGFloat = -.greatestFiniteMagnitude
+        for label in model.monthLabels {
+            let x = CGFloat(label.col) * (model.cell + model.gap)
+            guard x >= lastLabelEnd + 6 else { continue }
+            let text = NSAttributedString(string: Self.monthName(label.label), attributes: monthAttrs)
+            text.draw(at: CGPoint(x: x, y: gridHeight + 3))
+            lastLabelEnd = x + text.size().width
+        }
+        ctx.restoreGState()
+    }
+
+    private static let monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+    /// "2026-08" → "Aug"。
+    private static func monthName(_ key: String) -> String {
+        let parts = key.split(separator: "-")
+        guard parts.count >= 2, let month = Int(parts[1]), month >= 1, month <= 12 else { return key }
+        return monthNames[month - 1]
     }
 }
 

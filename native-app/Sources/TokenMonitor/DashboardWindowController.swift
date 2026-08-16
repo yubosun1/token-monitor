@@ -7,6 +7,8 @@ import AppKit
 protocol WindowHost: AnyObject {
     func hostRequestClose()
     func hostRequestOpenDashboard()
+    /// 应用 windowBehavior（floating / desktop / normal），对应原版 pinButton。
+    func hostApplyWindowBehavior(_ behavior: String)
 }
 
 /// 主窗口内容控制器可选实现：托盘菜单「设置…」与刷新按钮经此打开设置面板。
@@ -136,6 +138,9 @@ class GlassWindowController: NSWindowController, WindowHost {
         idleTeardown.cancel()
         lastShownAt = Date()
         super.showWindow(sender)
+        // Content skips redraws while hidden; let it catch up now that it is on
+        // screen (viewDidAppear does not fire for a panel-hosted view).
+        (contentController as? WindowVisibilityObserver)?.windowDidShow()
     }
 
     /// 子类 hide 钩子：主窗口启动 idle teardown，dashboard 立即 teardown。
@@ -241,6 +246,26 @@ class GlassWindowController: NSWindowController, WindowHost {
     func hostRequestOpenDashboard() {
         onOpenDashboard?()
     }
+
+    /// desktop = 压在其他窗口下方并锁定拖拽/缩放（原版 "Desktop pinned"）；
+    /// floating = 浮在最上层；normal = 普通层级。
+    func hostApplyWindowBehavior(_ behavior: String) {
+        guard let window else { return }
+        switch behavior {
+        case "desktop":
+            window.level = .init(Int(CGWindowLevelForKey(.desktopIconWindow)) + 1)
+            window.isMovableByWindowBackground = false
+            window.styleMask.remove(.resizable)
+        case "normal":
+            window.level = .normal
+            window.isMovableByWindowBackground = true
+            window.styleMask.insert(.resizable)
+        default:
+            window.level = .floating
+            window.isMovableByWindowBackground = true
+            window.styleMask.insert(.resizable)
+        }
+    }
 }
 
 /// 内容控制器可选实现：窗口 teardown 前取消订阅、释放资源。
@@ -248,16 +273,24 @@ protocol WindowTeardownObserver: AnyObject {
     func windowWillTeardown()
 }
 
+/// 内容控制器可选实现：窗口显示时补齐隐藏期间跳过的刷新。
+protocol WindowVisibilityObserver: AnyObject {
+    func windowDidShow()
+}
+
 // MARK: - Subclasses
 
 /// 主窗口（用量卡 + breakdown + 会话 + 限额 + 设置）。
 final class DashboardWindowController: GlassWindowController {
     init() {
-        super.init(boundsKey: "windowBounds", defaultSize: NSSize(width: 340, height: 650),
+        super.init(boundsKey: "windowBounds", defaultSize: NSSize(width: 363, height: 650),
                    contentController: MainViewController())
         restoreBounds()
         startBoundsTracking()
         enableAutoHideOnResign()
+        // 持久化的窗口层级（原版 pinButton 状态）在重建窗口时也要复原。
+        let behavior = BridgeCore.shared.settings.snapshot()["windowBehavior"] as? String ?? "floating"
+        hostApplyWindowBehavior(behavior)
     }
 
     override func windowDidHide() {

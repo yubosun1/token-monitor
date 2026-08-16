@@ -6,9 +6,12 @@ final class SessionListViewController: NSViewController, ContentUpdatable {
     /// 行点击回调：(client, sessionId, period, sessionCost)。
     var onSelect: ((String, String, String, Double) -> Void)?
 
-    private let scrollView = NSScrollView()
+    private let scrollView = TopAnchoredScrollView()
     private let rowsStack = NSStackView()
     private let emptyLabel = NSTextField(labelWithString: "暂无会话")
+    /// Pooled row views, reconfigured in place on every stats push.
+    private var rowViews: [SessionRowView] = []
+    private var bottomSpacer: NSView?
 
     override func loadView() {
         let container = NSView()
@@ -24,6 +27,9 @@ final class SessionListViewController: NSViewController, ContentUpdatable {
         scrollView.drawsBackground = false
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
+        // 原版把滚动条完全隐藏（scrollbar-width: none）；overlay 样式不占布局宽度，
+        // 否则「经典」滚动条会挤掉行右侧的数值列。
+        scrollView.scrollerStyle = .overlay
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(scrollView)
 
@@ -37,10 +43,10 @@ final class SessionListViewController: NSViewController, ContentUpdatable {
             scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             scrollView.topAnchor.constraint(equalTo: container.topAnchor),
             scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            rowsStack.leadingAnchor.constraint(equalTo: scrollView.leadingAnchor),
-            rowsStack.trailingAnchor.constraint(equalTo: scrollView.trailingAnchor),
-            rowsStack.topAnchor.constraint(equalTo: scrollView.topAnchor),
-            rowsStack.widthAnchor.constraint(equalTo: scrollView.widthAnchor),
+            rowsStack.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor),
+            rowsStack.trailingAnchor.constraint(equalTo: scrollView.contentView.trailingAnchor),
+            rowsStack.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor),
+            rowsStack.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor),
             emptyLabel.centerXAnchor.constraint(equalTo: container.centerXAnchor),
             emptyLabel.topAnchor.constraint(equalTo: container.topAnchor, constant: 24),
         ])
@@ -70,23 +76,49 @@ final class SessionListViewController: NSViewController, ContentUpdatable {
         }
         rows.sort { $0.lastUsedMs > $1.lastUsedMs }
 
-        rowsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         emptyLabel.isHidden = !rows.isEmpty
-        for r in rows {
+        // 原版 renderRows：条宽相对列表内最大值，不是固定分母。
+        let maxTokens = max(1, rows.map(\.tokens).max() ?? 1)
+
+        // Session lists can run to hundreds of rows and refresh every 15s;
+        // reuse the views instead of rebuilding the stack each push.
+        while rowViews.count < rows.count {
             let row = SessionRowView()
-            row.configure(client: r.client, sessionId: r.sessionId, tokens: r.tokens,
-                          cost: r.cost, messages: r.msgs, lastUsedMs: r.lastUsedMs,
-                          projectLabel: r.projectLabel, models: r.models, settings: settings)
-            row.onSelect = { [weak self] in
-                self?.onSelect?(r.client, r.sessionId, period, r.cost)
-            }
+            rowViews.append(row)
             rowsStack.addArrangedSubview(row)
             row.widthAnchor.constraint(equalTo: rowsStack.widthAnchor).isActive = true
         }
-        let spacer = NSView()
-        spacer.translatesAutoresizingMaskIntoConstraints = false
-        spacer.heightAnchor.constraint(equalToConstant: 12).isActive = true
-        rowsStack.addArrangedSubview(spacer)
+        for (index, row) in rowViews.enumerated() {
+            guard index < rows.count else {
+                row.isHidden = true
+                row.onSelect = nil
+                continue
+            }
+            let r = rows[index]
+            row.isHidden = false
+            row.configure(client: r.client, sessionId: r.sessionId, tokens: r.tokens,
+                          cost: r.cost, messages: r.msgs, lastUsedMs: r.lastUsedMs,
+                          projectLabel: r.projectLabel, models: r.models,
+                          maxTokens: maxTokens, settings: settings)
+            row.onSelect = { [weak self] in
+                self?.onSelect?(r.client, r.sessionId, period, r.cost)
+            }
+        }
+
+        if bottomSpacer == nil {
+            let spacer = NSView()
+            spacer.translatesAutoresizingMaskIntoConstraints = false
+            spacer.heightAnchor.constraint(equalToConstant: 12).isActive = true
+            bottomSpacer = spacer
+        }
+        if let bottomSpacer {
+            // Keep the spacer last as rows are appended above it. removeView
+            // throws if the view was never added, so only move an attached one.
+            if rowsStack.arrangedSubviews.contains(bottomSpacer) {
+                rowsStack.removeView(bottomSpacer)
+            }
+            rowsStack.addArrangedSubview(bottomSpacer)
+        }
     }
 
     private func configureLabel(_ label: NSTextField, font: NSFont, color: NSColor) {
@@ -103,7 +135,8 @@ final class SessionListViewController: NSViewController, ContentUpdatable {
 private final class SessionRowView: NSView {
     var onSelect: (() -> Void)?
 
-    private let dot = NSView()
+    private let mark = RowMarkView(size: 10)
+    private let chevron = NSTextField(labelWithString: "›")
     private let titleLabel = NSTextField(labelWithString: "")
     private let metaLabel = NSTextField(labelWithString: "")
     private let detailLabel = NSTextField(labelWithString: "")
@@ -129,9 +162,8 @@ private final class SessionRowView: NSView {
         wantsLayer = true
         layer?.backgroundColor = .clear
 
-        dot.wantsLayer = true
-        dot.layer?.cornerRadius = 3.5
-        dot.translatesAutoresizingMaskIntoConstraints = false
+        // 原版 .row-metrics::after：可打开详情的会话行右侧有 › 提示。
+        configureLabel(chevron, font: NSFont.systemFont(ofSize: 14, weight: .regular), color: AppTheme.textSecondary)
 
         configureLabel(titleLabel, font: AppTheme.bodyFont, color: AppTheme.textPrimary)
         configureLabel(metaLabel, font: AppTheme.microFont, color: AppTheme.textSecondary)
@@ -151,32 +183,58 @@ private final class SessionRowView: NSView {
         labelStack.orientation = .vertical
         labelStack.alignment = .leading
         labelStack.spacing = 1
-        titleLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        titleLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        // The intermediate stack keeps NSStackView's default (high) compression
+        // resistance, which would out-rank the title's low setting and force the
+        // metrics column to truncate instead of the title.
+        labelStack.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let nameRow = NSStackView(views: [dot, labelStack])
+        let nameRow = NSStackView(views: [mark, labelStack])
         nameRow.orientation = .horizontal
-        nameRow.alignment = .top
-        nameRow.spacing = 7
+        nameRow.alignment = .firstBaseline
+        nameRow.spacing = 8
+
+        // 数值列不许丢数字（标题才截断）。
+        for label in [tokensLabel, costLabel] {
+            label.lineBreakMode = .byClipping
+            label.cell?.truncatesLastVisibleLine = false
+        }
 
         let metrics = NSStackView(views: [tokensLabel, costLabel])
         metrics.orientation = .vertical
         metrics.alignment = .trailing
         metrics.spacing = 2
-        metrics.widthAnchor.constraint(greaterThanOrEqualToConstant: 66).isActive = true
 
-        let head = NSStackView(views: [nameRow, metrics])
+        // 原版 .row-head 是 space-between：标题靠左、数值 + › 靠右。
+        let headSpacer = NSView()
+        headSpacer.translatesAutoresizingMaskIntoConstraints = false
+        headSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let head = NSStackView(views: [nameRow, headSpacer, metrics, chevron])
         head.orientation = .horizontal
         head.alignment = .top
         head.spacing = 8
-        nameRow.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        metrics.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        nameRow.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        nameRow.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        // NSStackView ignores setContentCompressionResistancePriority — the
+        // stack-level equivalent is setClippingResistancePriority. Without it
+        // the metrics column shrinks and the numbers render truncated.
+        metrics.setHuggingPriority(.required, for: .horizontal)
+        metrics.setClippingResistancePriority(.required, for: .horizontal)
+        labelStack.setClippingResistancePriority(.defaultLow, for: .horizontal)
+        nameRow.setClippingResistancePriority(.defaultLow, for: .horizontal)
+        chevron.setContentHuggingPriority(.required, for: .horizontal)
+        // 原版 .row-metrics min-width: max-content —— 数值不压缩，标题才截断。
+        for label in [tokensLabel, costLabel] {
+            label.setContentCompressionResistancePriority(.required, for: .horizontal)
+        }
+        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         barBg.wantsLayer = true
-        barBg.layer?.backgroundColor = NSColor(calibratedRed: 4/255, green: 8/255, blue: 13/255, alpha: 0.46).cgColor
-        barBg.layer?.cornerRadius = 2.5
+        barBg.layer?.backgroundColor = AppTheme.sunkenColor.withAlphaComponent(0.46).cgColor
+        barBg.layer?.cornerRadius = 3
         barBg.translatesAutoresizingMaskIntoConstraints = false
         barFill.wantsLayer = true
-        barFill.layer?.cornerRadius = 2.5
+        barFill.layer?.cornerRadius = 3
         barFill.translatesAutoresizingMaskIntoConstraints = false
         barBg.addSubview(barFill)
 
@@ -197,11 +255,11 @@ private final class SessionRowView: NSView {
             stack.leadingAnchor.constraint(equalTo: leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: trailingAnchor),
             stack.topAnchor.constraint(equalTo: topAnchor, constant: 8),
-            stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
-            dot.widthAnchor.constraint(equalToConstant: 7),
-            dot.heightAnchor.constraint(equalToConstant: 7),
-            barBg.heightAnchor.constraint(equalToConstant: 5),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
+            barBg.heightAnchor.constraint(equalToConstant: 6),
             barBg.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            // 头行撑满，否则右侧数值列会被挤成省略号。
+            head.widthAnchor.constraint(equalTo: stack.widthAnchor),
             barFill.leadingAnchor.constraint(equalTo: barBg.leadingAnchor),
             barFill.topAnchor.constraint(equalTo: barBg.topAnchor),
             barFill.bottomAnchor.constraint(equalTo: barBg.bottomAnchor),
@@ -220,8 +278,18 @@ private final class SessionRowView: NSView {
         label.isSelectable = false
     }
 
-    func configure(client: String, sessionId: String, tokens: Int, cost: Double, messages: Int, lastUsedMs: Double, projectLabel: String, models: [String: Any], settings: [String: Any]) {
-        dot.layer?.backgroundColor = AppTheme.clientColor(client).cgColor
+    /// 原版只有这几个客户端有会话详情面板（.row.session-row[data-client=...]）。
+    private static let detailCapableClients: Set<String> = ["claude", "codex", "opencode", "reasonix"]
+
+    func configure(client: String, sessionId: String, tokens: Int, cost: Double, messages: Int, lastUsedMs: Double, projectLabel: String, models: [String: Any], maxTokens: Int, settings: [String: Any]) {
+        mark.configure(
+            asset: IconCatalog.clientAsset(client),
+            color: AppTheme.clientColor(client),
+            showIcons: settings["showToolIcons"] as? Bool ?? true
+        )
+        chevron.isHidden = !Self.detailCapableClients.contains(client.lowercased())
+        // 原版会话行的条用客户端品牌色；此前漏设导致进度条不可见。
+        barFill.layer?.backgroundColor = AppTheme.clientColor(client).cgColor
         let label = AppTheme.clientLabel(client)
 
         // 标题：Client · Model（无模型信息时回落项目名，再回落会话 id 前 8 位）。
@@ -240,7 +308,7 @@ private final class SessionRowView: NSView {
         detailLabel.stringValue = detail
         detailLabel.isHidden = detail.isEmpty
 
-        let fraction = tokens > 0 ? min(1.0, CGFloat(tokens) / 500_000) : 0
+        let fraction = maxTokens > 0 ? min(1.0, CGFloat(tokens) / CGFloat(maxTokens)) : 0
         barFillWidth?.isActive = false
         barFillWidth = barFill.widthAnchor.constraint(equalTo: barBg.widthAnchor, multiplier: max(0.02, fraction))
         barFillWidth?.isActive = true
@@ -288,5 +356,10 @@ private final class SessionRowView: NSView {
 
     override func mouseEntered(with event: NSEvent) { hover = true; layer?.backgroundColor = AppTheme.panelColor.cgColor }
     override func mouseExited(with event: NSEvent) { hover = false; layer?.backgroundColor = .clear }
-    override func mouseDown(with event: NSEvent) { onSelect?() }
+
+    /// 原版只有能打开详情的客户端行才有 `cursor: pointer`；其余行不响应点击。
+    override func mouseDown(with event: NSEvent) {
+        guard !chevron.isHidden else { return }
+        onSelect?()
+    }
 }

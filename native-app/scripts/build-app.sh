@@ -23,6 +23,10 @@ cp "$APP_DIR/.build/release/TokenMonitor" "$BUNDLE/Contents/MacOS/TokenMonitor"
 # 原生 AppKit UI：不再打包渲染层 www/ 与 bridge.js（WKWebView 已移除）。
 cp "$ROOT/assets/icons/tray-token-monitor.png" "$BUNDLE/Contents/Resources/tray-token-monitor.png"
 cp "$ROOT/assets/icon.png" "$BUNDLE/Contents/Resources/icon.png"
+# Brand glyph marks for breakdown/limits rows (IconCatalog loads these by name,
+# mirroring the renderer's .row-icon-* mask images).
+mkdir -p "$BUNDLE/Contents/Resources/icons"
+cp "$ROOT/assets/icons/"*.svg "$BUNDLE/Contents/Resources/icons/"
 
 # Bundled helper: the tokscale Rust scanner (vendored from
 # @tokscale/cli-darwin-arm64 4.13.0, see Vendor/tokscale/NOTICE).

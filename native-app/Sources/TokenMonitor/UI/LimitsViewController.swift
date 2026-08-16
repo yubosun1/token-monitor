@@ -5,7 +5,7 @@ import AppKit
 /// 取代原 limits 视图。每个 provider 一张卡：标题 + 状态 pill + 余额/配额进度条
 /// + 消费统计。无数据或未配置时显示对应空态。
 final class LimitsViewController: NSViewController, ContentUpdatable {
-    private let scrollView = NSScrollView()
+    private let scrollView = TopAnchoredScrollView()
     private let cardsStack = NSStackView()
     private let emptyLabel = NSTextField(labelWithString: "暂无限额数据")
 
@@ -14,16 +14,19 @@ final class LimitsViewController: NSViewController, ContentUpdatable {
         container.wantsLayer = true
         container.layer?.backgroundColor = .clear
 
+        // 原版 .limits-panel：gap 12px、无内缩（水平内缩由 shell 提供）。
         cardsStack.orientation = .vertical
         cardsStack.alignment = .leading
-        cardsStack.spacing = 10
-        cardsStack.edgeInsets = NSEdgeInsets(top: 10, left: 12, bottom: 12, right: 12)
+        cardsStack.spacing = 12
         cardsStack.translatesAutoresizingMaskIntoConstraints = false
 
         scrollView.documentView = cardsStack
         scrollView.drawsBackground = false
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
+        // 原版把滚动条完全隐藏（scrollbar-width: none）；overlay 样式不占布局宽度，
+        // 否则「经典」滚动条会挤掉行右侧的数值列。
+        scrollView.scrollerStyle = .overlay
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(scrollView)
 
@@ -37,10 +40,10 @@ final class LimitsViewController: NSViewController, ContentUpdatable {
             scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             scrollView.topAnchor.constraint(equalTo: container.topAnchor),
             scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            cardsStack.leadingAnchor.constraint(equalTo: scrollView.leadingAnchor),
-            cardsStack.trailingAnchor.constraint(equalTo: scrollView.trailingAnchor),
-            cardsStack.topAnchor.constraint(equalTo: scrollView.topAnchor),
-            cardsStack.widthAnchor.constraint(equalTo: scrollView.widthAnchor),
+            cardsStack.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor),
+            cardsStack.trailingAnchor.constraint(equalTo: scrollView.contentView.trailingAnchor),
+            cardsStack.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor),
+            cardsStack.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor),
             emptyLabel.centerXAnchor.constraint(equalTo: container.centerXAnchor),
             emptyLabel.topAnchor.constraint(equalTo: container.topAnchor, constant: 24),
         ])
@@ -90,9 +93,14 @@ final class LimitsViewController: NSViewController, ContentUpdatable {
 // MARK: - Limit card
 
 private final class LimitCardView: NSView {
+    private let mark = RowMarkView(size: 12)
     private let titleLabel = NSTextField(labelWithString: "")
+    private let planLabel = NSTextField(labelWithString: "")
+    private let metaLabel = NSTextField(labelWithString: "")
     private let statusLabel = NSTextField(labelWithString: "")
     private let bodyStack = NSStackView()
+    /// 每行两列（原版 .limit-windows grid-template-columns: 1fr 1fr）。
+    private var windowRows: [NSStackView] = []
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -108,29 +116,47 @@ private final class LimitCardView: NSView {
         wantsLayer = true
         layer?.backgroundColor = .clear
 
+        // 原版 .limit-name 12px / .limit-meta 10px muted / .limit-plan 10px 右对齐。
         configureLabel(titleLabel, font: AppTheme.bodyFont, color: AppTheme.textPrimary)
-        configureLabel(statusLabel, font: AppTheme.microFont, color: AppTheme.textPrimary)
+        configureLabel(metaLabel, font: AppTheme.microFont, color: AppTheme.textSecondary)
+        configureLabel(planLabel, font: AppTheme.microFont, color: AppTheme.textSecondary)
+        planLabel.alignment = .right
+        configureLabel(statusLabel, font: NSFont.monospacedSystemFont(ofSize: 9, weight: .regular), color: AppTheme.positive)
+        // 原版 .limit-provider-tag-status：描边胶囊，不是实心色块。
         statusLabel.wantsLayer = true
-        statusLabel.layer?.cornerRadius = 4
+        statusLabel.layer?.cornerRadius = 5
+        statusLabel.layer?.borderWidth = 1
         statusLabel.alignment = .center
-        statusLabel.textColor = .white
 
-        let header = NSStackView(views: [titleLabel, statusLabel])
-        header.orientation = .horizontal
-        header.alignment = .centerY
-        header.spacing = 6
+        let nameLine = NSStackView(views: [mark, titleLabel, statusLabel])
+        nameLine.orientation = .horizontal
+        nameLine.alignment = .centerY
+        nameLine.spacing = 8
         titleLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
         statusLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
-        statusLabel.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
+        statusLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
 
+        let titleColumn = NSStackView(views: [nameLine, metaLabel])
+        titleColumn.orientation = .vertical
+        titleColumn.alignment = .leading
+        titleColumn.spacing = 2
+
+        let header = NSStackView(views: [titleColumn, planLabel])
+        header.orientation = .horizontal
+        header.alignment = .top
+        header.spacing = 8
+        titleColumn.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        planLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+
+        // 原版 .limit-row gap 10px。
         bodyStack.orientation = .vertical
         bodyStack.alignment = .leading
-        bodyStack.spacing = 5
+        bodyStack.spacing = 10
 
         let stack = NSStackView(views: [header, bodyStack])
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 7
+        stack.spacing = 10
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
 
@@ -143,8 +169,11 @@ private final class LimitCardView: NSView {
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: trailingAnchor),
-            stack.topAnchor.constraint(equalTo: topAnchor, constant: 10),
-            stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
+            stack.topAnchor.constraint(equalTo: topAnchor),
+            // 原版 .limit-row padding: 0 0 13px。
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -13),
+            header.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            bodyStack.widthAnchor.constraint(equalTo: stack.widthAnchor),
             sep.leadingAnchor.constraint(equalTo: leadingAnchor),
             sep.trailingAnchor.constraint(equalTo: trailingAnchor),
             sep.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -167,23 +196,66 @@ private final class LimitCardView: NSView {
             accountLabel = maskEmail(accountLabel)
         }
         let status = provider["status"] as? String ?? ""
-        var title = AppTheme.clientLabel(id) + (accountLabel.isEmpty ? "" : " · \(accountLabel)")
-        if settings["showLimitSource"] as? Bool ?? false, let source = provider["source"] as? String, !source.isEmpty {
-            title += "  [\(source)]"
+        // 原版把客户端名与账号分成两行：名字行 + muted 的 meta 行。
+        titleLabel.stringValue = AppTheme.clientLabel(id)
+        mark.configure(
+            asset: IconCatalog.clientAsset(id),
+            color: AppTheme.clientColor(id),
+            showIcons: settings["showToolIcons"] as? Bool ?? true
+        )
+
+        var metaParts: [String] = []
+        if !accountLabel.isEmpty { metaParts.append(accountLabel) }
+        if let updated = provider["updatedAt"] as? String, !updated.isEmpty {
+            let age = LimitsFormat.updatedAgeText(updated)
+            if !age.isEmpty { metaParts.append(age) }
         }
-        titleLabel.stringValue = title
-        statusLabel.stringValue = " " + statusText(status) + " "
-        statusLabel.layer?.backgroundColor = statusColor(status).withAlphaComponent(0.85).cgColor
-        statusLabel.textColor = .white
+        if settings["showLimitSource"] as? Bool ?? false,
+           let source = provider["source"] as? String, !source.isEmpty {
+            metaParts.append(source)
+        }
+        metaLabel.stringValue = metaParts.joined(separator: " · ")
+        metaLabel.isHidden = metaParts.isEmpty
+
+        // 原版 .limit-plan：右上角显示套餐名（如 Plus / Go）。
+        let plan = provider["planLabel"] as? String ?? ""
+        planLabel.stringValue = plan
+        planLabel.isHidden = plan.isEmpty
+
+        // 只有非正常状态才显示状态胶囊（原版正常时不挂 tag）。
+        let showStatus = status != "ok"
+        statusLabel.isHidden = !showStatus
+        if showStatus {
+            statusLabel.stringValue = " \(statusText(status)) "
+            let color = statusColor(status)
+            statusLabel.textColor = color
+            statusLabel.layer?.borderColor = color.withAlphaComponent(0.32).cgColor
+            statusLabel.layer?.backgroundColor = color.withAlphaComponent(0.06).cgColor
+        }
 
         bodyStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        windowRows.removeAll()
 
+        // 原版 .limit-windows 是 1fr 1fr 栅格：窗口两两成行。
         let windows = provider["windows"] as? [[String: Any]] ?? []
+        var pending: NSStackView?
         for window in windows {
-            let row = LimitWindowRow()
-            row.configure(window: window, settings: settings)
-            bodyStack.addArrangedSubview(row)
-            row.widthAnchor.constraint(equalTo: bodyStack.widthAnchor).isActive = true
+            let cell = LimitWindowRow()
+            cell.configure(window: window, settings: settings, color: AppTheme.clientColor(id))
+            if let row = pending {
+                row.addArrangedSubview(cell)
+                pending = nil
+            } else {
+                let row = NSStackView(views: [cell])
+                row.orientation = .horizontal
+                row.alignment = .top
+                row.distribution = .fillEqually
+                row.spacing = 10
+                bodyStack.addArrangedSubview(row)
+                row.widthAnchor.constraint(equalTo: bodyStack.widthAnchor).isActive = true
+                windowRows.append(row)
+                pending = row
+            }
         }
 
         if let balance = provider["balance"] as? [String: Any] {
@@ -202,6 +274,7 @@ private final class LimitCardView: NSView {
             bodyStack.addArrangedSubview(hint)
         }
     }
+
 
     private func maskEmail(_ value: String) -> String {
         guard value.contains("@") else { return value }
@@ -239,6 +312,7 @@ private final class LimitCardView: NSView {
 private final class LimitWindowRow: NSView {
     private let labelField = NSTextField(labelWithString: "")
     private let valueField = NSTextField(labelWithString: "")
+    private let resetField = NSTextField(labelWithString: "")
     private let barBg = NSView()
     private let barFill = NSView()
 
@@ -256,29 +330,37 @@ private final class LimitWindowRow: NSView {
         wantsLayer = true
         layer?.backgroundColor = .clear
 
-        configureLabel(labelField, font: AppTheme.smallFont, color: AppTheme.textSecondary)
-        configureLabel(valueField, font: AppTheme.monoFont, color: AppTheme.textPrimary)
+        // 原版 .limit-window-text 10px muted，值用 --text；.limit-reset 9px muted。
+        configureLabel(labelField, font: AppTheme.microFont, color: AppTheme.textSecondary)
+        configureLabel(valueField, font: AppTheme.microFont, color: AppTheme.textPrimary)
+        configureLabel(resetField, font: NSFont.monospacedSystemFont(ofSize: 9, weight: .regular), color: AppTheme.textSecondary)
         valueField.alignment = .right
+        labelField.lineBreakMode = .byTruncatingTail
+        resetField.lineBreakMode = .byTruncatingTail
 
+        // 原版 .limit-meter：6px 高、圆角 3、bg rgba(--sunken-rgb, 0.44)。
         barBg.wantsLayer = true
-        barBg.layer?.backgroundColor = AppTheme.cardBorderColor.cgColor
-        barBg.layer?.cornerRadius = 2
+        barBg.layer?.backgroundColor = AppTheme.sunkenColor.withAlphaComponent(0.44).cgColor
+        barBg.layer?.cornerRadius = 3
         barBg.translatesAutoresizingMaskIntoConstraints = false
         barFill.wantsLayer = true
-        barFill.layer?.cornerRadius = 2
+        barFill.layer?.cornerRadius = 3
         barFill.translatesAutoresizingMaskIntoConstraints = false
         barBg.addSubview(barFill)
 
         let topRow = NSStackView(views: [labelField, valueField])
         topRow.orientation = .horizontal
-        topRow.alignment = .centerY
+        topRow.alignment = .lastBaseline
+        topRow.spacing = 8
         labelField.setContentHuggingPriority(.defaultLow, for: .horizontal)
         valueField.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        valueField.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-        let stack = NSStackView(views: [topRow, barBg])
+        // 原版 .limit-window gap 5px。
+        let stack = NSStackView(views: [topRow, barBg, resetField])
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 4
+        stack.spacing = 5
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         NSLayoutConstraint.activate([
@@ -286,9 +368,10 @@ private final class LimitWindowRow: NSView {
             stack.trailingAnchor.constraint(equalTo: trailingAnchor),
             stack.topAnchor.constraint(equalTo: topAnchor),
             stack.bottomAnchor.constraint(equalTo: bottomAnchor),
-            barBg.heightAnchor.constraint(equalToConstant: 4),
+            barBg.heightAnchor.constraint(equalToConstant: 6),
             topRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
             barBg.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            resetField.widthAnchor.constraint(equalTo: stack.widthAnchor),
             barFill.leadingAnchor.constraint(equalTo: barBg.leadingAnchor),
             barFill.topAnchor.constraint(equalTo: barBg.topAnchor),
             barFill.bottomAnchor.constraint(equalTo: barBg.bottomAnchor),
@@ -303,60 +386,67 @@ private final class LimitWindowRow: NSView {
         label.isSelectable = false
     }
 
-    func configure(window: [String: Any], settings: [String: Any]) {
-        let label = window["label"] as? String ?? ""
+    func configure(window: [String: Any], settings: [String: Any], color: NSColor) {
         let currency = window["currency"] as? String ?? ""
-        let remaining = UsageCore.doubleValue(window["remaining"])
-        let used = UsageCore.doubleValue(window["used"])
-        let limit = UsageCore.doubleValue(window["limit"])
+        let remaining = window["remaining"]
+        let limit = window["limit"]
         let remainingPct = window["remainingPercent"]
         let usedPct = window["usedPercent"]
         let showUsed = settings["showLimitUsed"] as? Bool ?? false
+        let showMeter = window["showMeter"] as? Bool ?? true
 
-        labelField.stringValue = label
+        // 标签回退到 kind（原版 normalizeWindowLabel 可能返回空串）。
+        let rawLabel = window["label"] as? String ?? ""
+        labelField.stringValue = rawLabel.isEmpty
+            ? (window["kind"] as? String ?? "").capitalized
+            : rawLabel
+
+        // 原版 limitFillPercent：默认看剩余，showLimitUsed 时翻成已用。
+        let hasPercent = showMeter && !((remainingPct is NSNull || remainingPct == nil)
+            && (usedPct is NSNull || usedPct == nil))
+        var percent = 0.0
+        if let p = remainingPct, !(p is NSNull) {
+            percent = showUsed ? 100 - UsageCore.doubleValue(p) : UsageCore.doubleValue(p)
+        } else if let p = usedPct, !(p is NSNull) {
+            percent = showUsed ? UsageCore.doubleValue(p) : 100 - UsageCore.doubleValue(p)
+        }
+        percent = max(0, min(100, percent))
+
+        // 原版 formatLimitWindowValue：有百分比就显示「N% left/used」，
+        // 否则回落到剩余额度 / 上限。
         let sym = Fmt.currencySymbol(currency)
-        if showUsed {
-            if limit > 0 {
-                valueField.stringValue = "\(sym)\(Fmt.tokens(Int(used))) / \(sym)\(Fmt.tokens(Int(limit)))"
-            } else if let p = usedPct, !(p is NSNull) {
-                valueField.stringValue = "\(Fmt.percent(UsageCore.doubleValue(p) / 100))"
-            } else {
-                valueField.stringValue = "\(sym)\(Fmt.tokens(Int(used)))"
-            }
+        let suffix = showUsed ? "used" : "left"
+        if hasPercent {
+            valueField.stringValue = "\(Int(percent.rounded()))% \(suffix)"
+        } else if let r = remaining, !(r is NSNull) {
+            let amount = "\(sym)\(Fmt.tokens(Int(UsageCore.doubleValue(r))))"
+            valueField.stringValue = showMeter ? "\(amount) left" : amount
+        } else if let l = limit, !(l is NSNull) {
+            valueField.stringValue = "\(sym)\(Fmt.tokens(Int(UsageCore.doubleValue(l)))) cap"
         } else {
-            if remaining > 0 || limit > 0 {
-                valueField.stringValue = limit > 0
-                    ? "\(sym)\(Fmt.tokens(Int(remaining))) / \(sym)\(Fmt.tokens(Int(limit)))"
-                    : "\(sym)\(Fmt.tokens(Int(remaining)))"
-            } else {
-                valueField.stringValue = "—"
-            }
+            valueField.stringValue = "--"
         }
 
-        // 进度条：showLimitUsed 时显示已用比例，否则显示剩余比例。
-        var fraction = 0.0
-        if showUsed {
-            if let p = usedPct, !(p is NSNull) {
-                fraction = UsageCore.doubleValue(p)
-            } else if limit > 0 {
-                fraction = used / limit
-            } else if let p = remainingPct, !(p is NSNull) {
-                fraction = 1 - UsageCore.doubleValue(p)
-            }
-        } else {
-            if let p = remainingPct, !(p is NSNull) {
-                fraction = UsageCore.doubleValue(p)
-            } else if let p = usedPct, !(p is NSNull) {
-                fraction = 1 - UsageCore.doubleValue(p)
-            } else if limit > 0 {
-                fraction = 1 - used / limit
-            }
+        // 原版 .limit-reset：「Reset 5h 21m」，无重置时间则用 resetDescription。
+        var resetText = ""
+        if let reset = window["resetsAt"] as? String, !reset.isEmpty {
+            resetText = LimitsFormat.resetText(reset)
         }
-        fraction = max(0, min(1, fraction))
-        let color = fraction < 0.2 ? AppTheme.danger : (fraction < 0.5 ? AppTheme.warning : AppTheme.accent)
+        if resetText.isEmpty {
+            resetText = window["resetDescription"] as? String ?? ""
+        }
+        resetField.stringValue = resetText
+        resetField.isHidden = resetText.isEmpty
+
+        barBg.isHidden = !showMeter
+        guard showMeter else { return }
+        // 原版 limitMeterNode 用 provider 品牌色，不按余量改色。
+        let fraction = hasPercent ? percent / 100 : 0
         barFill.layer?.backgroundColor = color.cgColor
         barFillWidth?.isActive = false
-        barFillWidth = barFill.widthAnchor.constraint(equalTo: barBg.widthAnchor, multiplier: CGFloat(max(0.02, fraction)))
+        barFillWidth = barFill.widthAnchor.constraint(
+            equalTo: barBg.widthAnchor, multiplier: CGFloat(max(0.01, fraction))
+        )
         barFillWidth?.isActive = true
     }
 

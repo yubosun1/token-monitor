@@ -75,6 +75,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if diag, ProcessInfo.processInfo.environment["TOKEN_MONITOR_DIAG_VIEWS"] != nil {
             runViewsProbe()
         }
+        // Dev aid: TOKEN_MONITOR_DIAG_SNAPSHOT=1 renders every main-window view
+        // offscreen to PNG, so layout can be diffed against the Electron UI's
+        // reference screenshots without screen-recording permission.
+        if SnapshotProbe.isEnabled {
+            runSnapshotProbe()
+        }
+    }
+
+    /// Diag-only: snapshot every main-window view offscreen, then quit.
+    private func runSnapshotProbe() {
+        ensureMainWindow()
+        guard let wc = mainWindowController,
+              let main = wc.contentController as? MainViewController else {
+            NSLog("[diag] snapshot: main controller missing, aborting")
+            return
+        }
+        let size = wc.window?.frame.size ?? NSSize(width: 363, height: 650)
+        SnapshotProbe.run(main: main, size: size)
     }
 
     /// Diag-only: cycle all main-window views, then open settings and the

@@ -3,7 +3,7 @@ import AppKit
 /// 项目视图（原版 projectRows）：从 period.sessions 的 projectLabel 聚合
 /// 项目，按 tokens 降序渲染；点击项目行展开各客户端占比（原版 accordion）。
 final class ProjectsViewController: NSViewController, ContentUpdatable {
-    private let scrollView = NSScrollView()
+    private let scrollView = TopAnchoredScrollView()
     private let rowsStack = NSStackView()
     private let emptyLabel = NSTextField(labelWithString: "暂无项目数据")
 
@@ -21,6 +21,9 @@ final class ProjectsViewController: NSViewController, ContentUpdatable {
         scrollView.drawsBackground = false
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
+        // 原版把滚动条完全隐藏（scrollbar-width: none）；overlay 样式不占布局宽度，
+        // 否则「经典」滚动条会挤掉行右侧的数值列。
+        scrollView.scrollerStyle = .overlay
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(scrollView)
 
@@ -34,10 +37,10 @@ final class ProjectsViewController: NSViewController, ContentUpdatable {
             scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             scrollView.topAnchor.constraint(equalTo: container.topAnchor),
             scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            rowsStack.leadingAnchor.constraint(equalTo: scrollView.leadingAnchor),
-            rowsStack.trailingAnchor.constraint(equalTo: scrollView.trailingAnchor),
-            rowsStack.topAnchor.constraint(equalTo: scrollView.topAnchor),
-            rowsStack.widthAnchor.constraint(equalTo: scrollView.widthAnchor),
+            rowsStack.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor),
+            rowsStack.trailingAnchor.constraint(equalTo: scrollView.contentView.trailingAnchor),
+            rowsStack.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor),
+            rowsStack.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor),
             emptyLabel.centerXAnchor.constraint(equalTo: container.centerXAnchor),
             emptyLabel.topAnchor.constraint(equalTo: container.topAnchor, constant: 24),
         ])
@@ -154,15 +157,21 @@ private final class ProjectRowView: NSView {
         configureLabel(nameLabel, font: AppTheme.bodyFont, color: AppTheme.textPrimary)
         nameLabel.lineBreakMode = .byTruncatingTail
         nameLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        configureLabel(tokensLabel, font: AppTheme.monoFont, color: AppTheme.textPrimary)
-        configureLabel(costLabel, font: AppTheme.smallFont, color: AppTheme.textTertiary)
+        configureLabel(tokensLabel, font: AppTheme.bodyFont, color: AppTheme.textPrimary)
+        configureLabel(costLabel, font: AppTheme.microFont, color: AppTheme.textSecondary)
         costLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        // 数值列不压缩，长项目名才截断（原版 .row-metrics max-content）。
+        for label in [tokensLabel, costLabel] {
+            label.setContentCompressionResistancePriority(.required, for: .horizontal)
+        }
+        nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         let head = NSStackView(views: [mark, nameLabel, tokensLabel, costLabel])
         head.orientation = .horizontal
         head.alignment = .centerY
-        head.spacing = 6
-        head.edgeInsets = NSEdgeInsets(top: 9, left: 14, bottom: 9, right: 14)
+        head.spacing = 8
+        // 水平内缩来自 shell；行内只保留上下 padding（原版 .row padding-bottom 10px）。
+        head.edgeInsets = NSEdgeInsets(top: 8, left: 0, bottom: 10, right: 0)
         head.translatesAutoresizingMaskIntoConstraints = false
         addSubview(head)
 
@@ -177,7 +186,7 @@ private final class ProjectRowView: NSView {
             head.leadingAnchor.constraint(equalTo: leadingAnchor),
             head.trailingAnchor.constraint(equalTo: trailingAnchor),
             head.topAnchor.constraint(equalTo: topAnchor),
-            accordionStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 32),
+            accordionStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 18),
             accordionStack.trailingAnchor.constraint(equalTo: trailingAnchor),
             accordionStack.topAnchor.constraint(equalTo: head.bottomAnchor),
             accordionStack.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -191,7 +200,7 @@ private final class ProjectRowView: NSView {
         sep.translatesAutoresizingMaskIntoConstraints = false
         addSubview(sep)
         NSLayoutConstraint.activate([
-            sep.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            sep.leadingAnchor.constraint(equalTo: leadingAnchor),
             sep.trailingAnchor.constraint(equalTo: trailingAnchor),
             sep.bottomAnchor.constraint(equalTo: bottomAnchor),
             sep.heightAnchor.constraint(equalToConstant: 1),
@@ -256,7 +265,7 @@ private final class ProjectRowView: NSView {
             row.addArrangedSubview(name)
             row.addArrangedSubview(pct)
             row.addArrangedSubview(tokens)
-            row.edgeInsets = NSEdgeInsets(top: 4, left: 0, bottom: 4, right: 14)
+            row.edgeInsets = NSEdgeInsets(top: 4, left: 0, bottom: 4, right: 0)
             accordionStack.addArrangedSubview(row)
             row.widthAnchor.constraint(equalTo: accordionStack.widthAnchor).isActive = true
             NSLayoutConstraint.activate([

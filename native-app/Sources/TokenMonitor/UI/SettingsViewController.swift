@@ -8,7 +8,7 @@ final class SettingsViewController: NSViewController {
 
     var onClose: (() -> Void)?
 
-    private let scrollView = NSScrollView()
+    private let scrollView = TopAnchoredScrollView()
     private let contentStack = NSStackView()
     private var clientCheckboxes: [(String, NSButton)] = []
     private let refreshPopUp = NSPopUpButton()

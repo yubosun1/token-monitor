@@ -12,7 +12,7 @@ final class SessionDetailViewController: NSViewController {
     private let period: String
     private let sessionCost: Double
 
-    private let scrollView = NSScrollView()
+    private let scrollView = TopAnchoredScrollView()
     private let contentStack = NSStackView()
     private let loadingLabel = NSTextField(labelWithString: "正在读取会话…")
     private let titleLabel = NSTextField(labelWithString: "")

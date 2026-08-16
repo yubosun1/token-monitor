@@ -76,30 +76,51 @@ final class ViewSwitcherBar: NSView {
         ])
         segmented.heightAnchor.constraint(equalToConstant: 32).isActive = true
 
-        // 右侧动作按钮（原版 .icon-button：26×26，圆角 6）
+        // 右侧动作按钮（原版 .icon-button 34×28 / .refresh-button 34×30）
         for btn in [refreshBtn, settingsBtn] {
-            btn.font = NSFont.systemFont(ofSize: 14, weight: .regular)
+            btn.font = NSFont.systemFont(ofSize: 15, weight: .regular)
             btn.target = self
             btn.hoverBackground = AppTheme.hoverColor
-            btn.widthAnchor.constraint(equalToConstant: 30).isActive = true
+            btn.widthAnchor.constraint(equalToConstant: 34).isActive = true
             btn.heightAnchor.constraint(equalToConstant: 30).isActive = true
             btn.layer?.borderWidth = 1
-            btn.layer?.borderColor = AppTheme.lineColor.withAlphaComponent(0.35).cgColor
+            btn.layer?.borderColor = AppTheme.lineColor.cgColor
             btn.layer?.backgroundColor = AppTheme.controlColor.cgColor
             btn.layer?.cornerRadius = 7
         }
         refreshBtn.action = #selector(refreshClick)
+        refreshBtn.toolTip = "刷新"
         settingsBtn.action = #selector(settingsClick)
+        settingsBtn.toolTip = "设置"
 
-        let actions = NSStackView(views: [refreshBtn, settingsBtn])
-        actions.orientation = .horizontal
-        actions.spacing = 4
+        // 原版 .utility-actions：设置常驻，刷新在悬停/设置打开时才从左侧滑入。
+        refreshBtn.alphaValue = 0
+        let actions = HoverSlotView()
+        actions.translatesAutoresizingMaskIntoConstraints = false
+        actions.addSubview(refreshBtn)
+        actions.addSubview(settingsBtn)
+        actions.onHoverChange = { [weak self] hovering in
+            self?.setRefreshRevealed(hovering)
+        }
+        NSLayoutConstraint.activate([
+            refreshBtn.leadingAnchor.constraint(equalTo: actions.leadingAnchor),
+            refreshBtn.centerYAnchor.constraint(equalTo: actions.centerYAnchor),
+            settingsBtn.leadingAnchor.constraint(equalTo: refreshBtn.trailingAnchor, constant: 6),
+            settingsBtn.trailingAnchor.constraint(equalTo: actions.trailingAnchor),
+            settingsBtn.centerYAnchor.constraint(equalTo: actions.centerYAnchor),
+            actions.heightAnchor.constraint(equalToConstant: 30),
+        ])
 
-        let stack = NSStackView(views: [segmented, actions])
+        // 原版 .footer：view-switcher 靠左（margin-right auto）、动作靠右。
+        let spacer = NSView()
+        spacer.translatesAutoresizingMaskIntoConstraints = false
+
+        let stack = NSStackView(views: [segmented, spacer, actions])
         stack.orientation = .horizontal
         stack.alignment = .centerY
         stack.spacing = 8
-        stack.edgeInsets = NSEdgeInsets(top: 5, left: 12, bottom: 5, right: 12)
+        // 水平内缩对齐 shell 的 14pt；底部 14pt 是原版 .shell padding-bottom。
+        stack.edgeInsets = NSEdgeInsets(top: 6, left: 14, bottom: 14, right: 14)
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
         NSLayoutConstraint.activate([
@@ -108,6 +129,10 @@ final class ViewSwitcherBar: NSView {
             stack.topAnchor.constraint(equalTo: topAnchor),
             stack.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
+        // 原版 .view-switcher: max-width min(150px, 52%)。
+        segmented.widthAnchor.constraint(lessThanOrEqualToConstant: 150).isActive = true
+        let proportional = segmented.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor, multiplier: 0.52)
+        proportional.isActive = true
 
         popover.behavior = .transient
         popover.contentViewController = menuVC
@@ -163,6 +188,16 @@ final class ViewSwitcherBar: NSView {
             menuVC.reload()
             popover.show(relativeTo: switchButton.bounds, of: switchButton, preferredEdge: .maxY)
         }
+    }
+
+    /// 刷新按钮在悬停时淡入（原版 .utility-actions:hover .refresh-button）。
+    private func setRefreshRevealed(_ revealed: Bool) {
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.16
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            refreshBtn.animator().alphaValue = revealed ? 1 : 0
+        }
+        refreshBtn.isEnabled = revealed
     }
 
     @objc private func refreshClick() { onRefresh?() }
