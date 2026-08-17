@@ -1276,18 +1276,19 @@ func runDshCacheTests() {
     checkEqual(Adapters.dshParseCachePaths().count, 2, "T15 both files cached")
 
     // T15f: appending a frame to a live session uses the incremental path —
-    // one delta decompression feeds only the tail, and new usage rows appear
-    // once their finish chunk resolves the model.
+    // one delta decompression feeds only the tail, and a current DSH finish
+    // payload resolves the model from replayState.response.model.
     let appendHandle = try! FileHandle(forWritingTo: f2)
     try! appendHandle.seekToEnd()
     let deltaText = "{\"type\":\"assistant/chunk\",\"seq\":99,\"time\":\"2026-08-15T10:01:00+08:00\",\"data\":{\"turn\":2,\"step\":1,\"chunk\":{\"type\":\"usage\",\"usage\":{\"inputTokens\":500,\"outputTokens\":50,\"cacheReadTokens\":0,\"cacheWriteTokens\":0}}}}\n"
-        + "{\"type\":\"assistant/chunk\",\"seq\":100,\"time\":\"2026-08-15T10:01:05+08:00\",\"data\":{\"turn\":2,\"step\":1,\"chunk\":{\"type\":\"finish\",\"replayState\":{\"model\":\"deepseek-chat\"}}}}\n"
-    try! appendHandle.write(compressZstd(deltaText))
+        + "{\"type\":\"assistant/chunk\",\"seq\":100,\"time\":\"2026-08-15T10:01:05+08:00\",\"data\":{\"turn\":2,\"step\":1,\"chunk\":{\"type\":\"finish\",\"replayState\":{\"response\":{\"api\":\"openai-completions\",\"model\":\"deepseek-v4-flash\"}}}}}\n"
+    appendHandle.write(compressZstd(deltaText))
     try! appendHandle.close()
     let c1 = Adapters.dshDecompressCount
     let r4 = Adapters.cachedSessionFileRows(f2)
     checkEqual(r4.rows.count, 2, "T15f appended usage row resolved incrementally")
     checkEqual(r4.rows.last?.input ?? 0, 500, "T15f appended tokens parsed")
+    checkEqual(r4.rows.last?.model ?? "", "deepseek-v4-flash", "T15f current nested finish model parsed")
     checkEqual(Adapters.dshDecompressCount - c1, 1, "T15f delta decompresses once")
 
     // T15g: a usage event whose finish chunk arrives in a LATER append stays
@@ -1296,38 +1297,58 @@ func runDshCacheTests() {
     let finishOnly = "{\"type\":\"assistant/chunk\",\"seq\":102,\"time\":\"2026-08-15T10:02:05+08:00\",\"data\":{\"turn\":3,\"step\":1,\"chunk\":{\"type\":\"finish\",\"replayState\":{\"model\":\"deepseek-chat\"}}}}\n"
     let h1 = try! FileHandle(forWritingTo: f2)
     try! h1.seekToEnd()
-    try! h1.write(compressZstd(usageOnly))
+    h1.write(compressZstd(usageOnly))
     try! h1.close()
     let r5 = Adapters.cachedSessionFileRows(f2)
     checkEqual(r5.rows.count, 2, "T15g unresolved usage stays pending")
     let h2 = try! FileHandle(forWritingTo: f2)
     try! h2.seekToEnd()
-    try! h2.write(compressZstd(finishOnly))
+    h2.write(compressZstd(finishOnly))
     try! h2.close()
     let r6 = Adapters.cachedSessionFileRows(f2)
     checkEqual(r6.rows.count, 3, "T15g pending usage resolved by later finish")
     checkEqual(r6.rows.last?.input ?? 0, 700, "T15g late-resolved row carries its tokens")
+
+    // T15j: a finish without either model schema must still flush pending
+    // usage with the request-header fallback, so a busy session never needs
+    // an app restart or an idle full re-parse to become visible.
+    let fallbackUsage = "{\"type\":\"assistant/chunk\",\"seq\":103,\"time\":\"2026-08-15T10:03:00+08:00\",\"data\":{\"turn\":4,\"step\":1,\"chunk\":{\"type\":\"usage\",\"usage\":{\"inputTokens\":900,\"outputTokens\":50,\"cacheReadTokens\":0,\"cacheWriteTokens\":0}}}}\n"
+    let fallbackFinish = "{\"type\":\"assistant/chunk\",\"seq\":104,\"time\":\"2026-08-15T10:03:05+08:00\",\"data\":{\"turn\":4,\"step\":1,\"chunk\":{\"type\":\"finish\"}}}\n"
+    let h3 = try! FileHandle(forWritingTo: f2)
+    try! h3.seekToEnd()
+    h3.write(compressZstd(fallbackUsage))
+    try! h3.close()
+    let r7 = Adapters.cachedSessionFileRows(f2)
+    checkEqual(r7.rows.count, 3, "T15j model-less usage remains pending until finish")
+    let h4 = try! FileHandle(forWritingTo: f2)
+    try! h4.seekToEnd()
+    h4.write(compressZstd(fallbackFinish))
+    try! h4.close()
+    let r8 = Adapters.cachedSessionFileRows(f2)
+    checkEqual(r8.rows.count, 4, "T15j fallback-model finish resolves incrementally")
+    checkEqual(r8.rows.last?.input ?? 0, 900, "T15j fallback row carries tokens")
+    checkEqual(r8.rows.last?.model ?? "", "deepseek-chat", "T15j fallback model comes from request header")
 
     // T15i: once the file stops changing, one final full re-parse verifies
     // (emitting anything still pending with the fallback model), memoizes
     // the result, and drops the streaming state; later calls are pure
     // cache hits with no decompression.
     let c2 = Adapters.dshDecompressCount
-    let r7 = Adapters.cachedSessionFileRows(f2)
-    checkEqual(r7.rows.count, 3, "T15i idle verify keeps the accumulated rows")
+    let r9 = Adapters.cachedSessionFileRows(f2)
+    checkEqual(r9.rows.count, 4, "T15i idle verify keeps the accumulated rows")
     checkEqual(Adapters.dshDecompressCount - c2, 1, "T15i idle verify re-parses once")
     checkEqual(Adapters.dshIncrementalStateCount, 1, "T15i verified file dropped its stream state")
     let c3 = Adapters.dshDecompressCount
-    let r8 = Adapters.cachedSessionFileRows(f2)
-    checkEqual(r8.rows.count, 3, "T15i memoized after verify")
+    let r10 = Adapters.cachedSessionFileRows(f2)
+    checkEqual(r10.rows.count, 4, "T15i memoized after verify")
     checkEqual(Adapters.dshDecompressCount - c3, 0, "T15i verified result memoized, no re-decompress")
 
     // T15h: truncating a session resets the incremental state and re-parses
     // the (smaller) content from scratch.
     try! compressZstd(dshSessionLines(10)).write(to: f1)
-    let r9 = Adapters.cachedSessionFileRows(f1)
-    checkEqual(r9.rows.count, 1, "T15h truncated file re-parsed")
-    checkEqual(r9.rows.first?.input ?? 0, 10, "T15h truncated content parsed")
+    let r11 = Adapters.cachedSessionFileRows(f1)
+    checkEqual(r11.rows.count, 1, "T15h truncated file re-parsed")
+    checkEqual(r11.rows.first?.input ?? 0, 10, "T15h truncated content parsed")
 
     // T15e: a deleted file's entry is pruned; disabling dsh clears all.
     try! fm.removeItem(at: s2)

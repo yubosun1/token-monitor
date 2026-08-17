@@ -636,7 +636,7 @@ enum Adapters {
         let hit: DshFileResult? = parseCache[key].flatMap { cached in
             (cached.stamp.0 == stamp.mtime && cached.stamp.1 == stamp.size) ? cached.value as? DshFileResult : nil
         }
-        if let hit {
+        if hit != nil {
             // Stable file with a memoized result: free the incremental state
             // once the file has been untouched for a grace period. The grace
             // matters: a slowly-appending session (one line per tick) is
@@ -737,8 +737,10 @@ enum Adapters {
 
     /// Feed the appended tail through the retained streaming decoder and
     /// parse only the new lines. Usage events whose (turn, step) model is
-    /// not yet known are held as pending until a finish chunk resolves them
-    /// (or the final idle verify emits them with the fallback model).
+    /// not yet known are held as pending until a finish chunk resolves them.
+    /// When a finish payload has no model, the request-header fallback still
+    /// resolves the usage immediately, rather than waiting for an idle full
+    /// re-parse of a continuously active DSH session.
     private static func feedDshDelta(_ file: URL, state: inout DshIncrementalState, stamp: (mtime: Date, size: Int)) -> DshFileResult {
         guard let handle = try? FileHandle(forReadingFrom: file) else {
             return DshFileResult(rows: state.rows, events: state.totalEvents)
@@ -808,12 +810,28 @@ enum Adapters {
                     state.pendingEvents.append(PendingDshEvent(turn: turn, step: step, time: time, usage: usage))
                     state.totalEvents += 1
                 } else if chunkType == "finish" {
-                    if let model = (chunk["replayState"] as? JSON)?["model"] as? String {
-                        resolvePendingDshEvents(&state, turn: turn, step: step, model: model)
-                    }
+                    let model = dshFinishModel(from: chunk) ?? state.fallbackModel
+                    resolvePendingDshEvents(&state, turn: turn, step: step, model: model)
                 }
             }
         }
+    }
+
+    /// DSH has emitted both a legacy `replayState.model` field and the
+    /// current OpenCode-shaped `replayState.response.model` field. Keep the
+    /// extraction shared by full and incremental parsing so live sessions and
+    /// restart-time scans attribute the same model.
+    private static func dshFinishModel(from chunk: JSON) -> String? {
+        guard let replayState = chunk["replayState"] as? JSON else { return nil }
+        let candidates = [
+            replayState["model"] as? String,
+            (replayState["response"] as? JSON)?["model"] as? String
+        ]
+        for candidate in candidates {
+            let model = candidate?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !model.isEmpty { return model }
+        }
+        return nil
     }
 
     /// Emit rows for pending usage events whose (turn, step) model just
@@ -945,7 +963,7 @@ enum Adapters {
                     let event: JSON = ["usage": usage, "turn": turn, "step": step, "time": time]
                     usageEvents.append(event)
                 } else if chunkType == "finish" {
-                    if let model = (chunk["replayState"] as? JSON)?["model"] as? String {
+                    if let model = dshFinishModel(from: chunk) {
                         stepModels["\(turn):\(step)"] = model
                     }
                 }

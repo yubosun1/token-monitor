@@ -119,11 +119,10 @@ enum SourceScanner {
     private static func signature(of stamps: [FileStamp]) -> String {
         var digest = SHA256()
         for stamp in stamps {
-            var line = stamp.path + "\u{0}" + String(stamp.size) + "\u{0}"
+            let line = stamp.path + "\u{0}" + String(stamp.size) + "\u{0}"
                 + String(format: "%.3f", stamp.mtimeMs) + "\n"
             digest.update(data: Data(line.utf8))
         }
         return digest.finalize().map { String(format: "%02x", $0) }.joined()
     }
 }
-
