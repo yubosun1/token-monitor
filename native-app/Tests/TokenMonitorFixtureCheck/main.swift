@@ -492,6 +492,7 @@ final class FakeCollectorWorld {
     var pricingLookupPolicies: [String: PricingPolicy] = [:]
     var tokscalePeriodSpawns = 0
     var tokscaleGraphSpawns = 0
+    var tokscalePricingRefreshes = 0
     var tokscaleFingerprintChecks = 0
     var adapterFingerprintChecks: [String: Int] = [:]
     var customPricingSyncCalls = 0
@@ -528,6 +529,10 @@ final class FakeCollectorWorld {
             tokscaleFingerprint: { _ in
                 self.tokscaleFingerprintChecks += 1
                 return SourceScanner.Fingerprint(files: [], signature: self.tokscaleFingerprint)
+            },
+            tokscalePricingRefresh: { _ in
+                self.tokscalePricingRefreshes += 1
+                return true
             },
             tokscalePeriods: { _, _, _ in
                 self.tokscalePeriodSpawns += 1
@@ -682,8 +687,8 @@ func runCollectorStateTests() {
         check(!promaInHistory, "T4 proma gone from history")
     }
 
-    // T5: startup cheap pricing miss is retried and completed by the full
-    // tick, costs update without a raw re-read.
+    // T5: routine ticks only read cached prices; the explicit manual refresh
+    // is the one path allowed to fetch a missing price.
     do {
         let world = FakeCollectorWorld(
             now: shanghaiDate(2026, 8, 15, 12, 0),
@@ -701,10 +706,10 @@ func runCollectorStateTests() {
         checkEqual(world.pricingLookupPolicies["model-a"], .cacheOnly, "T5 cheap tick uses cacheOnly policy")
 
         world.pricingByModel["model-a"] = fakePricing(0.001, 0.002)
-        collector.requestRefresh(.full, reason: .startup)
+        collector.refreshNow()
         world.waitIdle(collector, queue)
-        checkEqual(world.pricingLookups["model-a"] ?? 0, 2, "T5 full tick retries the lookup")
-        checkEqual(world.pricingLookupPolicies["model-a"], .resolve, "T5 full tick uses resolve policy")
+        checkEqual(world.pricingLookups["model-a"] ?? 0, 2, "T5 manual refresh retries the lookup")
+        checkEqual(world.pricingLookupPolicies["model-a"], .forceRefresh, "T5 manual refresh forces pricing")
         // 100 input * 0.001 + 50 output * 0.002 = 0.1 + 0.1 = 0.2
         checkClose(UsageCore.doubleValue(world.period(collector, "today")["costUsd"]), 0.2, "T5 cost resolved after full tick")
         checkEqual(world.rawReads["proma"] ?? 0, 1, "T5 no raw re-read for pricing")
@@ -1039,11 +1044,9 @@ func runCollectorStateTests() {
         checkEqual(world.tickKinds.last, .fullForced, "T13b strongest request wins")
     }
 
-    // T12: pricing honors the 6h TTL in a long-running app. Within the TTL
-    // nothing re-resolves; past the TTL exactly one resolve runs per model
-    // and tick (shared across clients), costs re-derive from cached rows;
-    // an expired lookup failure keeps the last-known-good price with a
-    // bounded retry floor instead of zeroing costs.
+    // T12: routine collection keeps using a local last-known-good price;
+    // every explicit manual refresh forces one lookup per shared model and a
+    // failed lookup never zeroes the already calculated costs.
     do {
         let world = FakeCollectorWorld(
             now: shanghaiDate(2026, 8, 15, 12, 0),
@@ -1059,46 +1062,47 @@ func runCollectorStateTests() {
         let (collector, queue) = world.makeCollector()
         collector.requestRefresh(.full, reason: .startup)
         world.waitIdle(collector, queue)
-        checkEqual(world.pricingLookups["model-a"] ?? 0, 1, "T12 one lookup per tick for a model shared by clients")
+        checkEqual(world.pricingLookups["model-a"] ?? 0, 1, "T12 one cached lookup for a model shared by clients")
         checkClose(UsageCore.doubleValue(world.period(collector, "today")["costUsd"]), 0.6, "T12 initial costs")
         checkEqual(world.rawReads["proma"] ?? 0, 1, "T12 one raw read at startup")
 
-        // Within the TTL another full adds no resolve lookup.
+        // A manual refresh is an explicit pricing boundary even within the
+        // normal cache TTL.
         world.now = world.now.addingTimeInterval(3600)
-        collector.requestRefresh(.full, reason: .manual)
+        collector.refreshNow()
         world.waitIdle(collector, queue)
-        checkEqual(world.pricingLookups["model-a"] ?? 0, 1, "T12 cached pricing within TTL does not resolve")
+        checkEqual(world.pricingLookups["model-a"] ?? 0, 2, "T12 manual refresh resolves within TTL")
+        checkEqual(world.pricingLookupPolicies["model-a"], .forceRefresh, "T12 manual refresh uses forceRefresh policy")
 
-        // Past 6h: the runner returns an updated price. Exactly one resolve
-        // runs; costs re-derive from cached rows without a raw re-read.
+        // A later manual refresh returns an updated price and re-derives from
+        // cached rows without a raw re-read.
         world.now = world.now.addingTimeInterval(6 * 3600 + 60)
         world.pricingByModel["model-a"] = fakePricing(0.002, 0.004)
-        collector.requestRefresh(.full, reason: .manual)
+        collector.refreshNow()
         world.waitIdle(collector, queue)
-        checkEqual(world.pricingLookups["model-a"] ?? 0, 2, "T12 expired pricing resolved once")
-        checkEqual(world.pricingLookupPolicies["model-a"], .resolve, "T12 expired resolve uses resolve policy")
-        checkEqual(world.rawReads["proma"] ?? 0, 1, "T12 expiry re-derives from cached rows")
-        checkClose(UsageCore.doubleValue(world.period(collector, "today")["costUsd"]), 1.2, "T12 updated costs after expiry")
+        checkEqual(world.pricingLookups["model-a"] ?? 0, 3, "T12 updated pricing resolved once")
+        checkEqual(world.rawReads["proma"] ?? 0, 1, "T12 manual refresh re-derives from cached rows")
+        checkClose(UsageCore.doubleValue(world.period(collector, "today")["costUsd"]), 1.2, "T12 updated costs after manual refresh")
 
-        // Expired lookup failure: last-known-good pricing survives with a
-        // bounded retry floor; costs are never zeroed.
+        // A failed manual lookup keeps the last-known-good price. The next
+        // explicit click is allowed to retry immediately.
         world.pricingByModel["model-a"] = nil
         world.now = world.now.addingTimeInterval(7 * 3600)
-        collector.requestRefresh(.full, reason: .manual)
+        collector.refreshNow()
         world.waitIdle(collector, queue)
-        checkEqual(world.pricingLookups["model-a"] ?? 0, 3, "T12 expired resolve attempted once on failure")
+        checkEqual(world.pricingLookups["model-a"] ?? 0, 4, "T12 manual refresh attempted once on failure")
         // The clock has crossed midnight by now, so the allTime window is
         // the stable view: last-known-good costs must survive the failure.
         checkClose(UsageCore.doubleValue(world.period(collector, "allTime")["costUsd"]), 1.2, "T12 failed expiry keeps last-known-good costs")
-        collector.requestRefresh(.full, reason: .manual)
+        collector.refreshNow()
         world.waitIdle(collector, queue)
-        checkEqual(world.pricingLookups["model-a"] ?? 0, 3, "T12 expiry failure respects the retry floor")
+        checkEqual(world.pricingLookups["model-a"] ?? 0, 5, "T12 second manual refresh retries immediately")
 
         world.pricingByModel["model-a"] = fakePricing(0.003, 0.006)
         world.now = world.now.addingTimeInterval(301)
-        collector.requestRefresh(.full, reason: .manual)
+        collector.refreshNow()
         world.waitIdle(collector, queue)
-        checkEqual(world.pricingLookups["model-a"] ?? 0, 4, "T12 expiry retried after the floor")
+        checkEqual(world.pricingLookups["model-a"] ?? 0, 6, "T12 later manual refresh recovers")
         checkClose(UsageCore.doubleValue(world.period(collector, "allTime")["costUsd"]), 1.8, "T12 recovered costs")
     }
 
@@ -1180,6 +1184,32 @@ func runCollectorStateTests() {
         world.waitIdle(collector, queue)
         checkEqual(world.rawReads["proma"] ?? 0, 2, "T15 re-read after cooldown elapses")
         checkEqual(UsageCore.intValue(world.period(collector, "today")["totalTokens"]), 300, "T15 fresh data after re-read")
+    }
+
+    // T16: normal tokscale collection never refreshes remote pricing; the
+    // explicit refresh does it once and forces a cache-only token rescan so
+    // updated cached costs are visible immediately.
+    do {
+        let world = FakeCollectorWorld(
+            now: shanghaiDate(2026, 8, 15, 12, 0),
+            settings: stateSettings(clients: "claude")
+        )
+        world.tokscalePeriods = [
+            "today": periodWithTokens(100),
+            "month": periodWithTokens(100),
+            "allTime": periodWithTokens(100)
+        ]
+        let (collector, queue) = world.makeCollector()
+        collector.requestRefresh(.full, reason: .startup)
+        world.waitIdle(collector, queue)
+        checkEqual(world.tokscalePricingRefreshes, 0, "T16 startup never refreshes remote pricing")
+        checkEqual(world.tokscalePeriodSpawns, 1, "T16 startup scans tokscale once")
+
+        collector.refreshNow()
+        world.waitIdle(collector, queue)
+        checkEqual(world.tokscalePricingRefreshes, 1, "T16 manual refresh updates tokscale pricing once")
+        checkEqual(world.tokscalePeriodSpawns, 2, "T16 manual refresh forces a cache-only period scan")
+        checkEqual(world.tokscaleGraphSpawns, 2, "T16 manual refresh forces a cache-only graph scan")
     }
 }
 

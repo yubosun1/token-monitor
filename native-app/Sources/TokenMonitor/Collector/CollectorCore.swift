@@ -22,6 +22,8 @@ enum RefreshKind: Int {
 struct RefreshRequest {
     var kind: RefreshKind
     var reason: RefreshReason
+    /// Only an explicit user refresh may contact pricing providers.
+    var refreshPricing: Bool
 }
 
 /// Injectable seams for the collector (review-round Phase 0). Production
@@ -35,6 +37,7 @@ struct CollectorEnvironment {
     var adapterRows: (String) -> [UsageCore.UsageRow]
     var pricingLookup: (String, PricingPolicy) -> TokscalePricing?
     var tokscaleFingerprint: ([String]) -> SourceScanner.Fingerprint
+    var tokscalePricingRefresh: ([String]) -> Bool
     var tokscalePeriods: ([String], [String: Any], Date) -> [String: [String: Any]]?
     var tokscaleGraph: ([String]) -> (days: [HistoryCore.Day], activeTimeMs: Double?)?
     var push: (String, Any) -> Void
@@ -62,6 +65,9 @@ struct CollectorEnvironment {
             },
             tokscaleFingerprint: { clients in
                 SourceScanner.fingerprint(client: "tokscale", roots: clients.flatMap(SourceScanner.tokscaleRoots))
+            },
+            tokscalePricingRefresh: { clients in
+                TokscaleRunner.shared.refreshUsagePricing(clients: clients)
             },
             tokscalePeriods: { clients, settings, now in
                 Collector.scanTokscalePeriods(clients: clients, settings: settings, now: now)
@@ -332,8 +338,10 @@ final class Collector {
         }
     }
 
-    func refreshNow() {
-        requestRefresh(.full, reason: .manual)
+    /// The user-facing refresh action. Routine collection remains local-only;
+    /// this is the sole path that may refresh prices over the network.
+    func refreshNow(refreshPricing: Bool = true) {
+        requestRefresh(.full, reason: .manual, refreshPricing: refreshPricing)
     }
 
     // MARK: - Coalescing pump (review round Phase 4)
@@ -356,18 +364,19 @@ final class Collector {
     ///    request otherwise, so bursts collapse to one necessary refresh;
     ///    strong requests (settings-change / manual full, fullForced) are
     ///    never dropped.
-    func requestRefresh(_ kind: RefreshKind, reason: RefreshReason) {
+    func requestRefresh(_ kind: RefreshKind, reason: RefreshReason, refreshPricing: Bool = false) {
         coordLock.lock()
         var spawnWorker = false
+        let request = RefreshRequest(kind: kind, reason: reason, refreshPricing: refreshPricing)
         if workerRunning, let running = runningKind,
            (running == .full || running == .fullForced), kind == .cheap {
             // Covered by the running source check; keep at most one cheap
             // follow-up when a purge invalidation still needs a tick.
             if pendingQueue.isEmpty && !pendingInvalidations.isEmpty {
-                pendingQueue.append(RefreshRequest(kind: kind, reason: reason))
+                pendingQueue.append(request)
             }
         } else if pendingQueue.isEmpty {
-            pendingQueue.append(RefreshRequest(kind: kind, reason: reason))
+            pendingQueue.append(request)
         } else {
             let firstStartupCheap = pendingQueue.count == 1
                 && pendingQueue[0].kind == .cheap
@@ -377,14 +386,20 @@ final class Collector {
                 // Queue behind the first startup cheap unless something at
                 // least as strong is already queued behind it.
                 if !pendingQueue.dropFirst().contains(where: { $0.kind.rawValue >= kind.rawValue }) {
-                    pendingQueue.append(RefreshRequest(kind: kind, reason: reason))
+                    pendingQueue.append(request)
+                } else if refreshPricing,
+                          let index = pendingQueue.indices.first(where: { pendingQueue[$0].kind.rawValue >= kind.rawValue }) {
+                    pendingQueue[index].refreshPricing = true
                 }
-            } else if pendingQueue.contains(where: { $0.kind.rawValue >= kind.rawValue }) {
+            } else if let index = pendingQueue.indices.first(where: { pendingQueue[$0].kind.rawValue >= kind.rawValue }) {
                 // Covered by an existing queued request: drop.
+                if refreshPricing {
+                    pendingQueue[index].refreshPricing = true
+                }
             } else if let index = pendingQueue.firstIndex(where: { $0.kind.rawValue < kind.rawValue }) {
-                pendingQueue[index] = RefreshRequest(kind: kind, reason: reason)
+                pendingQueue[index] = request
             } else {
-                pendingQueue.append(RefreshRequest(kind: kind, reason: reason))
+                pendingQueue.append(request)
             }
         }
         if !workerRunning {
@@ -430,7 +445,7 @@ final class Collector {
                 pricingGeneration += 1
                 PerfDiag.log("pricing purged (customModelPricing change), generation=\(pricingGeneration)")
             }
-            tick(kind: pending.kind, reason: pending.reason)
+            tick(kind: pending.kind, reason: pending.reason, refreshPricing: pending.refreshPricing)
         }
     }
 
@@ -448,7 +463,7 @@ final class Collector {
 
     // MARK: - Ticks
 
-    private func tick(kind: RefreshKind, reason: RefreshReason) {
+    private func tick(kind: RefreshKind, reason: RefreshReason, refreshPricing: Bool) {
         environment.tickObserver(kind, reason)
         let id = nextRefreshId()
         PerfDiag.cpuMark(String(format: "tick-begin id=%d", id))
@@ -496,6 +511,7 @@ final class Collector {
         let allTimeSince = allTimeSinceMs(settings)
 
         let forced = kind == .fullForced
+            || refreshPricing
             || ProcessInfo.processInfo.environment["TOKEN_MONITOR_FORCE_RESCAN"] != nil
         // Cheap ticks escalate to a full source check once
         // collectionIntervalMs has elapsed since the last completed check
@@ -507,13 +523,16 @@ final class Collector {
         case .cheap:
             fullCheck = statsCache != nil && now.timeIntervalSince(lastFullCheckAt) >= fullInterval()
         }
-        // Only full ticks may spawn pricing subprocesses; cheap ticks
-        // resolve from caches (review round Phase 2).
-        let pricingPolicy: PricingPolicy = fullCheck ? .resolve : .cacheOnly
+        // Pricing is intentionally local-only during routine collection.
+        // Only a user-driven refresh is allowed to contact a pricing source.
+        let pricingPolicy: PricingPolicy = refreshPricing ? .forceRefresh : .cacheOnly
 
         // Adapter clients: raw cache by fingerprint; derived cache by the
         // full derived key (fingerprint + day/month/allTimeSince/pricing).
         var adapterContributions: [String: DerivedSnapshot] = [:]
+        // A model can appear in more than one adapter. A manual refresh must
+        // still perform at most one network lookup for that shared model.
+        var pricingLookedUpThisTick = Set<String>()
         for client in adapterClientIds where clients.contains(client) {
             let span = PerfDiag.span("source-" + client)
             let fp = environment.adapterFingerprint(client)
@@ -540,7 +559,12 @@ final class Collector {
                 lastAdapterReadAt[client] = now
                 PerfDiag.log(String(format: "source %@: changed (%d files), re-read", client, fp.files.count))
             }
-            resolvePricing(models: raw.models, policy: pricingPolicy, now: now)
+            resolvePricing(
+                models: raw.models,
+                policy: pricingPolicy,
+                now: now,
+                lookedUpThisTick: &pricingLookedUpThisTick
+            )
             let pricingMap = pricingMapForDerivation()
             let key = DerivedKey(
                 client: client,
@@ -577,6 +601,13 @@ final class Collector {
             if tokscaleClients.isEmpty {
                 tokscaleSnapshot = nil
             } else {
+                if refreshPricing {
+                    let pricingSpan = PerfDiag.span("tokscale-pricing-refresh")
+                    let refreshed = environment.tokscalePricingRefresh(tokscaleClients)
+                    let pricingStatus = refreshed ? "completed" : "failed"
+                    PerfDiag.log("manual tokscale pricing refresh \(pricingStatus)")
+                    pricingSpan.end()
+                }
                 let fp = environment.tokscaleFingerprint(tokscaleClients)
                 let sortedClients = tokscaleClients.sorted()
                 var contextChanged = true
@@ -832,24 +863,32 @@ final class Collector {
 
     // MARK: - Pricing resolution (review round Phase 2)
 
-    /// Pricing resolution per tick (round-4 Phase 3.1):
-    ///  - cheap ticks keep last-known-good pricing and never spawn;
-    ///  - full ticks re-resolve a model once its 6h TTL expired, but only
-    ///    after that model's retry floor;
-    ///  - an expired resolve that fails keeps the previous price (costs are
-    ///    never zeroed) and sets the bounded 300s retry floor;
-    ///  - one lookup per model per tick even when several clients share it.
+    /// Pricing resolution per tick:
+    ///  - routine ticks use the last-known-good local value and never spawn;
+    ///  - a user refresh always attempts one lookup per distinct model;
+    ///  - any failed lookup keeps the previous price, never zeroing costs.
     /// Resolved pricing feeds the derived signature, so affected clients
     /// re-derive from cached rows on the same tick without a raw re-read.
-    private func resolvePricing(models: [String], policy: PricingPolicy, now: Date) {
-        var lookedUpThisTick = Set<String>()
+    private func resolvePricing(
+        models: [String],
+        policy: PricingPolicy,
+        now: Date,
+        lookedUpThisTick: inout Set<String>
+    ) {
         for model in models {
             guard !lookedUpThisTick.contains(model) else { continue }
             let cached = cachedPricing[model]
             if let cached {
-                let expired = now.timeIntervalSince(cached.fetchedAt) >= pricingTTL
-                if policy == .cacheOnly || !expired { continue }
-                if let retry = pricingRetryAfter[model], now < retry { continue }
+                switch policy {
+                case .cacheOnly:
+                    continue
+                case .resolve:
+                    let expired = now.timeIntervalSince(cached.fetchedAt) >= pricingTTL
+                    if !expired { continue }
+                    if let retry = pricingRetryAfter[model], now < retry { continue }
+                case .forceRefresh:
+                    break
+                }
             } else if policy == .resolve, let retry = pricingRetryAfter[model], now < retry {
                 continue
             }

@@ -149,6 +149,13 @@ final class BridgeCore {
             return rendererSettingsSnapshot()
 
         case "stats:get":
+            let options = args.first as? [String: Any] ?? [:]
+            // The dashboard's explicit refresh is the user-approved boundary
+            // for a bounded online price update. Ordinary stats reads remain
+            // entirely local.
+            if options["refreshPricing"] as? Bool == true {
+                Collector.shared.refreshNow()
+            }
             return Collector.shared.latestStats() ?? emptyStats()
 
         case "app:getInfo":
@@ -218,7 +225,7 @@ final class BridgeCore {
 
         case "usage:rescanClient":
             // Full rescan: the collector re-reads everything on its next tick.
-            Collector.shared.refreshNow()
+            Collector.shared.refreshNow(refreshPricing: false)
             return ["ok": true]
 
         case "clipboard:write":

@@ -4,10 +4,13 @@ import Foundation
 /// policy explicitly per call instead of toggling a global mutable switch,
 /// so concurrent callers can never affect each other.
 enum PricingPolicy {
-    /// Resolve from the in-memory/disk caches only; never spawn.
+    /// Resolve from the in-memory/disk caches only; never spawn. A stale
+    /// last-known-good value is still preferable to dropping a cost to zero.
     case cacheOnly
     /// May spawn a pricing subprocess on a cache miss.
     case resolve
+    /// Explicit user action: refresh even a still-fresh cached price.
+    case forceRefresh
 }
 
 /// Spawns the bundled tokscale CLI (the same Rust binary the Electron app
@@ -93,14 +96,20 @@ final class TokscaleRunner {
     }
 
     @discardableResult
-    func run(_ args: [String], timeout: TimeInterval = 60) throws -> Result {
+    func run(_ args: [String], timeout: TimeInterval = 60, pricingCacheOnly: Bool = false) throws -> Result {
         guard let binary = binaryURL() else {
             throw CollectorError.tokscaleMissing
         }
         let process = Process()
         process.executableURL = binary
         process.arguments = args
-        process.environment = ProcessInfo.processInfo.environment
+        var processEnvironment = ProcessInfo.processInfo.environment
+        if pricingCacheOnly {
+            // A usage scan must never wait on the remote pricing catalogs.
+            // The scanner still calculates costs from tokscale's local cache.
+            processEnvironment["TOKSCALE_PRICING_CACHE_ONLY"] = "1"
+        }
+        process.environment = processEnvironment
 
         let outPipe = Pipe()
         let errPipe = Pipe()
@@ -151,7 +160,7 @@ final class TokscaleRunner {
         case "allTime": args.append(contentsOf: ["--since", allTimeSince ?? "2024-01-01"])
         default: break
         }
-        let result = try run(args)
+        let result = try run(args, pricingCacheOnly: true)
         guard result.exitCode == 0 else {
             throw CollectorError.tokscaleFailed("exit \(result.exitCode): \(result.stderr)")
         }
@@ -165,7 +174,7 @@ final class TokscaleRunner {
 
     func graph(clients: [String]) throws -> TokscaleGraph {
         guard !clients.isEmpty else { return TokscaleGraph(meta: nil, summary: nil, timeMetrics: nil, contributions: []) }
-        let result = try run(["graph", "--client", clients.joined(separator: ","), "--no-spinner"])
+        let result = try run(["graph", "--client", clients.joined(separator: ","), "--no-spinner"], pricingCacheOnly: true)
         guard result.exitCode == 0 else {
             throw CollectorError.tokscaleFailed("graph exit \(result.exitCode)")
         }
@@ -175,21 +184,29 @@ final class TokscaleRunner {
         return try JSONDecoder().decode(TokscaleGraph.self, from: Data(String(result.stdout[start...]).utf8))
     }
 
-    /// Cached pricing lookup: in-memory, then persistent disk cache (same
-    /// 6h TTL as the JS side used), then one subprocess fetch. The policy
-    /// decides whether a cache miss may spawn; cacheOnly returns nil on a
-    /// miss and never spawns.
-    func pricing(for modelId: String, policy: PricingPolicy = .resolve) -> TokscalePricing? {
+    /// Cached pricing lookup. Routine collection reads the last known price
+    /// without network I/O; an explicit refresh can bypass its TTL.
+    func pricing(for modelId: String, policy: PricingPolicy = .cacheOnly) -> TokscalePricing? {
         if pricingCache.isEmpty { loadDiskPricingCache() }
         let key = modelId.trimmingCharacters(in: .whitespaces).lowercased()
         guard !key.isEmpty else { return nil }
         lock.lock()
-        if let cached = pricingCache[key], Date().timeIntervalSince(cached.fetchedAt) < pricingCacheTTL {
-            lock.unlock()
-            return cached.pricing
-        }
+        let cached = pricingCache[key]
         lock.unlock()
-        if policy == .cacheOnly { return nil }
+
+        if let cached {
+            switch policy {
+            case .cacheOnly:
+                return cached.pricing
+            case .resolve:
+                if Date().timeIntervalSince(cached.fetchedAt) < pricingCacheTTL {
+                    return cached.pricing
+                }
+            case .forceRefresh:
+                break
+            }
+        }
+        if case .cacheOnly = policy { return nil }
         guard let fetched = fetchPricing(modelId) else { return nil }
         lock.lock()
         pricingCache[key] = (fetched, Date())
@@ -203,6 +220,29 @@ final class TokscaleRunner {
               result.exitCode == 0,
               let start = result.stdout.firstIndex(of: "{") else { return nil }
         return try? JSONDecoder().decode(TokscalePricing.self, from: Data(String(result.stdout[start...]).utf8))
+    }
+
+    /// One deliberately bounded online request, made only from a user-driven
+    /// refresh. It lets tokscale update its own catalog cache once; all normal
+    /// period and graph scans then use that cache without touching the network.
+    @discardableResult
+    func refreshUsagePricing(clients: [String]) -> Bool {
+        guard !clients.isEmpty else { return true }
+        let args = [
+            "--json", "--client", clients.joined(separator: ","),
+            "--group-by", "client,model", "--today", "--no-spinner"
+        ]
+        do {
+            let result = try run(args, timeout: 15)
+            guard result.exitCode == 0 else {
+                NSLog("[pricing] manual tokscale refresh failed: exit %d: %@", result.exitCode, result.stderr)
+                return false
+            }
+            return true
+        } catch {
+            NSLog("[pricing] manual tokscale refresh failed: %@", String(describing: error))
+            return false
+        }
     }
 
     /// Terminate every in-flight tokscale subprocess (app termination path).

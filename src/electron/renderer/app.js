@@ -8773,7 +8773,7 @@ els.refreshButton.addEventListener('click', () => {
   // used all over the settings/account flows, and folding those into it would re-run
   // the expensive `tokscale graph`, plus the Cursor and Antigravity sync subprocesses,
   // on every one of them.
-  else refreshStats({ force: true, forceHistory: true, forceSelfSync: true, feedback: true });
+  else refreshStats({ force: true, forceHistory: true, forceSelfSync: true, refreshPricing: true, feedback: true });
 });
 els.closeButton.addEventListener('click', () => window.tokenMonitor.close());
 els.trendsPanel.addEventListener('click', (event) => {
