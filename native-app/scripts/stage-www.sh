@@ -27,12 +27,13 @@ grep -ho 'src="../../shared/[^"]*"' "$WWW/index.html" "$WWW/dashboard.html" \
 # Native build icon allowlist. Keep this aligned with KNOWN_CLIENTS,
 # LIMIT_PROVIDERS and the two tray variants in renderer/app.js.
 for icon in \
-  claude codex opencode workbuddy proma hanako dsh deepseek \
+  claude codex opencode workbuddy proma hanako hanako-mask dsh deepseek \
   cursor gemini xai meta mistral qwen kimi zai cohere xiaomi minimax doubao hunyuan \
   tray-claude tray-codex tray-token-monitor; do
   cp "$ROOT/assets/icons/$icon.svg" "$WWW/icons/$icon.svg" 2>/dev/null \
     || cp "$ROOT/assets/icons/$icon.png" "$WWW/icons/$icon.png"
 done
+cp "$ROOT/assets/icons/hanako.png" "$WWW/icons/hanako.png"
 cp "$ROOT/assets/icon.png" "$WWW/icon.png"
 
 # Rewrite relative paths for the flattened layout — HTML and every staged

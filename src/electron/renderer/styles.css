@@ -2995,7 +2995,7 @@ html.is-windows .settings-panel select option {
 .row-icon-codex      { -webkit-mask-image: url(../../../assets/icons/codex.svg);         mask-image: url(../../../assets/icons/codex.svg); }
 .row-icon-workbuddy  { -webkit-mask-image: url(../../../assets/icons/workbuddy.svg);     mask-image: url(../../../assets/icons/workbuddy.svg); }
 .row-icon-proma      { -webkit-mask-image: url(../../../assets/icons/proma.svg);         mask-image: url(../../../assets/icons/proma.svg); }
-.row-icon-hanako     { -webkit-mask-image: url(../../../assets/icons/hanako.svg);        mask-image: url(../../../assets/icons/hanako.svg); }
+.row-icon-hanako     { -webkit-mask-image: url(../../../assets/icons/hanako-mask.svg);   mask-image: url(../../../assets/icons/hanako-mask.svg); }
 .row-icon-dsh        { -webkit-mask-image: url(../../../assets/icons/dsh.svg);           mask-image: url(../../../assets/icons/dsh.svg); }
 .row-icon-opencode   { -webkit-mask-image: url(../../../assets/icons/opencode.svg);      mask-image: url(../../../assets/icons/opencode.svg); }
 .row-icon-deepseek   { -webkit-mask-image: url(../../../assets/icons/deepseek.svg);      mask-image: url(../../../assets/icons/deepseek.svg); }
