@@ -473,6 +473,8 @@ final class FakeCollectorWorld {
     var tokscaleFingerprint = "fp-tok-1"
     var tokscalePeriods: [String: [String: Any]]?
     var tokscaleGraph: (days: [HistoryCore.Day], activeTimeMs: Double?)?
+    var tokscalePeriodClients: [[String]] = []
+    var tokscaleGraphClients: [[String]] = []
     var pushes: [[String: Any]] = []
     var statsPushes: Int {
         pushes.filter { ($0["event"] as? String) == "stats:push" }.count
@@ -534,12 +536,14 @@ final class FakeCollectorWorld {
                 self.tokscalePricingRefreshes += 1
                 return true
             },
-            tokscalePeriods: { _, _, _ in
+            tokscalePeriods: { clients, _, _ in
                 self.tokscalePeriodSpawns += 1
+                self.tokscalePeriodClients.append(clients)
                 return self.tokscalePeriods
             },
-            tokscaleGraph: { _ in
+            tokscaleGraph: { clients in
                 self.tokscaleGraphSpawns += 1
+                self.tokscaleGraphClients.append(clients)
                 return self.tokscaleGraph
             },
             push: { event, payload in
@@ -577,6 +581,113 @@ func stateSettings(clients: String, allTimeSince: String = "2024-01-01", collect
         "customModelPricing": [Any](),
         "deviceId": "test-device"
     ]
+}
+
+// MARK: - Kimi limits and collection tests
+
+func runKimiTests() {
+    let membership: [String: Any] = [
+        "ratelimitCode5h": [
+            "ratio": 0.25,
+            "enabled": true,
+            "resetTime": "2026-07-19T05:00:00Z"
+        ],
+        "ratelimitCode7d": [
+            "ratio": 0.4,
+            "enabled": true,
+            "resetTime": "2026-07-24T00:00:00Z"
+        ],
+        "subscriptionBalance": [
+            "feature": "FEATURE_OMNI",
+            "type": "SUBSCRIPTION",
+            "amountUsedRatio": 0.1612,
+            "kimiCodeUsedRatio": 0.05,
+            "expireTime": "2026-08-01T00:00:00Z"
+        ]
+    ]
+    let membershipWindows = KimiLimits.parseMembershipStats(membership)
+    checkEqual(membershipWindows.map(\.kind), ["session", "weekly", "billing"], "Kimi membership returns all quota windows")
+    checkClose(membershipWindows[0].usedPercent, 25, "Kimi membership 5-hour ratio")
+    checkEqual(membershipWindows[0].windowMinutes, 300, "Kimi membership 5-hour duration")
+    checkClose(membershipWindows[1].usedPercent, 40, "Kimi membership weekly ratio")
+    checkEqual(membershipWindows[1].windowMinutes, 10_080, "Kimi membership weekly duration")
+    checkClose(membershipWindows[2].usedPercent, 16.12, "Kimi membership monthly ratio")
+    checkEqual(membershipWindows[2].detail, "Kimi 11.12% | Code 5%", "Kimi membership monthly breakdown")
+
+    let codeUsage: [String: Any] = [
+        "usage": [
+            "limit": "2048",
+            "used": "214",
+            "remaining": "1834",
+            "resetTime": "2026-07-14T00:00:00Z"
+        ],
+        "limits": [
+            [
+                "window": ["duration": 300, "timeUnit": "TIME_UNIT_MINUTE"],
+                "detail": [
+                    "limit": "200",
+                    "used": "139",
+                    "remaining": "61",
+                    "resetTime": "2026-07-08T05:00:00Z"
+                ]
+            ]
+        ]
+    ]
+    let codeWindows = KimiLimits.parseUsage(codeUsage)
+    let session = codeWindows.first(where: { $0.kind == "session" })
+    let weekly = codeWindows.first(where: { $0.kind == "weekly" })
+    checkEqual(codeWindows.count, 2, "Kimi Code returns session and weekly windows")
+    checkClose(session?.usedPercent ?? -1, 69.5, "Kimi Code session percentage")
+    checkEqual(session?.windowMinutes, 300, "Kimi Code session duration")
+    checkClose(weekly?.usedPercent ?? -1, (214.0 / 2048.0) * 100, "Kimi Code weekly percentage")
+    checkEqual(weekly?.windowMinutes, 10_080, "Kimi Code weekly duration")
+
+    checkEqual(
+        KimiLimits.normalizedWebAccessToken("Cookie: other=x; kimi-auth=jwt.token.value; theme=dark"),
+        "jwt.token.value",
+        "Kimi cookie input keeps only kimi-auth"
+    )
+
+    // Kimi Code's `kimi login` persists an OAuth access token locally. It is
+    // accepted by the Code usage API, while expired tokens must not make the
+    // automatic fallback look configured forever.
+    let credentialRoot = FileManager.default.temporaryDirectory.appendingPathComponent("tm-kimi-credential-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: credentialRoot) }
+    let credentialURL = credentialRoot.appendingPathComponent("kimi-code.json")
+    try! FileManager.default.createDirectory(at: credentialRoot, withIntermediateDirectories: true)
+    func jwt(expiration: Int) -> String {
+        let payload = try! JSONSerialization.data(withJSONObject: ["exp": expiration])
+            .base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        return "header.\(payload).signature"
+    }
+    let credentialNow = Date(timeIntervalSince1970: 1_000)
+    let activeToken = jwt(expiration: 2_000)
+    let expiredToken = jwt(expiration: 999)
+    try! JSONSerialization.data(withJSONObject: ["access_token": activeToken]).write(to: credentialURL)
+    checkEqual(CredentialStore.kimiCodeAccessToken(at: credentialURL, now: credentialNow), activeToken, "Kimi Code OAuth access token is discovered")
+    check(!KimiLimits.isJWTExpired(activeToken, at: credentialNow), "Kimi Code OAuth token remains usable before expiry")
+    try! JSONSerialization.data(withJSONObject: ["access_token": expiredToken]).write(to: credentialURL)
+    checkEqual(CredentialStore.kimiCodeAccessToken(at: credentialURL, now: credentialNow), "", "expired Kimi Code OAuth token is ignored")
+    check(KimiLimits.isJWTExpired(expiredToken, at: credentialNow), "expired Kimi browser token is rejected before probing")
+
+    let kimiRoots = SourceScanner.tokscaleRoots("kimi")
+    check(kimiRoots.contains(NSHomeDirectory() + "/.kimi/sessions"), "Kimi web sessions are fingerprinted")
+    check(kimiRoots.contains(SourceScanner.kimiCodeHome() + "/sessions"), "Kimi Code sessions are fingerprinted")
+
+    let world = FakeCollectorWorld(
+        now: shanghaiDate(2026, 8, 15, 12, 0),
+        settings: stateSettings(clients: "kimi")
+    )
+    world.tokscalePeriods = ["today": UsageCore.emptyPeriod(), "month": UsageCore.emptyPeriod(), "allTime": UsageCore.emptyPeriod()]
+    world.tokscaleGraph = ([], nil)
+    let (collector, queue) = world.makeCollector()
+    collector.requestRefresh(.full, reason: .startup)
+    world.waitIdle(collector, queue)
+    checkEqual(world.tokscalePeriodClients.last, ["kimi"], "Kimi is passed to tokscale period collection")
+    checkEqual(world.tokscaleGraphClients.last, ["kimi"], "Kimi is passed to tokscale graph collection")
 }
 
 func runCollectorStateTests() {
@@ -1520,6 +1631,7 @@ func runSingleInstanceTests() {
 }
 
 runChecks()
+runKimiTests()
 runCollectorStateTests()
 runDshCacheTests()
 runVisibilityTests()

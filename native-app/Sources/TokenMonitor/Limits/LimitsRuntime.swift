@@ -1,8 +1,8 @@
 import Foundation
 
-/// Limits refresh loop: polls the enabled providers (deepseek, opencode) at
+/// Limits refresh loop: polls the enabled providers (deepseek, opencode, kimi) at
 /// limitsRefreshMs and keeps the summary the stats frames embed. Ports the
-/// LimitsRuntime role of src/shared/deviceRuntime.js, trimmed to two
+/// LimitsRuntime role of src/shared/deviceRuntime.js, trimmed to three
 /// providers and local mode.
 final class LimitsRuntime {
     static let shared = LimitsRuntime()
@@ -78,7 +78,7 @@ final class LimitsRuntime {
 
         let settings = core.settings.snapshot()
         guard settings["limitsEnabled"] as? Bool ?? true else { return }
-        let enabled = (settings["limitProviders"] as? String ?? "deepseek,opencode")
+        let enabled = (settings["limitProviders"] as? String ?? "deepseek,opencode,kimi")
             .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
 
@@ -104,6 +104,19 @@ final class LimitsRuntime {
                 }
                 semaphore.wait()
                 providers.append(contentsOf: fetched)
+            case "kimi":
+                let semaphore = DispatchSemaphore(value: 0)
+                var fetched: JSON = [:]
+                Task {
+                    fetched = await KimiLimits.fetchLimits(
+                        apiKey: CredentialStore.shared.kimiApiKey(),
+                        webAccessToken: CredentialStore.shared.kimiWebAccessToken(),
+                        nowMs: nowMs
+                    )
+                    semaphore.signal()
+                }
+                semaphore.wait()
+                providers.append(fetched)
             default:
                 break
             }

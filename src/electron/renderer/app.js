@@ -1,6 +1,6 @@
 'use strict';
 
-const clientLabels = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', workbuddy: 'WorkBuddy', proma: 'Proma', hanako: 'Hanako', dsh: 'DeepSeek Harness' };
+const clientLabels = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', kimi: 'Kimi', workbuddy: 'WorkBuddy', proma: 'Proma', hanako: 'Hanako', dsh: 'DeepSeek Harness' };
 const reasonixSessionGuard = window.TokenMonitorReasonixSessionGuard;
 const { clientColors, fallbackModelColors, modelVendorFor, modelColor } = window.TokenMonitorUsageCharts;
 const motionPreferenceApi = window.TokenMonitorMotionPreference;
@@ -10,7 +10,7 @@ const tokenRateApi = window.TokenMonitorTokenRate;
 const { tokenRatePerSecond, tokenBurnPerMinute } = tokenRateApi;
 const reducedMotionMedia = window.matchMedia?.('(prefers-reduced-motion: reduce)');
 const clientsWithIcon = new Set([
-  'claude', 'codex', 'opencode', 'workbuddy', 'proma', 'hanako', 'dsh',
+  'claude', 'codex', 'opencode', 'kimi', 'workbuddy', 'proma', 'hanako', 'dsh',
   'deepseek'
 ]);
 const modelVendorsWithIcon = new Set([
@@ -41,6 +41,7 @@ const KNOWN_CLIENTS = [
   { id: 'claude', label: 'Claude Code' },
   { id: 'codex', label: 'Codex' },
   { id: 'opencode', label: 'OpenCode' },
+  { id: 'kimi', label: 'Kimi' },
   { id: 'workbuddy', label: 'WorkBuddy' },
   { id: 'proma', label: 'Proma' },
   { id: 'hanako', label: 'Hanako' },
@@ -48,15 +49,18 @@ const KNOWN_CLIENTS = [
 ];
 const LIMIT_PROVIDERS = [
   { id: 'deepseek', label: 'DeepSeek' },
-  { id: 'opencode', label: 'OpenCode' }
+  { id: 'opencode', label: 'OpenCode' },
+  { id: 'kimi', label: 'Kimi' }
 ];
 const LIMIT_PROVIDER_ACCOUNT_GROUP_IDS = {
   opencode: 'opencodeCookieGroup',
-  deepseek: 'deepseekAccountGroup'
+  deepseek: 'deepseekAccountGroup',
+  kimi: 'kimiAccountGroup'
 };
 const LIMIT_PROVIDER_ACCOUNT_STATUS_IDS = {
   opencode: 'opencodeCookieStatus',
-  deepseek: 'deepseekApiKeyStatus'
+  deepseek: 'deepseekApiKeyStatus',
+  kimi: 'kimiAccountStatus'
 };
 const LIMIT_PROVIDER_CONNECTION_DETAIL_KEYS = {};
 const TRAY_ICON_VARIANTS = [
@@ -10483,6 +10487,13 @@ function externalProviderAccountLinked(providerName) {
   return Boolean(config && state.settings?.[config.configuredKey]) && provider?.status === 'ok';
 }
 
+function markExternalProviderCheckPending(providerName) {
+  const config = externalLimitAccountConfig[providerName];
+  if (!config) return;
+  state[config.pendingKey] = Date.now();
+  clearExternalProviderPendingStatus(providerName);
+}
+
 function clearExternalProviderCheckPending(providerName) {
   const config = externalLimitAccountConfig[providerName];
   if (config) state[config.pendingKey] = 0;
@@ -10596,6 +10607,7 @@ function renderExternalProviderStatus(providerName) {
   const refreshBtn = document.getElementById(`${providerName}RefreshButton`);
   const manualPanel = document.getElementById(`${providerName}ManualPanel`);
   const errorEl = document.getElementById(`${providerName}ErrorMessage`);
+  const credentialHintEl = document.getElementById(`${providerName}CredentialHint`);
   if (!config || !statusEl || !openBtn || !logoutBtn || !refreshBtn || !manualPanel || !errorEl) return;
 
   errorEl.classList.add('hidden');
@@ -10624,8 +10636,23 @@ function renderExternalProviderStatus(providerName) {
     statusEl,
     pending ? t('settings.common.checking') : apiKeyAccountStatusText(providerName, provider, configured, source, enabled)
   );
-  manualPanel.classList.toggle('hidden', linked);
-  openBtn.classList.toggle('hidden', linked);
+  // Kimi Code can supply 5-hour and weekly limits from its local OAuth
+  // session, but the monthly membership pool still needs a browser cookie.
+  // Keep these controls available after the Code fallback succeeds so an
+  // expired browser session can be replaced without first clearing it.
+  const keepKimiCredentialControlsVisible = providerName === 'kimi';
+  manualPanel.classList.toggle('hidden', linked && !keepKimiCredentialControlsVisible);
+  openBtn.classList.toggle('hidden', linked && !keepKimiCredentialControlsVisible);
+  if (credentialHintEl) {
+    const needsFreshKimiWebSession = providerName === 'kimi'
+      && provider?.status === 'ok'
+      && provider?.source === 'api'
+      && Boolean(state.settings?.kimiWebAccessTokenConfigured);
+    credentialHintEl.textContent = needsFreshKimiWebSession
+      ? t('settings.kimi.webCookieRefreshNeeded')
+      : '';
+    credentialHintEl.classList.toggle('hidden', !needsFreshKimiWebSession);
+  }
   const canClearConfiguredClaude = providerName === 'claude' && configured;
   logoutBtn.classList.toggle('hidden', source !== 'settings' || (!linked && !canClearConfiguredClaude));
   refreshBtn.classList.toggle('hidden', !configured);
@@ -11593,6 +11620,77 @@ function setupCursorAccountUI() {
       } catch (err) {
         clearDeepseekPendingCheck();
         errorEl.textContent = t('settings.deepseek.saveFailed', { message: err.message });
+        errorEl.classList.remove('hidden');
+      }
+    });
+  }
+
+  const kimiToggle = document.getElementById('kimiSettingsToggle');
+  if (kimiToggle) {
+    kimiToggle.addEventListener('click', () => setExternalAccountExpanded('kimi', !state.kimiAccountExpanded));
+    setExternalAccountExpanded('kimi', false);
+    renderExternalProviderStatus('kimi');
+
+    document.getElementById('kimiOpenBrowser').addEventListener('click', () => {
+      window.tokenMonitor.openExternal(kimiPlatformUrl());
+    });
+
+    document.getElementById('kimiLogoutButton').addEventListener('click', async () => {
+      await saveSettings({ kimiApiKey: '', kimiWebAccessToken: '' });
+      clearExternalProviderCheckPending('kimi');
+      clearExternalProviderPendingStatus('kimi');
+      renderExternalProviderStatus('kimi');
+      await refreshStats({ force: true });
+    });
+
+    document.getElementById('kimiRefreshButton').addEventListener('click', async () => {
+      await refreshStats({ force: true });
+    });
+
+    document.getElementById('kimiWebAccessTokenSubmit').addEventListener('click', async () => {
+      const input = document.getElementById('kimiWebAccessTokenInput');
+      const errorEl = document.getElementById('kimiErrorMessage');
+      errorEl.classList.add('hidden');
+      if (!String(input.value || '').trim()) {
+        errorEl.textContent = t('settings.kimi.statusNotSet');
+        errorEl.classList.remove('hidden');
+        return;
+      }
+      try {
+        markExternalProviderCheckPending('kimi');
+        await saveSettings({ kimiWebAccessToken: input.value });
+        input.value = '';
+        renderExternalProviderStatus('kimi');
+        await refreshStats({ force: true });
+        setExternalAccountExpanded('kimi', !externalProviderAccountLinked('kimi'));
+        renderExternalProviderStatus('kimi');
+      } catch (err) {
+        clearExternalProviderCheckPending('kimi');
+        errorEl.textContent = t('settings.kimi.saveFailed', { message: err.message });
+        errorEl.classList.remove('hidden');
+      }
+    });
+
+    document.getElementById('kimiApiKeySubmit').addEventListener('click', async () => {
+      const input = document.getElementById('kimiApiKeyInput');
+      const errorEl = document.getElementById('kimiErrorMessage');
+      errorEl.classList.add('hidden');
+      if (!String(input.value || '').trim()) {
+        errorEl.textContent = t('settings.kimi.statusNotSet');
+        errorEl.classList.remove('hidden');
+        return;
+      }
+      try {
+        markExternalProviderCheckPending('kimi');
+        await saveSettings({ kimiApiKey: input.value });
+        input.value = '';
+        renderExternalProviderStatus('kimi');
+        await refreshStats({ force: true });
+        setExternalAccountExpanded('kimi', !externalProviderAccountLinked('kimi'));
+        renderExternalProviderStatus('kimi');
+      } catch (err) {
+        clearExternalProviderCheckPending('kimi');
+        errorEl.textContent = t('settings.kimi.saveFailed', { message: err.message });
         errorEl.classList.remove('hidden');
       }
     });

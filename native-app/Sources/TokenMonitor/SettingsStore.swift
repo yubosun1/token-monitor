@@ -32,19 +32,29 @@ final class SettingsStore {
         }
     }
 
-    /// One-time migration for settings whose defaults changed after the first
-    /// native build. `heatmapMetric` used to default to "cost" (the inherited
-    /// Electron default); the home activity heatmap now keys brightness off
-    /// token usage, so a persisted "cost" written before that change reads as
-    /// unset. Guarded by `settingsSchemaVersion` so it runs exactly once and
-    /// never overrides a deliberate later choice.
+    /// One-time migrations for settings whose defaults changed after the first
+    /// native build. Each schema version changes only values that were absent
+    /// from the older native configuration.
     private func migrateLegacyDefaultsIfNeeded() {
-        guard (values["settingsSchemaVersion"] as? Int ?? 0) < 1 else { return }
-        if (values["heatmapMetric"] as? String) == "cost" {
+        let version = values["settingsSchemaVersion"] as? Int ?? 0
+        guard version < 2 else { return }
+        if version < 1, (values["heatmapMetric"] as? String) == "cost" {
             values["heatmapMetric"] = "tokens"
         }
-        values["settingsSchemaVersion"] = 1
+        if version < 2 {
+            for key in ["clients", "clientDisplayOrder", "limitProviders", "limitProviderOrder"] {
+                values[key] = Self.appendingCSVValue(values[key] as? String ?? "", value: "kimi")
+            }
+        }
+        values["settingsSchemaVersion"] = 2
         persist(values)
+    }
+
+    private static func appendingCSVValue(_ value: String, value item: String) -> String {
+        var entries = value.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        guard !entries.contains(item) else { return entries.joined(separator: ",") }
+        entries.append(item)
+        return entries.joined(separator: ",")
     }
 
     /// The pre-native format of `subscriptionsOrphaned` was a dict
@@ -75,8 +85,8 @@ final class SettingsStore {
             // happens at most once per window instead of on every tick.
             "adapterRecheckMs": 30000,
             "collectionIntervalMs": 300000,
-            "clients": "claude,codex,opencode,workbuddy,proma,hanako,dsh",
-            "clientDisplayOrder": "claude,codex,opencode,proma,workbuddy,hanako,dsh",
+            "clients": "claude,codex,opencode,kimi,workbuddy,proma,hanako,dsh",
+            "clientDisplayOrder": "claude,codex,opencode,kimi,proma,workbuddy,hanako,dsh",
             "hiddenClients": "",
             "pinnedClients": "",
             "historyEnabled": true,
@@ -86,8 +96,8 @@ final class SettingsStore {
             "customModelPricing": [Any](),
             // Limits
             "limitsEnabled": true,
-            "limitProviders": "deepseek,opencode",
-            "limitProviderOrder": "deepseek,opencode",
+            "limitProviders": "deepseek,opencode,kimi",
+            "limitProviderOrder": "deepseek,opencode,kimi",
             "homeLimitProviderOrder": "",
             "hiddenHomeLimitProviders": "",
             "homeLimitAccountCount": 3,

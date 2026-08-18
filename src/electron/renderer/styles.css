@@ -3033,6 +3033,10 @@ html.is-windows .settings-panel select option {
   -webkit-mask-image: url(../../../assets/icons/deepseek.svg);
   mask-image: url(../../../assets/icons/deepseek.svg);
 }
+.limit-icon-kimi {
+  -webkit-mask-image: url(../../../assets/icons/kimi.svg);
+  mask-image: url(../../../assets/icons/kimi.svg);
+}
 .row-label {
   display: grid;
   min-width: 0;

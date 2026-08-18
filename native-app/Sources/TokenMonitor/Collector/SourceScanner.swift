@@ -54,6 +54,8 @@ enum SourceScanner {
             roots = [home + "/.local/share/opencode/storage/message"]
         case "workbuddy":
             roots = [home + "/.workbuddy/projects", home + "/.workbuddy/sessions"]
+        case "kimi":
+            roots = [home + "/.kimi/sessions", kimiCodeHome() + "/sessions"]
         default:
             roots = []
         }
@@ -63,6 +65,14 @@ enum SourceScanner {
             home + "/Library/Application Support/tokscale/headless"
         ]
         return roots
+    }
+
+    /// Kimi Code uses this override itself; match it so a fingerprint change
+    /// reliably schedules a new tokscale scan for non-default installations.
+    static func kimiCodeHome() -> String {
+        let configured = ProcessInfo.processInfo.environment["KIMI_CODE_HOME"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return configured.isEmpty ? NSHomeDirectory() + "/.kimi-code" : configured
     }
 
     /// Whether a file participates in a client's fingerprint. Adapter

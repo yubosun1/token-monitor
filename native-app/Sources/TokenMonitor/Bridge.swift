@@ -67,17 +67,26 @@ final class BridgeCore {
     }
 
     /// Settings as the renderer may see them: credentials are stripped and the
-    /// UI-facing credential state is injected. `deepseekApiKeyConfigured` is
-    /// what the renderer's `renderDeepseekStatus` reads; `deepseekApiKeySource`
-    /// tells it where the key came from ("settings" when stored locally).
+    /// UI-facing credential state is injected. Provider secrets stay in the
+    /// credential store and never cross this bridge into the renderer.
     func rendererSettingsSnapshot() -> [String: Any] {
         var snapshot = settings.snapshot()
         snapshot.removeValue(forKey: "deepseekApiKey")
         snapshot.removeValue(forKey: "opencodeProfiles")
         snapshot.removeValue(forKey: "opencodeCookie")
+        snapshot.removeValue(forKey: "kimiApiKey")
+        snapshot.removeValue(forKey: "kimiWebAccessToken")
         let hasDeepseekKey = !CredentialStore.shared.deepseekApiKey().isEmpty
         snapshot["deepseekApiKeySource"] = hasDeepseekKey ? "settings" : ""
         snapshot["deepseekApiKeyConfigured"] = hasDeepseekKey
+        let kimiApiKeySource = CredentialStore.shared.kimiApiKeySource()
+        let kimiWebAccessTokenSource = CredentialStore.shared.kimiWebAccessTokenSource()
+        snapshot["kimiApiKeySource"] = kimiApiKeySource
+        snapshot["kimiApiKeyConfigured"] = !CredentialStore.shared.kimiApiKey().isEmpty
+        snapshot["kimiWebAccessTokenSource"] = kimiWebAccessTokenSource
+        snapshot["kimiWebAccessTokenConfigured"] = !CredentialStore.shared.kimiWebAccessToken().isEmpty
+        snapshot["kimiCredentialSource"] = kimiWebAccessTokenSource.isEmpty ? kimiApiKeySource : kimiWebAccessTokenSource
+        snapshot["kimiCredentialConfigured"] = !kimiApiKeySource.isEmpty || !kimiWebAccessTokenSource.isEmpty
         return snapshot
     }
 
@@ -115,8 +124,18 @@ final class BridgeCore {
             guard var patch = args.first as? [String: Any] else { return settings.snapshot() }
             // Route credential-shaped settings keys into the credential store
             // (same split as CREDENTIAL_SETTING_PATHS in the Electron app).
+            var limitsCredentialChanged = false
             if let key = patch.removeValue(forKey: "deepseekApiKey") as? String {
                 CredentialStore.shared.setDeepseekApiKey(key)
+                limitsCredentialChanged = true
+            }
+            if let key = patch.removeValue(forKey: "kimiApiKey") as? String {
+                CredentialStore.shared.setKimiApiKey(key)
+                limitsCredentialChanged = true
+            }
+            if let token = patch.removeValue(forKey: "kimiWebAccessToken") as? String {
+                CredentialStore.shared.setKimiWebAccessToken(token)
+                limitsCredentialChanged = true
             }
             if let cookie = patch.removeValue(forKey: "opencodeCookie") as? String, !cookie.isEmpty {
                 CredentialStore.shared.saveOpencodeProfile(name: "default", cookie: cookie)
@@ -144,6 +163,9 @@ final class BridgeCore {
             // re-register whenever the recorded combination changes.
             if patch["windowToggleShortcut"] != nil {
                 ShortcutController.shared.apply(settings: merged)
+            }
+            if limitsCredentialChanged {
+                LimitsRuntime.shared.refreshNow()
             }
             push("settings:push", rendererSettingsSnapshot())
             return rendererSettingsSnapshot()
@@ -397,6 +419,11 @@ final class BridgeCore {
             return [("codex-sessions", "\(home)/.codex/sessions")]
         case "opencode":
             return [("opencode-data", "\(home)/.local/share/opencode")]
+        case "kimi":
+            return [
+                ("kimi-sessions", "\(home)/.kimi/sessions"),
+                ("kimi-code-sessions", SourceScanner.kimiCodeHome() + "/sessions")
+            ]
         case "workbuddy":
             return [("workbuddy-projects", "\(home)/.workbuddy/projects")]
         case "proma":
