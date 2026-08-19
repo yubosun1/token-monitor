@@ -16,38 +16,58 @@ enum WindowLifecycleConstants {
     static let mainWindowIdleTeardownDelay: TimeInterval = 30
 }
 
+/// Shared ⌘Q/⌘W interception for the glass windows, before the event can
+/// reach the web view: a key equivalent normally round-trips through the
+/// WebContent process and is matched against the (invisible, LSUIElement)
+/// main menu only when the page leaves it unhandled, which made both
+/// shortcuts dead in practice. ⌘W is routed to the owning controller so it
+/// can apply its managed-close semantics (widget hides, dashboard tears
+/// down); wired by GlassWindowController right after initialization.
+private func handleGlassKeyEquivalent(with event: NSEvent, onClose: (() -> Void)?) -> Bool {
+    guard event.type == .keyDown,
+          event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+          let key = event.charactersIgnoringModifiers?.lowercased() else { return false }
+    switch key {
+    case "q":
+        NSApp.terminate(nil)
+        return true
+    case "w":
+        onClose?()
+        return true
+    default:
+        return false
+    }
+}
+
 /// Borderless floating panel with the HUD vibrancy the Electron version used
 /// (`vibrancy: 'hud'`, visualEffectState active, always on top).
 final class GlassPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 
-    /// ⌘W close request, routed to the owning controller so it can apply its
-    /// managed-close semantics (widget hides, dashboard tears down). Wired by
-    /// GlassWindowController right after initialization.
     var onCloseKeyEquivalent: (() -> Void)?
 
-    /// ⌘Q / ⌘W are intercepted here, before the event can reach the web view:
-    /// a key equivalent normally round-trips through the WebContent process
-    /// and is matched against the (invisible, LSUIElement) main menu only
-    /// when the page leaves it unhandled, which made both shortcuts dead in
-    /// practice.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if event.type == .keyDown,
-           event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
-           let key = event.charactersIgnoringModifiers?.lowercased() {
-            switch key {
-            case "q":
-                NSApp.terminate(nil)
-                return true
-            case "w":
-                onCloseKeyEquivalent?()
-                return true
-            default:
-                break
-            }
-        }
-        return super.performKeyEquivalent(with: event)
+        handleGlassKeyEquivalent(with: event, onClose: onCloseKeyEquivalent)
+            || super.performKeyEquivalent(with: event)
+    }
+}
+
+/// Standard titled window variant used by the dashboard. macOS window
+/// management — the Globe+Ctrl tiling/centering shortcuts and third-party
+/// snap tools (Rectangle/Magnet/Raycast) — skips borderless windows and
+/// floating utility panels, so the dashboard must be a plain, normally
+/// managed NSWindow; the transparent, title-hidden titlebar keeps the HUD
+/// look identical to the panel.
+final class GlassWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+
+    var onCloseKeyEquivalent: (() -> Void)?
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        handleGlassKeyEquivalent(with: event, onClose: onCloseKeyEquivalent)
+            || super.performKeyEquivalent(with: event)
     }
 }
 
@@ -63,43 +83,76 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
     private let boundsKey: String
     private let defaultSize: NSSize
 
-    init(boundsKey: String, defaultSize: NSSize) {
+    init(boundsKey: String, defaultSize: NSSize, titled: Bool = false) {
         self.boundsKey = boundsKey
         self.defaultSize = defaultSize
-        let panel = GlassPanel(
-            contentRect: NSRect(origin: .zero, size: defaultSize),
-            styleMask: [.borderless, .resizable, .fullSizeContentView],
-            backing: .buffered,
-            defer: false
-        )
-        super.init(window: panel)
-        configurePanel(panel)
+        let rect = NSRect(origin: .zero, size: defaultSize)
+        let window: NSWindow
+        if titled {
+            // A titled, normally managed NSWindow: macOS window management
+            // (Globe+Ctrl tiling/centering, Rectangle/Magnet/Raycast) skips
+            // borderless windows AND floating utility panels, so the
+            // dashboard needs the real thing. The HUD look is preserved by
+            // the transparent, title-hidden titlebar in configureWindow.
+            window = GlassWindow(
+                contentRect: rect,
+                styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                backing: .buffered,
+                defer: false
+            )
+        } else {
+            window = GlassPanel(
+                contentRect: rect,
+                styleMask: [.borderless, .resizable, .fullSizeContentView],
+                backing: .buffered,
+                defer: false
+            )
+        }
+        super.init(window: window)
+        configureWindow(window)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
-    private func configurePanel(_ panel: NSPanel) {
-        panel.isFloatingPanel = true
-        panel.level = .floating
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = true
-        panel.hidesOnDeactivate = false
-        panel.isMovableByWindowBackground = false
-        panel.titleVisibility = .hidden
-        panel.titlebarAppearsTransparent = true
-        panel.animationBehavior = .utilityWindow
-        panel.isReleasedWhenClosed = false
+    private func configureWindow(_ window: NSWindow) {
+        if let panel = window as? GlassPanel {
+            panel.isFloatingPanel = true
+            panel.level = .floating
+            panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        } else {
+            // Dashboard (GlassWindow): keep the default level and collection
+            // behavior so the window is a first-class citizen for tiling,
+            // Mission Control and the Window menu; the title only labels it
+            // there (the titlebar itself stays hidden).
+            window.title = "Usage Dashboard"
+        }
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.hasShadow = true
+        window.hidesOnDeactivate = false
+        window.isMovableByWindowBackground = false
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        // A titled window would otherwise show traffic-light buttons that
+        // duplicate the renderer's own close button.
+        if window.styleMask.contains(.titled) {
+            for buttonType: NSWindow.ButtonType in [.closeButton, .miniaturizeButton, .zoomButton] {
+                window.standardWindowButton(buttonType)?.isHidden = true
+            }
+        }
+        window.animationBehavior = .utilityWindow
+        window.isReleasedWhenClosed = false
 
         // ⌘W takes the same managed-close path as the renderer's close
         // button: the widget hides (idle teardown clock starts), the
         // dashboard tears its WebView down.
-        (panel as? GlassPanel)?.onCloseKeyEquivalent = { [weak self] in
+        let onCloseKeyEquivalent = { [weak self] in
             guard let self else { return }
             self.bridgeDidRequestClose(self.bridge)
         }
+        (window as? GlassPanel)?.onCloseKeyEquivalent = onCloseKeyEquivalent
+        (window as? GlassWindow)?.onCloseKeyEquivalent = onCloseKeyEquivalent
 
         let container = NSView(frame: NSRect(origin: .zero, size: defaultSize))
         container.wantsLayer = true
@@ -136,8 +189,8 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
         container.addSubview(webView)
         self.webView = webView
 
-        panel.contentView = container
-        bridge.attach(to: webView, window: panel)
+        window.contentView = container
+        bridge.attach(to: webView, window: window)
         bridge.dragController = self
         bridge.lifecycleDelegate = self
         startVisibilityTracking()
@@ -664,7 +717,10 @@ final class DashboardViewWindowController: GlassWindowController {
     override var idleTeardownDelay: TimeInterval { 60 }
 
     init() {
-        super.init(boundsKey: "dashboardBounds", defaultSize: NSSize(width: 920, height: 720))
+        // titled: system window-management shortcuts (Globe+Ctrl tiling /
+        // centering, third-party snap tools) ignore borderless windows; the
+        // widget popover stays borderless, the dashboard opts in.
+        super.init(boundsKey: "dashboardBounds", defaultSize: NSSize(width: 920, height: 720), titled: true)
         loadPage("dashboard")
         restoreBounds()
         startBoundsTracking()

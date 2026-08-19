@@ -1,4 +1,8 @@
 * { box-sizing: border-box; }
+/* macos-native: hide every scrollbar in the dashboard — they read as chrome
+   noise in the HUD window. Scrolling itself (wheel/trackpad) is unaffected. */
+* { scrollbar-width: none; }
+*::-webkit-scrollbar { display: none; }
 /* The dashboard is a separate window with its own stylesheet, so it needs the
    same theme-variable foundation as the widget. JS (themeCssVarEntries) flips
    these on a light theme; the defaults here mirror the widget's :root. */
@@ -45,7 +49,10 @@ body {
 }
 .dash-tab.active { opacity: 1; background: rgba(var(--overlay-rgb), 0.06); }
 
-.dash-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; padding: 14px; }
+/* macos-native lists every model/client in the breakdown (upstream caps it
+   at 5), so the overview can outgrow the window: the pane must scroll —
+   body stays overflow:hidden and only the pane gets a scrollbar. */
+.dash-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; padding: 14px; overflow-y: auto; }
 .dash-pane.hidden { display: none; }
 /* The overview reads as a centred content column (like a profile page) so the summary
    strip and heatmap share one width and a wide window gets symmetric margins, not a right gap. */
