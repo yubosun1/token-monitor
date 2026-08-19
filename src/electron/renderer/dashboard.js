@@ -382,7 +382,8 @@ function renderBreakdown() {
   }
   
   const buildCol = (titleKey, map, colorFn) => {
-    const rows = Object.entries(map).filter(x => x[1] > 0).sort((a, b) => b[1] - a[1]).slice(0, 5);
+    // macos-native: show every model/client (upstream caps the columns at 5).
+    const rows = Object.entries(map).filter(x => x[1] > 0).sort((a, b) => b[1] - a[1]);
     if (rows.length === 0) return '';
     const maxVal = Math.max(...rows.map(x => x[1]));
     const html = rows.map(([key, val]) => {

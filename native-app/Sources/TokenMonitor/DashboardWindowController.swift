@@ -11,9 +11,9 @@ enum WindowLifecycleConstants {
     /// Short hides keep the WebView alive for instant tray/hotkey reopen;
     /// past this the ~60MB WebContent/GPU/Networking processes are reclaimed
     /// and the next show rebuilds the window from scratch (~0.2s).
-    /// Tuned for memory: 120s reclaims the WebContent process far sooner than
-    /// the original 600s, at the cost of a brief rebuild on reopen after 2min.
-    static let mainWindowIdleTeardownDelay: TimeInterval = 120
+    /// Tuned for memory: 30s keeps reopen snappy for quick tray toggles while
+    /// reclaiming the WebContent process soon after the window is dismissed.
+    static let mainWindowIdleTeardownDelay: TimeInterval = 30
 }
 
 /// Borderless floating panel with the HUD vibrancy the Electron version used
@@ -21,6 +21,34 @@ enum WindowLifecycleConstants {
 final class GlassPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+
+    /// ⌘W close request, routed to the owning controller so it can apply its
+    /// managed-close semantics (widget hides, dashboard tears down). Wired by
+    /// GlassWindowController right after initialization.
+    var onCloseKeyEquivalent: (() -> Void)?
+
+    /// ⌘Q / ⌘W are intercepted here, before the event can reach the web view:
+    /// a key equivalent normally round-trips through the WebContent process
+    /// and is matched against the (invisible, LSUIElement) main menu only
+    /// when the page leaves it unhandled, which made both shortcuts dead in
+    /// practice.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.type == .keyDown,
+           event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+           let key = event.charactersIgnoringModifiers?.lowercased() {
+            switch key {
+            case "q":
+                NSApp.terminate(nil)
+                return true
+            case "w":
+                onCloseKeyEquivalent?()
+                return true
+            default:
+                break
+            }
+        }
+        return super.performKeyEquivalent(with: event)
+    }
 }
 
 /// Base window controller: transparent HUD-vibrancy panel hosting a
@@ -64,6 +92,14 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
         panel.titlebarAppearsTransparent = true
         panel.animationBehavior = .utilityWindow
         panel.isReleasedWhenClosed = false
+
+        // ⌘W takes the same managed-close path as the renderer's close
+        // button: the widget hides (idle teardown clock starts), the
+        // dashboard tears its WebView down.
+        (panel as? GlassPanel)?.onCloseKeyEquivalent = { [weak self] in
+            guard let self else { return }
+            self.bridgeDidRequestClose(self.bridge)
+        }
 
         let container = NSView(frame: NSRect(origin: .zero, size: defaultSize))
         container.wantsLayer = true
@@ -624,7 +660,7 @@ final class DashboardWindowController: GlassWindowController {
 final class DashboardViewWindowController: GlassWindowController {
     /// Auto-hide keeps the window in memory this long before teardown
     /// (unchanged from review round Phase 5; the main widget uses the
-    /// central 600s default instead).
+    /// central `WindowLifecycleConstants` default instead).
     override var idleTeardownDelay: TimeInterval { 60 }
 
     init() {

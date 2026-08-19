@@ -37,7 +37,7 @@ final class SettingsStore {
     /// from the older native configuration.
     private func migrateLegacyDefaultsIfNeeded() {
         let version = values["settingsSchemaVersion"] as? Int ?? 0
-        guard version < 2 else { return }
+        guard version < 3 else { return }
         if version < 1, (values["heatmapMetric"] as? String) == "cost" {
             values["heatmapMetric"] = "tokens"
         }
@@ -46,7 +46,21 @@ final class SettingsStore {
                 values[key] = Self.appendingCSVValue(values[key] as? String ?? "", value: "kimi")
             }
         }
-        values["settingsSchemaVersion"] = 2
+        if version < 3 {
+            // Ship the built-in k3-256k override (see defaults()): tokscale's
+            // catalog entry for it carries zero prices, so scans never
+            // costed it. k3-256k is Kimi K3's short-context variant at half
+            // of k3's price. Skip when the user already has an override.
+            var list = values["customModelPricing"] as? [[String: Any]] ?? []
+            let alreadyOverridden = list.contains {
+                ($0["modelId"] as? String)?.trimmingCharacters(in: .whitespaces).lowercased() == "k3-256k"
+            }
+            if !alreadyOverridden {
+                list.append(["modelId": "k3-256k", "inputPerM": 1.5, "outputPerM": 7.5, "cacheReadPerM": 0.15])
+                values["customModelPricing"] = list
+            }
+        }
+        values["settingsSchemaVersion"] = 3
         persist(values)
     }
 
@@ -93,7 +107,12 @@ final class SettingsStore {
             "historyIntervalMs": 900000,
             "sessionUsageArchiveEnabled": true,
             "allTimeSince": "2024-01-01",
-            "customModelPricing": [Any](),
+            "customModelPricing": [
+                // k3-256k (Kimi K3 short-context) has a broken all-zero
+                // entry in tokscale's pricing catalog; its real price is
+                // half of k3's ($3/$15/$0.30 per M tokens → $1.5/$7.5/$0.15).
+                ["modelId": "k3-256k", "inputPerM": 1.5, "outputPerM": 7.5, "cacheReadPerM": 0.15],
+            ],
             // Limits
             "limitsEnabled": true,
             "limitProviders": "deepseek,opencode,kimi",
