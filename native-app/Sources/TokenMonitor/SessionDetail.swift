@@ -374,6 +374,15 @@ enum SessionDetailCore {
         var usageEvents: [JSON] = []
         var headerCreatedAt = 0.0
         var lastTime = 0.0
+        // A forked session's log is seeded with a byte-for-byte copy of its
+        // parent's events up to `session.seedLength`; that shared prefix is
+        // credited to the parent only, so it must be skipped here too, or a
+        // fork shows more tokens (and the parent's prompts) than its own
+        // count. seq is 0-indexed: the event AT seq == seedLength is the
+        // fork's own first new event — skip strictly `seq < seedLength`.
+        // Stays nil until a session record sets it: a torn header must not
+        // zero out an otherwise-parseable transcript.
+        var seedLength: Int?
 
         for line in text.split(whereSeparator: \.isNewline) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
@@ -381,16 +390,21 @@ enum SessionDetailCore {
                   let data = trimmed.data(using: .utf8),
                   let obj = try? JSONSerialization.jsonObject(with: data) as? JSON else { continue }
             let seq = obj["seq"] as? Int ?? 0
+            let type = obj["type"] as? String ?? ""
+
+            if type == "session" {
+                if let createdAt = obj["createdAt"] { headerCreatedAt = UsageCore.timestampMs(createdAt) }
+                seedLength = obj["seedLength"] as? Int
+                continue
+            }
+            if let seed = seedLength, seq < seed { continue }
             if seenSeq.contains(seq) { continue }
             seenSeq.insert(seq)
             let time = UsageCore.timestampMs(obj["time"])
             if time > lastTime { lastTime = time }
-            let type = obj["type"] as? String ?? ""
             let payload = obj["data"] as? JSON ?? JSON()
 
             switch type {
-            case "session":
-                if let createdAt = obj["createdAt"] { headerCreatedAt = UsageCore.timestampMs(createdAt) }
             case "user/message":
                 // data IS the user message: {role, content, timestamp, source}
                 let role = payload["role"] as? String ?? ""

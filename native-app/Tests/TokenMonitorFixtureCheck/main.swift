@@ -1471,7 +1471,149 @@ func runDshCacheTests() {
     checkEqual(Adapters.dshIncrementalStateCount, 0, "T15 disabled dsh frees streaming states")
 }
 
-// MARK: - Managed visibility tests (review round Phase 5)
+// MARK: - DSH fork seedLength tests
+
+/// A forked session's log starts with a byte-for-byte copy of its parent's
+/// events; `session.seedLength` is the seq of the fork's own first event, so
+/// everything with seq < seedLength belongs to the parent and must be
+/// skipped on both the full-parse and the incremental delta paths.
+func runDshForkSeedTests() {
+    let fm = FileManager.default
+    let dir = fm.temporaryDirectory.appendingPathComponent("tm-dsh-fork-\(UUID().uuidString)")
+    let fork = dir.appendingPathComponent("fork-1")
+    let torn = dir.appendingPathComponent("torn-1")
+    try! fm.createDirectory(at: fork, withIntermediateDirectories: true)
+    try! fm.createDirectory(at: torn, withIntermediateDirectories: true)
+    defer { try? fm.removeItem(at: dir) }
+    let ff = fork.appendingPathComponent("session.jsonl.zstd")
+    let tf = torn.appendingPathComponent("session.jsonl.zstd")
+
+    // Seeded parent prefix: seq 0-3 (header, request header, one usage +
+    // finish). The fork's own events start at seq == seedLength (4).
+    let forkSeed = "{\"type\":\"session\",\"seq\":0,\"seedLength\":4,\"createdAt\":\"2026-08-15T10:00:00+08:00\"}\n"
+        + "{\"type\":\"request/header\",\"seq\":1,\"time\":\"2026-08-15T10:00:05+08:00\",\"data\":{\"header\":{\"config\":{\"model\":\"deepseek-chat\"}}}}\n"
+        + "{\"type\":\"assistant/chunk\",\"seq\":2,\"time\":\"2026-08-15T10:00:10+08:00\",\"data\":{\"turn\":1,\"step\":1,\"chunk\":{\"type\":\"usage\",\"usage\":{\"inputTokens\":100,\"outputTokens\":50,\"cacheReadTokens\":0,\"cacheWriteTokens\":0}}}}\n"
+        + "{\"type\":\"assistant/chunk\",\"seq\":3,\"time\":\"2026-08-15T10:00:15+08:00\",\"data\":{\"turn\":1,\"step\":1,\"chunk\":{\"type\":\"finish\",\"replayState\":{\"model\":\"deepseek-chat\"}}}}\n"
+    let forkOwn = "{\"type\":\"assistant/chunk\",\"seq\":4,\"time\":\"2026-08-15T10:01:00+08:00\",\"data\":{\"turn\":2,\"step\":1,\"chunk\":{\"type\":\"usage\",\"usage\":{\"inputTokens\":200,\"outputTokens\":60,\"cacheReadTokens\":0,\"cacheWriteTokens\":0}}}}\n"
+        + "{\"type\":\"assistant/chunk\",\"seq\":5,\"time\":\"2026-08-15T10:01:05+08:00\",\"data\":{\"turn\":2,\"step\":1,\"chunk\":{\"type\":\"finish\",\"replayState\":{\"model\":\"deepseek-chat\"}}}}\n"
+
+    // F1: full parse skips the copied parent prefix (seq < seedLength); the
+    // event AT seq == seedLength is the fork's own first and is counted.
+    try! compressZstd(forkSeed + forkOwn).write(to: ff)
+    let f1r = Adapters.cachedSessionFileRows(ff)
+    checkEqual(f1r.rows.count, 1, "F1 fork parent prefix skipped")
+    checkEqual(f1r.rows.first?.input ?? 0, 200, "F1 only the fork's own tokens counted")
+    checkEqual(f1r.events, 1, "F1 only the fork's own usage event counted")
+
+    // F2: seedLength persists in the incremental state across feeds (the
+    // session record only appears at the head of the file), so a parent
+    // prefix event replayed into a later append is still skipped, while the
+    // fork's own appended event is counted.
+    let replayedPrefix = "{\"type\":\"assistant/chunk\",\"seq\":3,\"time\":\"2026-08-15T10:00:15+08:00\",\"data\":{\"turn\":1,\"step\":1,\"chunk\":{\"type\":\"usage\",\"usage\":{\"inputTokens\":999,\"outputTokens\":50,\"cacheReadTokens\":0,\"cacheWriteTokens\":0}}}}\n"
+    let appendedOwn = "{\"type\":\"assistant/chunk\",\"seq\":6,\"time\":\"2026-08-15T10:02:00+08:00\",\"data\":{\"turn\":3,\"step\":1,\"chunk\":{\"type\":\"usage\",\"usage\":{\"inputTokens\":300,\"outputTokens\":70,\"cacheReadTokens\":0,\"cacheWriteTokens\":0}}}}\n"
+        + "{\"type\":\"assistant/chunk\",\"seq\":7,\"time\":\"2026-08-15T10:02:05+08:00\",\"data\":{\"turn\":3,\"step\":1,\"chunk\":{\"type\":\"finish\",\"replayState\":{\"model\":\"deepseek-chat\"}}}}\n"
+    let fh = try! FileHandle(forWritingTo: ff)
+    try! fh.seekToEnd()
+    fh.write(compressZstd(replayedPrefix + appendedOwn))
+    try! fh.close()
+    let f2r = Adapters.cachedSessionFileRows(ff)
+    checkEqual(f2r.rows.count, 2, "F2 replayed prefix event skipped in delta")
+    checkEqual(f2r.rows.last?.input ?? 0, 300, "F2 fork's own appended event counted")
+
+    // F3: a torn/absent session record leaves seedLength unknown, so no
+    // event is skipped on a guess — the transcript still counts.
+    let tornLines = "{\"type\":\"request/header\",\"seq\":0,\"time\":\"2026-08-15T10:00:05+08:00\",\"data\":{\"header\":{\"config\":{\"model\":\"deepseek-chat\"}}}}\n"
+        + "{\"type\":\"assistant/chunk\",\"seq\":1,\"time\":\"2026-08-15T10:00:10+08:00\",\"data\":{\"turn\":1,\"step\":1,\"chunk\":{\"type\":\"usage\",\"usage\":{\"inputTokens\":400,\"outputTokens\":80,\"cacheReadTokens\":0,\"cacheWriteTokens\":0}}}}\n"
+        + "{\"type\":\"assistant/chunk\",\"seq\":2,\"time\":\"2026-08-15T10:00:15+08:00\",\"data\":{\"turn\":1,\"step\":1,\"chunk\":{\"type\":\"finish\",\"replayState\":{\"model\":\"deepseek-chat\"}}}}\n"
+    try! compressZstd(tornLines).write(to: tf)
+    let f3r = Adapters.cachedSessionFileRows(tf)
+    checkEqual(f3r.rows.count, 1, "F3 torn header still counts events")
+    checkEqual(f3r.rows.first?.input ?? 0, 400, "F3 torn header tokens counted")
+
+    Adapters.dropClientCaches(["dsh"])
+}
+
+// MARK: - DSH corrupt-frame tests
+
+/// Compress with a content checksum so flipping the trailing checksum byte
+/// deterministically fails decoding ("Restored data doesn't match
+/// checksum") — a plain ZSTD_compress frame carries no checksum, and
+/// corrupted payload bytes in one may silently decode into garbage instead
+/// of raising the error this test needs.
+func compressZstdWithChecksum(_ text: String) -> Data {
+    let input = Array(text.utf8)
+    let bound = ZSTD_compressBound(input.count)
+    var dst = [UInt8](repeating: 0, count: bound)
+    let written = input.withUnsafeBytes { (src: UnsafeRawBufferPointer) -> Int in
+        dst.withUnsafeMutableBytes { (out: UnsafeMutableRawBufferPointer) -> Int in
+            guard let cctx = ZSTD_createCCtx() else { return 0 }
+            defer { ZSTD_freeCCtx(cctx) }
+            ZSTD_CCtx_setParameter(cctx, ZSTD_c_checksumFlag, 1)
+            return ZSTD_compress2(cctx, out.baseAddress, bound, src.baseAddress, src.count)
+        }
+    }
+    guard written > 0, ZSTD_isError(written) == 0 else { return Data() }
+    return Data(dst.prefix(written))
+}
+
+/// A content-corrupt frame in the MIDDLE of a transcript is the recovery
+/// boundary: decoding stops there and keeps the valid prefix, and the
+/// frames past it are NOT recovered (upstream scanZstdFrames /
+/// decodeZstdBuffer semantics) — instead of the whole session being zeroed.
+func runDshCorruptFrameTests() {
+    let fm = FileManager.default
+    let dir = fm.temporaryDirectory.appendingPathComponent("tm-dsh-corrupt-\(UUID().uuidString)")
+    let s1 = dir.appendingPathComponent("session-1")
+    let s2 = dir.appendingPathComponent("session-2")
+    try! fm.createDirectory(at: s1, withIntermediateDirectories: true)
+    try! fm.createDirectory(at: s2, withIntermediateDirectories: true)
+    defer { try? fm.removeItem(at: dir) }
+    let f1 = s1.appendingPathComponent("session.jsonl.zstd")
+    let f2 = s2.appendingPathComponent("session.jsonl.zstd")
+
+    // Three concatenated frames: a valid head (one usage event, input 100),
+    // a content-corrupt middle frame (usage input 200, checksum flipped),
+    // and a valid tail frame (usage input 300).
+    let headFrame = compressZstd(dshSessionLines(100))
+    let middleLines = "{\"type\":\"assistant/chunk\",\"seq\":3,\"time\":\"2026-08-15T10:01:00+08:00\",\"data\":{\"turn\":2,\"step\":1,\"chunk\":{\"type\":\"usage\",\"usage\":{\"inputTokens\":200,\"outputTokens\":50,\"cacheReadTokens\":0,\"cacheWriteTokens\":0}}}}\n"
+    var corruptFrame = compressZstdWithChecksum(middleLines)
+    corruptFrame[corruptFrame.count - 1] ^= 0xFF
+    let tailLines = "{\"type\":\"assistant/chunk\",\"seq\":4,\"time\":\"2026-08-15T10:02:00+08:00\",\"data\":{\"turn\":3,\"step\":1,\"chunk\":{\"type\":\"usage\",\"usage\":{\"inputTokens\":300,\"outputTokens\":50,\"cacheReadTokens\":0,\"cacheWriteTokens\":0}}}}\n"
+    let tailFrame = compressZstd(tailLines)
+
+    // F4 (full parse): the prefix before the corrupt frame is kept; the
+    // corrupt frame's own event and the valid frame PAST it are skipped.
+    var whole = headFrame
+    whole.append(corruptFrame)
+    whole.append(tailFrame)
+    try! whole.write(to: f1)
+    let c4 = Adapters.cachedSessionFileRows(f1)
+    checkEqual(c4.rows.count, 1, "F4 prefix before corrupt frame kept")
+    checkEqual(c4.rows.first?.input ?? 0, 100, "F4 prefix tokens intact")
+
+    // F5 (incremental): the same corruption arriving in an appended tail
+    // errors the delta feed, which falls back to a full re-parse keeping
+    // the same prefix; no poisoned stream state is retained, and the
+    // prefix result is memoized for unchanged re-reads.
+    try! headFrame.write(to: f2)
+    let c5a = Adapters.cachedSessionFileRows(f2)
+    checkEqual(c5a.rows.count, 1, "F5 clean head parses before corruption")
+    let fh = try! FileHandle(forWritingTo: f2)
+    try! fh.seekToEnd()
+    fh.write(corruptFrame)
+    fh.write(tailFrame)
+    try! fh.close()
+    let c5b = Adapters.cachedSessionFileRows(f2)
+    checkEqual(c5b.rows.count, 1, "F5 corrupt appended frame keeps prefix")
+    checkEqual(c5b.rows.first?.input ?? 0, 100, "F5 prefix tokens intact after delta error")
+    checkEqual(Adapters.dshIncrementalStateCount, 0, "F5 poisoned stream state not retained")
+    let dc = Adapters.dshDecompressCount
+    let c5c = Adapters.cachedSessionFileRows(f2)
+    checkEqual(c5c.rows.count, 1, "F5 unchanged re-read returns memoized prefix")
+    checkEqual(Adapters.dshDecompressCount - dc, 0, "F5 memoized prefix needs no re-decompress")
+
+    Adapters.dropClientCaches(["dsh"])
+}
 
 func runVisibilityTests() {
     // V1: duplicate hides/shows emit exactly one event each.
@@ -1634,6 +1776,8 @@ runChecks()
 runKimiTests()
 runCollectorStateTests()
 runDshCacheTests()
+runDshForkSeedTests()
+runDshCorruptFrameTests()
 runVisibilityTests()
 runIdleTeardownTests()
 runSingleInstanceTests()

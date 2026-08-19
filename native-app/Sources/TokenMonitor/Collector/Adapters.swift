@@ -554,17 +554,33 @@ enum Adapters {
         defer { ZSTD_freeDStream(stream) }
         let initResult = ZSTD_initDStream(stream)
         guard ZSTD_isError(initResult) == 0 else { return nil }
-        let (output, ok) = feedZstd(stream, input: compressed, diag: diag, name: url.lastPathComponent)
-        return ok ? output : nil
+        let (output, stoppedOnError) = feedZstd(stream, input: compressed, diag: diag, name: url.lastPathComponent)
+        if stoppedOnError {
+            // Corrupt frame mid-file: keep the valid prefix instead of
+            // zeroing the session (upstream decodeSessionText semantics).
+            if diag { NSLog("[dsh] corrupt frame in %@: keeping decoded prefix", url.lastPathComponent) }
+        }
+        return output
     }
 
     /// Feed compressed bytes through a streaming decoder, returning the
-    /// decompressed output. Errors surface as (nil, false). Used both for
-    /// full parses and for incremental tail feeds on a retained stream.
-    private static func feedZstd(_ stream: OpaquePointer, input: Data, diag: Bool = false, name: String = "?") -> (output: Data?, ok: Bool) {
+    /// decompressed output. Used both for full parses and for incremental
+    /// tail feeds on a retained stream.
+    ///
+    /// A torn trailing frame (live session scanned mid-write) is not an
+    /// error: the input simply runs out and every block decoded so far is
+    /// kept — same as dsh's own reader and tokscale's streaming decoder.
+    /// A content-corrupt frame (checksum mismatch, damaged block) surfaces
+    /// as stoppedOnError with the prefix decoded BEFORE that frame kept:
+    /// the first undecodable frame is the recovery boundary, nothing past
+    /// it is trusted, and the caller must not retain the (now poisoned)
+    /// stream. Matches upstream decodeZstdBuffer, which decodes complete
+    /// frames in order and stops at the first frame that fails to decode
+    /// instead of throwing the whole transcript away.
+    private static func feedZstd(_ stream: OpaquePointer, input: Data, diag: Bool = false, name: String = "?") -> (output: Data, stoppedOnError: Bool) {
         var output = Data()
         var chunk = [UInt8](repeating: 0, count: 1 << 16)
-        return input.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> (Data?, Bool) in
+        return input.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> (Data, Bool) in
             // Pre-allocate the output buffer when the zstd frame header
             // records the uncompressed size — avoids repeated realloc as
             // 64KB chunks append (session files decompress to a few MB).
@@ -589,13 +605,18 @@ enum Adapters {
                     }
                     return out.pos
                 }
-                guard produced >= 0 else { return (nil, false) }
+                // Unlike a per-frame all-or-nothing decode, the streaming
+                // API may already have emitted whole blocks of the frame
+                // that ultimately fails — keeping them matches tokscale's
+                // decoder, which emits every record read before the error;
+                // the per-line JSON parse downstream skips any garbage.
+                guard produced >= 0 else { return (output, true) }
                 if produced > 0 {
                     output.append(contentsOf: chunk[0..<produced])
                 }
                 keepGoing = (inBuf.pos < inBuf.size) || produced > 0
             }
-            return (output, true)
+            return (output, false)
         }
     }
 
@@ -706,14 +727,29 @@ enum Adapters {
         fileCacheLock.lock()
         decompressCounter += 1
         fileCacheLock.unlock()
-        let (output, ok) = feedZstd(stream, input: compressed)
-        guard ok, let output else {
-            ZSTD_freeDStream(stream)
-            return DshFileResult()
-        }
+        let diag = ProcessInfo.processInfo.environment["TOKEN_MONITOR_DIAG"] != nil
+        let (output, stoppedOnError) = feedZstd(stream, input: compressed, diag: diag, name: file.lastPathComponent)
         let sessionId = file.deletingLastPathComponent().lastPathComponent
         let parsed = parseSessionData(output, sessionId: sessionId)
         let result = DshFileResult(rows: parsed.rows, events: parsed.events)
+        if stoppedOnError {
+            // A content-corrupt frame is the recovery boundary: the parsed
+            // prefix is kept (and memoized), but no streaming state is
+            // retained — the decoder is poisoned at the error and nothing
+            // past the corrupt frame is trusted, so a later append re-parses
+            // from scratch, stopping at the same frame until the file is
+            // rewritten.
+            if diag { NSLog("[dsh] corrupt frame in %@: prefix kept (%d rows)", file.lastPathComponent, parsed.rows.count) }
+            ZSTD_freeDStream(stream)
+            fileCacheLock.lock()
+            // Also drop any stale incremental entry: when this full parse is
+            // the fallback of a failed delta feed, the old entry still
+            // points at the stream that feed already freed.
+            dshIncrementalStates[file.path] = nil
+            parseCache[key] = (stamp, result)
+            fileCacheLock.unlock()
+            return result
+        }
         let state = DshIncrementalState(
             sessionId: sessionId,
             stamp: stamp,
@@ -721,6 +757,7 @@ enum Adapters {
             headFingerprint: headFingerprint(file),
             stream: stream,
             seenSeq: parsed.seenSeq,
+            seedLength: parsed.seedLength,
             fallbackModel: parsed.fallbackModel,
             headerCreatedAt: parsed.headerCreatedAt,
             lastTime: parsed.lastTime,
@@ -759,11 +796,14 @@ enum Adapters {
             return dshFullParseAndInit(file, key: "dsh|\(file.path)", stamp: stamp)
         }
         let diag = ProcessInfo.processInfo.environment["TOKEN_MONITOR_DIAG"] != nil
-        let (output, ok) = feedZstd(stream, input: tail, diag: diag, name: file.lastPathComponent)
+        let (output, stoppedOnError) = feedZstd(stream, input: tail, diag: diag, name: file.lastPathComponent)
         state.compressedOffset += tail.count
         state.stamp = stamp
-        guard ok, let output else {
-            // Decode failure mid-append: restart from scratch.
+        if stoppedOnError {
+            // Corrupt frame in the appended tail: nothing past the first
+            // undecodable frame is trusted, so the partial tail output is
+            // discarded and the whole file is re-parsed from scratch — the
+            // full parse keeps the valid prefix up to the corrupt frame.
             freeDshStream(&state)
             return dshFullParseAndInit(file, key: "dsh|\(file.path)", stamp: stamp)
         }
@@ -785,16 +825,25 @@ enum Adapters {
             guard !trimmed.isEmpty, let lineData = trimmed.data(using: .utf8),
                   let obj = try? JSONSerialization.jsonObject(with: lineData) as? JSON else { continue }
             let seq = obj["seq"] as? Int ?? 0
+            let type = obj["type"] as? String ?? ""
+            // The session record carries `seedLength`: a fork's log is seeded
+            // with a byte-for-byte copy of its parent's events, and that
+            // shared prefix is credited to the parent only. seq is 0-indexed,
+            // so the event AT seq == seedLength is the fork's own first new
+            // event — skip strictly `seq < seedLength`. A session record
+            // without the field clears it again, and a torn/absent header
+            // leaves it nil so no event is ever skipped on a guess.
+            if type == "session" {
+                if let createdAt = obj["createdAt"] { state.headerCreatedAt = UsageCore.timestampMs(createdAt) }
+                state.seedLength = obj["seedLength"] as? Int
+                continue
+            }
+            if let seed = state.seedLength, seq < seed { continue }
             if state.seenSeq.contains(seq) { continue }
             state.seenSeq.insert(seq)
             let time = UsageCore.timestampMs(obj["time"])
             if time > state.lastTime { state.lastTime = time }
-            let type = obj["type"] as? String ?? ""
             let data = obj["data"] as? JSON ?? JSON()
-            if type == "session" {
-                if let createdAt = obj["createdAt"] { state.headerCreatedAt = UsageCore.timestampMs(createdAt) }
-                continue
-            }
             if type == "request/header" || type == "request/context" {
                 let header = data["header"] as? JSON ?? data
                 let config = header["config"] as? JSON ?? header
@@ -880,7 +929,9 @@ enum Adapters {
     /// appending: a retained ZSTD decoder positioned at compressedOffset,
     /// the accumulated parse context and the accumulated rows. Only files
     /// that changed recently hold a state; stable files are memoized and
-    /// their streams freed.
+    /// their streams freed. `seedLength` lives here (like seenSeq) because
+    /// the session record that carries it appears once at the head of the
+    /// file — later delta feeds never see it again.
     struct DshIncrementalState {
         var sessionId: String
         var stamp: (mtime: Date, size: Int)
@@ -888,6 +939,7 @@ enum Adapters {
         var headFingerprint: [UInt8]
         var stream: OpaquePointer?
         var seenSeq: Set<Int>
+        var seedLength: Int?
         var fallbackModel: String
         var headerCreatedAt: Double
         var lastTime: Double
@@ -907,7 +959,8 @@ enum Adapters {
     }
 
     /// Parsed content of one dsh session plus the context an incremental
-    /// delta parse needs to continue (model fallback, timestamps, dedupe).
+    /// delta parse needs to continue (model fallback, timestamps, dedupe,
+    /// fork seed length).
     private struct ParsedDshSession {
         var rows: [UsageCore.UsageRow] = []
         var events = 0
@@ -915,6 +968,7 @@ enum Adapters {
         var headerCreatedAt = 0.0
         var lastTime = 0.0
         var seenSeq: Set<Int> = []
+        var seedLength: Int? = nil
     }
 
     /// Two-pass parse of a fully decompressed session: pass 1 attributes
@@ -931,23 +985,34 @@ enum Adapters {
         var lastTime = 0.0
         var usageEvents: [JSON] = []
         var seenSeq = Set<Int>()
+        // A forked session's log is seeded with a byte-for-byte copy of its
+        // parent's events up to `session.seedLength`; tokscale credits that
+        // shared prefix to the parent only, so it is skipped here too, or a
+        // fork's tokens are counted twice. seq is 0-indexed: the event AT
+        // seq == seedLength is the fork's own first new event. seedLength
+        // stays nil until a session record sets it — a torn header must not
+        // make an otherwise-parseable transcript report zero tokens.
+        var seedLength: Int?
 
         for line in text.split(whereSeparator: \.isNewline) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard !trimmed.isEmpty, let lineData = trimmed.data(using: .utf8),
                   let obj = try? JSONSerialization.jsonObject(with: lineData) as? JSON else { continue }
             let seq = obj["seq"] as? Int ?? 0
+            let type = obj["type"] as? String ?? ""
+
+            if type == "session" {
+                if let createdAt = obj["createdAt"] { headerCreatedAt = UsageCore.timestampMs(createdAt) }
+                seedLength = obj["seedLength"] as? Int
+                continue
+            }
+            if let seed = seedLength, seq < seed { continue }
             if seenSeq.contains(seq) { continue }
             seenSeq.insert(seq)
             let time = UsageCore.timestampMs(obj["time"])
             if time > lastTime { lastTime = time }
-            let type = obj["type"] as? String ?? ""
             let data = obj["data"] as? JSON ?? JSON()
 
-            if type == "session" {
-                if let createdAt = obj["createdAt"] { headerCreatedAt = UsageCore.timestampMs(createdAt) }
-                continue
-            }
             if type == "request/header" || type == "request/context" {
                 let header = data["header"] as? JSON ?? data
                 let config = header["config"] as? JSON ?? header
@@ -986,7 +1051,7 @@ enum Adapters {
         return ParsedDshSession(
             rows: rows, events: usageEvents.count,
             fallbackModel: fallbackModel, headerCreatedAt: headerCreatedAt,
-            lastTime: lastTime, seenSeq: seenSeq
+            lastTime: lastTime, seenSeq: seenSeq, seedLength: seedLength
         )
     }
 
