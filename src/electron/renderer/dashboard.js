@@ -224,6 +224,7 @@ function applyThemeColors(overrides) {
     if (value) root.setProperty(name, value);
     else root.removeProperty(name);
   }
+  dashboardIsLightCache = null; // theme may have flipped the light/dark strategy
 }
 
 function applyVendorColorOverrides(overrides) {
@@ -288,15 +289,41 @@ function populateRangeSelect() {
   });
 }
 
+// Whether the dashboard is currently rendering on a light glass background. The
+// theme flips --glass-rgb (and --overlay-rgb) in applyThemeColors, so the body's
+// composite background is the source of truth for which contrast strategy to use.
+let dashboardIsLightCache = null;
+function dashboardIsLight() {
+  if (dashboardIsLightCache !== null) return dashboardIsLightCache;
+  const bg = getComputedStyle(document.body).backgroundColor || '';
+  const m = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(bg);
+  dashboardIsLightCache = !m ? false : (0.2126 * Number(m[1]) + 0.7152 * Number(m[2]) + 0.0722 * Number(m[3])) > 150;
+  return dashboardIsLightCache;
+}
+
 function displayColor(hex) {
   // Brand colors like cursor/opencode are pure black (#000000) and vanish on the dark
-  // dashboard — lift very dark colors to a visible grey for swatches, bars and dots.
+  // dashboard — lift very dark colors to a visible shade for swatches, bars and dots.
+  // The lift is theme-aware and hue-preserving (channel ratios kept), so dark brands
+  // stay distinguishable instead of collapsing into one identical grey: on a light
+  // dashboard the raw dark brand tone is already readable against the paper track.
   const m = /^#([0-9a-fA-F]{6})$/.exec(String(hex || ''));
   if (!m) return hex || '#6ab4f0';
   const r = parseInt(m[1].slice(0, 2), 16), g = parseInt(m[1].slice(2, 4), 16), b = parseInt(m[1].slice(4, 6), 16);
   const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-  if (lum >= 42) return hex;
-  const lift = (c) => Math.round(c + (205 - c) * 0.62);
+  if (dashboardIsLight()) {
+    // On a light track dark brands are already high-contrast; only tame brands
+    // that would otherwise disappear on near-white (e.g. a brand-yellow).
+    if (lum <= 190) return hex;
+    const dim = (c) => Math.round(c * 0.55);
+    return `rgb(${dim(r)}, ${dim(g)}, ${dim(b)})`;
+  }
+  // Dark track: brighten anything too dark to read, preserving each brand's hue.
+  if (lum >= 90) return hex;
+  const brightest = Math.max(r, g, b);
+  if (brightest === 0) return 'rgb(185, 185, 191)'; // pure black → neutral light grey
+  const scale = 205 / brightest;
+  const lift = (c) => Math.round(Math.min(255, c * scale));
   return `rgb(${lift(r)}, ${lift(g)}, ${lift(b)})`;
 }
 function colorFor(key) {
