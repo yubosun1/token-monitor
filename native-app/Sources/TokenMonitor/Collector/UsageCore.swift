@@ -70,7 +70,25 @@ enum UsageCore {
 
     static func normalizeModelName(_ value: Any?) -> String? {
         let raw = String(describing: value ?? "").trimmingCharacters(in: .whitespaces).lowercased()
-        return raw.isEmpty ? nil : raw
+        return raw.isEmpty ? nil : canonicalModelName(raw)
+    }
+
+    /// Canonical model id for aggregation and display: a leading
+    /// vendor/supplier prefix is stripped so the same model routed through
+    /// different KimiCode suppliers merges into one stat instead of
+    /// splitting (e.g. `kimi-code/k3-256k`, `rightcode/gpt-5.6-luna` and
+    /// `opencode-go/deepseek-v4-flash` all aggregate as their bare model
+    /// id). Only the token after the last `/` is kept; names without a
+    /// slash pass through unchanged. The input is expected to already be
+    /// trimmed + lowercased (callers normalize first); this function is
+    /// defensive about it regardless.
+    static func canonicalModelName(_ raw: String) -> String {
+        var s = raw.trimmingCharacters(in: .whitespaces).lowercased()
+        if let slash = s.lastIndex(of: "/") {
+            let tail = String(s[s.index(after: slash)...]).trimmingCharacters(in: .whitespaces)
+            if !tail.isEmpty { s = tail }
+        }
+        return s
     }
 
     static func normalizeProviderName(_ value: Any?) -> String? {

@@ -201,7 +201,7 @@ enum Adapters {
     /// estimatedRowCost port: null (→ no cost) when a used component's rate
     /// is missing, never a silent undercount.
     static func estimatedRowCost(row: UsageCore.UsageRow, pricingByModel: [String: TokscalePricing]) -> Double? {
-        let key = (row.model ?? "").trimmingCharacters(in: .whitespaces).lowercased()
+        let key = UsageCore.canonicalModelName((row.model ?? "").trimmingCharacters(in: .whitespaces).lowercased())
         guard let pricing = pricingByModel[key]?.pricing else { return nil }
         let components: [(Double, Double?)] = [
             (row.input, pricing.inputCostPerToken),
@@ -247,8 +247,8 @@ enum Adapters {
         var map: [String: TokscalePricing] = [:]
         for row in rows {
             guard let model = row.model else { continue }
-            let key = model.trimmingCharacters(in: .whitespaces).lowercased()
-            if map[key] == nil, let pricing = TokscaleRunner.shared.pricing(for: model) {
+            let key = UsageCore.canonicalModelName(model.trimmingCharacters(in: .whitespaces).lowercased())
+            if map[key] == nil, let pricing = TokscaleRunner.shared.pricing(for: key) {
                 map[key] = pricing
             }
         }
@@ -302,7 +302,7 @@ enum Adapters {
             // Row createdAt lives in startedAt for adapters.
             let date = localDateKey(row.startedAt, timeZone: timeZone)
             guard !date.isEmpty else { continue }
-            let modelId = (row.model ?? "unknown").trimmingCharacters(in: .whitespaces).lowercased()
+            let modelId = UsageCore.canonicalModelName((row.model ?? "unknown").trimmingCharacters(in: .whitespaces).lowercased())
             let cost = estimatedRowCost(row: row, pricingByModel: pricingByModel)
             // Estimated session active time: wall-clock span of the row, clamped
             // to non-negative and capped at 8h so long-lived sessions don't

@@ -353,6 +353,35 @@ func runChecks() {
         checkEqual(after.count, 1, "DST: post-switch row included in today")
         checkEqual(Adapters.localDateKey(row.startedAt, timeZone: tz), "2026-03-08", "DST: date key across switch")
     }
+
+    // Model-name canonicalization (vendor-prefix strip): KimiCode sessions
+    // record third-party supplier routes as `supplier/model` (e.g.
+    // `rightcode/gpt-5.6-luna`, `opencode-go/deepseek-v4-flash`), so the
+    // same base model would otherwise split into two stats.
+    do {
+        checkEqual(UsageCore.canonicalModelName("rightcode/gpt-5.6-luna"), "gpt-5.6-luna", "canonical strips rightcode prefix")
+        checkEqual(UsageCore.canonicalModelName("opencode-go/deepseek-v4-flash"), "deepseek-v4-flash", "canonical strips opencode-go prefix")
+        checkEqual(UsageCore.canonicalModelName("kimi-code/k3-256k"), "k3-256k", "canonical strips kimi-code prefix")
+        checkEqual(UsageCore.canonicalModelName("RightCode/gpt-5.6-luna"), "gpt-5.6-luna", "canonical lowercases prefix")
+        checkEqual(UsageCore.canonicalModelName("deepseek-v4-flash"), "deepseek-v4-flash", "canonical leaves bare names untouched")
+        checkEqual(UsageCore.normalizeModelName("opencode-go/deepseek-v4-flash"), "deepseek-v4-flash", "normalizeModelName canonicalizes")
+        checkEqual(UsageCore.normalizeModelName(nil), nil, "normalizeModelName nil stays nil")
+
+        // Aggregation merges prefixed + bare usage of the same model.
+        func modelRow(_ model: String, _ input: Double) -> UsageCore.UsageRow {
+            stateRow(client: "proma", session: "s-prefix", model: model, input: input, output: 0, startedAt: "2026-08-15T10:00:00+08:00")
+        }
+        let rows = [modelRow("rightcode/gpt-5.6-luna", 100), modelRow("gpt-5.6-luna", 250)]
+        let period = UsageCore.extractPeriod(entries: rows)
+        let models = period["models"] as! [String: Any]
+        checkEqual(models.count, 1, "prefixed + bare merge to one model")
+        checkEqual(UsageCore.intValue(models["gpt-5.6-luna"]), 350, "merged model token total")
+        check(models["rightcode/gpt-5.6-luna"] == nil, "no prefixed key survives")
+
+        // History contributions carry the canonical model id too.
+        let contributions = Adapters.historyContributions(rows: rows, client: "proma", pricingByModel: [:], timeZone: FixtureHarness.timeZone)
+        check(contributions.allSatisfy { $0.modelId == "gpt-5.6-luna" }, "history modelId canonicalized")
+    }
 }
 
     // File fingerprint behavior (PLAN.md Phase 3 test matrix): no change,

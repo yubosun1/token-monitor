@@ -950,7 +950,7 @@ final class Collector {
         var seen = Set<String>()
         var out: [String] = []
         for row in rows {
-            let key = (row.model ?? "").trimmingCharacters(in: .whitespaces).lowercased()
+            let key = UsageCore.canonicalModelName((row.model ?? "").trimmingCharacters(in: .whitespaces).lowercased())
             guard !key.isEmpty, seen.insert(key).inserted else { continue }
             out.append(key)
         }
