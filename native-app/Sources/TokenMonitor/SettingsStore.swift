@@ -37,7 +37,7 @@ final class SettingsStore {
     /// from the older native configuration.
     private func migrateLegacyDefaultsIfNeeded() {
         let version = values["settingsSchemaVersion"] as? Int ?? 0
-        guard version < 3 else { return }
+        guard version < 4 else { return }
         if version < 1, (values["heatmapMetric"] as? String) == "cost" {
             values["heatmapMetric"] = "tokens"
         }
@@ -60,7 +60,12 @@ final class SettingsStore {
                 values["customModelPricing"] = list
             }
         }
-        values["settingsSchemaVersion"] = 3
+        if version < 4 {
+            for key in ["clients", "clientDisplayOrder"] {
+                values[key] = Self.appendingCSVValue(values[key] as? String ?? "", value: "antigravity")
+            }
+        }
+        values["settingsSchemaVersion"] = 4
         persist(values)
     }
 
@@ -99,8 +104,8 @@ final class SettingsStore {
             // happens at most once per window instead of on every tick.
             "adapterRecheckMs": 30000,
             "collectionIntervalMs": 300000,
-            "clients": "claude,codex,opencode,kimi,workbuddy,proma,hanako,dsh",
-            "clientDisplayOrder": "claude,codex,opencode,kimi,proma,workbuddy,hanako,dsh",
+            "clients": "claude,codex,opencode,kimi,antigravity,workbuddy,proma,hanako,dsh",
+            "clientDisplayOrder": "claude,codex,opencode,kimi,antigravity,proma,workbuddy,hanako,dsh",
             "hiddenClients": "",
             "pinnedClients": "",
             "historyEnabled": true,

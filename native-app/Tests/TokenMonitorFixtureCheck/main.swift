@@ -525,6 +525,7 @@ final class FakeCollectorWorld {
     var tokscaleGraphSpawns = 0
     var tokscalePricingRefreshes = 0
     var tokscaleFingerprintChecks = 0
+    var tokscaleAntigravitySyncCalls = 0
     var adapterFingerprintChecks: [String: Int] = [:]
     var customPricingSyncCalls = 0
     /// When non-nil, the first adapter read blocks until this is signalled.
@@ -560,6 +561,10 @@ final class FakeCollectorWorld {
             tokscaleFingerprint: { _ in
                 self.tokscaleFingerprintChecks += 1
                 return SourceScanner.Fingerprint(files: [], signature: self.tokscaleFingerprint)
+            },
+            tokscaleAntigravitySync: {
+                self.tokscaleAntigravitySyncCalls += 1
+                return true
             },
             tokscalePricingRefresh: { _ in
                 self.tokscalePricingRefreshes += 1
@@ -1801,6 +1806,92 @@ func runSingleInstanceTests() {
     }
 }
 
+// MARK: - Antigravity tests
+
+func runAntigravityTests() {
+    // A1: Client name normalization
+    checkEqual(UsageCore.normalizeClientName("antigravity"), "antigravity", "A1 normalize antigravity")
+    checkEqual(UsageCore.normalizeClientName("antigravity-cli"), "antigravity", "A1 normalize antigravity-cli")
+    checkEqual(UsageCore.normalizeClientName("Google Antigravity"), "antigravity", "A1 normalize Google Antigravity")
+    checkEqual(UsageCore.normalizeClientName("ANTIGRAVITY"), "antigravity", "A1 normalize uppercase")
+
+    // A2: Tokscale client filter alias expansion
+    let expanded = TokscaleRunner.expandClientFilter(["claude", "antigravity", "codex"])
+    checkEqual(expanded, ["claude", "antigravity", "antigravity-cli", "codex"], "A2 expand client filter includes antigravity-cli")
+
+    let expandedNoAntigravity = TokscaleRunner.expandClientFilter(["claude", "codex"])
+    checkEqual(expandedNoAntigravity, ["claude", "codex"], "A2 expand without antigravity leaves list unchanged")
+
+    // A3: SourceScanner roots for antigravity
+    let adapterRoots = SourceScanner.adapterRoots("antigravity")
+    check(adapterRoots.contains(where: { $0.contains(".config/tokscale/antigravity-cache") }), "A3 adapter roots include antigravity-cache")
+    check(adapterRoots.contains(where: { $0.contains(".gemini/antigravity") }), "A3 adapter roots include .gemini/antigravity")
+
+    // A4: Collector invokes antigravity sync when antigravity is enabled
+    do {
+        let fake = FakeCollectorWorld(now: FixtureHarness.now, settings: ["clients": "claude,antigravity"])
+        fake.rowsByClient["antigravity"] = [
+            UsageCore.UsageRow(
+                client: "antigravity",
+                sessionId: "session-1",
+                model: "gemini-3.7-flash",
+                provider: "google",
+                input: 1000,
+                output: 200,
+                cacheRead: 500,
+                cacheWrite: 0,
+                reasoning: 50,
+                messageCount: 1,
+                cost: 0.05,
+                startedAt: FixtureHarness.now.timeIntervalSince1970 * 1000,
+                lastUsedAt: FixtureHarness.now.timeIntervalSince1970 * 1000,
+                projectId: "",
+                projectLabel: "",
+                performance: nil
+            )
+        ]
+        let (collector, queue) = fake.makeCollector()
+        collector.requestRefresh(.full, reason: .startup)
+        queue.sync {}
+        checkEqual(fake.tokscaleAntigravitySyncCalls, 1, "A4 tokscaleAntigravitySync called on full startup tick")
+        checkEqual(fake.rawReads["antigravity"], 1, "A4 adapterRows called for antigravity")
+    }
+
+    // A5: History attribution folds antigravity-cli into antigravity
+    do {
+        let jsonStr = """
+        {
+            "contributions": [
+                {
+                    "date": "2026-08-15",
+                    "totals": { "tokens": 100, "cost": 0.5, "messages": 2 },
+                    "clients": [
+                        {
+                            "client": "antigravity-cli",
+                            "modelId": "gemini-3-pro",
+                            "providerId": "google",
+                            "tokens": { "input": 50, "output": 50, "cacheRead": 0, "cacheWrite": 0 },
+                            "cost": 0.5,
+                            "messages": 2
+                        }
+                    ],
+                    "activeTimeMs": 12000
+                }
+            ]
+        }
+        """
+        guard let data = jsonStr.data(using: .utf8),
+              let graph = try? JSONDecoder().decode(TokscaleGraph.self, from: data) else {
+            check(false, "A5 graph decoding failed")
+            return
+        }
+        let days = HistoryCore.parseTokscaleGraph(graph)
+        checkEqual(days.count, 1, "A5 graph parsed 1 day")
+        check(days.first?.perClient["antigravity"] != nil, "A5 perClient attributed to antigravity")
+        checkEqual(days.first?.perClient["antigravity"]?.tokens, 100, "A5 perClient tokens correct")
+    }
+}
+
 runChecks()
 runKimiTests()
 runCollectorStateTests()
@@ -1810,5 +1901,6 @@ runDshCorruptFrameTests()
 runVisibilityTests()
 runIdleTeardownTests()
 runSingleInstanceTests()
+runAntigravityTests()
 print("fixture checks: \(checkCount) checks, \(failureCount) failures")
 if failureCount > 0 { exit(1) }

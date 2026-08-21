@@ -28,7 +28,7 @@ grep -ho 'src="../../shared/[^"]*"' "$WWW/index.html" "$WWW/dashboard.html" \
 # LIMIT_PROVIDERS and the two tray variants in renderer/app.js.
 for icon in \
   claude codex opencode workbuddy proma hanako hanako-mask dsh deepseek \
-  cursor gemini xai meta mistral qwen kimi zai cohere xiaomi minimax doubao hunyuan \
+  cursor gemini antigravity xai meta mistral qwen kimi zai cohere xiaomi minimax doubao hunyuan \
   tray-claude tray-codex tray-token-monitor; do
   cp "$ROOT/assets/icons/$icon.svg" "$WWW/icons/$icon.svg" 2>/dev/null \
     || cp "$ROOT/assets/icons/$icon.png" "$WWW/icons/$icon.png"

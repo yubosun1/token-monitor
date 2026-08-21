@@ -508,6 +508,100 @@ enum Adapters {
         return result
     }
 
+    // MARK: - Antigravity (~/.config/tokscale/antigravity-cache/sessions/*.jsonl)
+
+    static let antigravityCacheRoot = NSHomeDirectory() + "/.config/tokscale/antigravity-cache"
+    static let antigravitySessionsRoot = NSHomeDirectory() + "/.config/tokscale/antigravity-cache/sessions"
+
+    static func collectAntigravityRows() -> [UsageCore.UsageRow] {
+        let sourceId = sourceNamespace(antigravitySessionsRoot)
+        let sessionTimestamps = loadAntigravityManifestTimestamps()
+        var rows: [UsageCore.UsageRow] = []
+        for file in jsonlFiles(root: antigravitySessionsRoot, recursive: false, client: "antigravity") {
+            rows.append(contentsOf: antigravityFileRows(file, sourceId: sourceId, sessionTimestamps: sessionTimestamps))
+        }
+        return sortRows(rows)
+    }
+
+    private static func loadAntigravityManifestTimestamps() -> [String: Double] {
+        let manifestUrl = URL(fileURLWithPath: antigravityCacheRoot + "/manifest.json")
+        guard let data = try? Data(contentsOf: manifestUrl),
+              let json = try? JSONSerialization.jsonObject(with: data) as? JSON,
+              let sessions = json["sessions"] as? [JSON] else { return [:] }
+        var map: [String: Double] = [:]
+        for s in sessions {
+            guard let sid = s["sessionId"] as? String else { continue }
+            if let ms = s["lastModifiedMs"] as? Double {
+                map[sid] = ms
+            } else if let msInt = s["lastModifiedMs"] as? Int64 {
+                map[sid] = Double(msInt)
+            } else if let msInt = s["lastModifiedMs"] as? Int {
+                map[sid] = Double(msInt)
+            }
+        }
+        return map
+    }
+
+    private static func antigravityFileRows(_ file: URL, sourceId: String, sessionTimestamps: [String: Double]) -> [UsageCore.UsageRow] {
+        if let stamp = fileStamp(file) {
+            return cachedValue("antigravity|\(file.path)", stamp: stamp) {
+                parseAntigravityFile(file, sourceId: sourceId, sessionTimestamps: sessionTimestamps)
+            }
+        }
+        return parseAntigravityFile(file, sourceId: sourceId, sessionTimestamps: sessionTimestamps)
+    }
+
+    private static func parseAntigravityFile(_ file: URL, sourceId: String, sessionTimestamps: [String: Double]) -> [UsageCore.UsageRow] {
+        guard let data = try? Data(contentsOf: file) else { return [] }
+        let fallbackSessionId = file.deletingPathExtension().lastPathComponent
+        let defaultTime: Double = {
+            if let stamp = fileStamp(file) {
+                return stamp.mtime.timeIntervalSince1970 * 1000.0
+            }
+            return Date().timeIntervalSince1970 * 1000.0
+        }()
+
+        var rows: [UsageCore.UsageRow] = []
+        for obj in parseJsonlLines(data) {
+            guard (obj["type"] as? String) == "usage" else { continue }
+            let sessionId = (obj["sessionId"] as? String) ?? (obj["session_id"] as? String) ?? fallbackSessionId
+            let modelId = (obj["modelId"] as? String) ?? (obj["model_id"] as? String) ?? (obj["model"] as? String) ?? "gemini-3.7-flash"
+            let input = UsageCore.doubleValue(obj["input"] ?? obj["inputTokens"] ?? obj["input_tokens"])
+            let output = UsageCore.doubleValue(obj["output"] ?? obj["outputTokens"] ?? obj["output_tokens"])
+            let cacheRead = UsageCore.doubleValue(obj["cacheRead"] ?? obj["cacheReadTokens"] ?? obj["cache_read"] ?? obj["cache_read_tokens"])
+            let cacheWrite = UsageCore.doubleValue(obj["cacheWrite"] ?? obj["cacheWriteTokens"] ?? obj["cache_write"] ?? obj["cache_write_tokens"])
+            let reasoning = UsageCore.doubleValue(obj["reasoning"] ?? obj["reasoningTokens"] ?? obj["reasoning_tokens"])
+
+            let time: Double
+            if let ts = obj["timestamp"], !(ts is NSNull) {
+                let parsed = UsageCore.timestampMs(ts)
+                time = parsed > 0 ? parsed : (sessionTimestamps[sessionId] ?? defaultTime)
+            } else {
+                time = sessionTimestamps[sessionId] ?? defaultTime
+            }
+
+            rows.append(UsageCore.UsageRow(
+                client: "antigravity",
+                sessionId: "\(sessionId)@\(sourceId)",
+                model: modelId,
+                provider: "google",
+                input: input,
+                output: output,
+                cacheRead: cacheRead,
+                cacheWrite: cacheWrite,
+                reasoning: reasoning,
+                messageCount: 1,
+                cost: 0,
+                startedAt: time,
+                lastUsedAt: time,
+                projectId: "",
+                projectLabel: "",
+                performance: nil
+            ))
+        }
+        return rows
+    }
+
     // MARK: - DeepSeek Harness (~/.dsh/sessions/<project>/session-*/session.jsonl.zstd)
 
     static let dshRoot = NSHomeDirectory() + "/.dsh/sessions"

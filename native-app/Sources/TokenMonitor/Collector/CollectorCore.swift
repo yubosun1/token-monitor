@@ -37,6 +37,7 @@ struct CollectorEnvironment {
     var adapterRows: (String) -> [UsageCore.UsageRow]
     var pricingLookup: (String, PricingPolicy) -> TokscalePricing?
     var tokscaleFingerprint: ([String]) -> SourceScanner.Fingerprint
+    var tokscaleAntigravitySync: () -> Bool
     var tokscalePricingRefresh: ([String]) -> Bool
     var tokscalePeriods: ([String], [String: Any], Date) -> [String: [String: Any]]?
     var tokscaleGraph: ([String]) -> (days: [HistoryCore.Day], activeTimeMs: Double?)?
@@ -57,6 +58,7 @@ struct CollectorEnvironment {
                 case "proma": return Adapters.collectPromaRows()
                 case "hanako": return Adapters.collectHanakoRows()
                 case "dsh": return Adapters.collectDshRows()
+                case "antigravity": return Adapters.collectAntigravityRows()
                 default: return []
                 }
             },
@@ -65,6 +67,10 @@ struct CollectorEnvironment {
             },
             tokscaleFingerprint: { clients in
                 SourceScanner.fingerprint(client: "tokscale", roots: clients.flatMap(SourceScanner.tokscaleRoots))
+            },
+            tokscaleAntigravitySync: {
+                guard TokscaleRunner.antigravityDataPresent() else { return true }
+                return TokscaleRunner.shared.syncAntigravity()
             },
             tokscalePricingRefresh: { clients in
                 TokscaleRunner.shared.refreshUsagePricing(clients: clients)
@@ -169,7 +175,7 @@ final class Collector {
     private var graphRetryAfter = Date.distantPast
 
     private let tokscaleClientIds = Set(["claude", "codex", "opencode", "kimi", "workbuddy"])
-    private let adapterClientIds = ["proma", "hanako", "dsh"]
+    private let adapterClientIds = ["proma", "hanako", "dsh", "antigravity"]
     private var refreshIdCounter = 0
 
     init(environment: CollectorEnvironment, workerQueue: DispatchQueue) {
@@ -533,6 +539,12 @@ final class Collector {
         // A model can appear in more than one adapter. A manual refresh must
         // still perform at most one network lookup for that shared model.
         var pricingLookedUpThisTick = Set<String>()
+        if clients.contains("antigravity") {
+            let syncSpan = PerfDiag.span("tokscale-antigravity-sync")
+            let synced = environment.tokscaleAntigravitySync()
+            PerfDiag.log("antigravity sync " + (synced ? "completed" : "failed"))
+            syncSpan.end()
+        }
         for client in adapterClientIds where clients.contains(client) {
             let span = PerfDiag.span("source-" + client)
             let fp = environment.adapterFingerprint(client)
@@ -1216,6 +1228,12 @@ final class Collector {
         case "proma": candidates = ["\(home)/.proma/agent-sessions", "\(home)/.proma"]
         case "hanako": candidates = ["\(home)/.hanako/agents/hanako/sessions", "\(home)/.hanako"]
         case "dsh": candidates = ["\(home)/.dsh/sessions", "\(home)/.dsh"]
+        case "antigravity": candidates = [
+            "\(home)/.gemini/antigravity",
+            "\(home)/.gemini/antigravity-ide",
+            "\(home)/.gemini/antigravity-cli/conversations",
+            "\(home)/.config/tokscale/antigravity-cache"
+        ]
         default: candidates = []
         }
         return candidates.contains { FileManager.default.fileExists(atPath: $0) }

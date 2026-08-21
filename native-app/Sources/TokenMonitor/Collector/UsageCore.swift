@@ -60,7 +60,7 @@ enum UsageCore {
     static func normalizeClientName(_ value: Any?) -> String? {
         let raw = String(describing: value ?? "").trimmingCharacters(in: .whitespaces).lowercased()
         if raw.isEmpty { return nil }
-        for id in ["claude", "codex", "opencode", "workbuddy", "proma", "hanako", "dsh", "hermes", "gemini", "cursor"] {
+        for id in ["claude", "codex", "opencode", "workbuddy", "proma", "hanako", "dsh", "hermes", "gemini", "cursor", "antigravity"] {
             if raw.contains(id) { return id }
         }
         let cleaned = raw.replacingOccurrences(of: "[^a-z0-9_-]", with: "-", options: .regularExpression)

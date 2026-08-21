@@ -151,9 +151,60 @@ final class TokscaleRunner {
         return Result(stdout: stdout, stderr: stderr, exitCode: process.terminationStatus)
     }
 
+    private static let clientAliases: [String: [String]] = [
+        "antigravity": ["antigravity-cli"]
+    ]
+
+    /// Expands umbrella client names to include their sub-source IDs that
+    /// tokscale tracks under separate client filters (e.g. antigravity-cli).
+    static func expandClientFilter(_ clients: [String]) -> [String] {
+        var ordered: [String] = []
+        var seen = Set<String>()
+        for client in clients {
+            let trimmed = client.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty else { continue }
+            if seen.insert(trimmed).inserted {
+                ordered.append(trimmed)
+            }
+            for alias in clientAliases[trimmed] ?? [] {
+                if seen.insert(alias).inserted {
+                    ordered.append(alias)
+                }
+            }
+        }
+        return ordered
+    }
+
+    /// Whether Antigravity IDE native session roots are present on disk.
+    static func antigravityDataPresent(home: String = NSHomeDirectory()) -> Bool {
+        let roots = ["antigravity", "antigravity-ide", "antigravity-backup"].map { home + "/.gemini/" + $0 }
+        return roots.contains { FileManager.default.fileExists(atPath: $0) }
+    }
+
+    /// Runs `tokscale antigravity sync` to synchronize language server sessions.
+    @discardableResult
+    func syncAntigravity(home: String? = nil, timeout: TimeInterval = 30) -> Bool {
+        var args = ["antigravity", "sync"]
+        if let home, !home.isEmpty {
+            args.append(contentsOf: ["--home", home])
+        }
+        do {
+            let result = try run(args, timeout: timeout)
+            if result.exitCode != 0 {
+                NSLog("[antigravity] sync exited %d: %@", result.exitCode, result.stderr)
+                return false
+            }
+            return true
+        } catch {
+            NSLog("[antigravity] sync failed: %@", String(describing: error))
+            return false
+        }
+    }
+
     func usage(clients: [String], period: String, allTimeSince: String? = nil) throws -> [TokscaleEntry] {
-        guard !clients.isEmpty else { return [] }
-        var args = ["--json", "--client", clients.joined(separator: ","), "--group-by", "client,session,model"]
+        let expanded = Self.expandClientFilter(clients)
+        guard !expanded.isEmpty else { return [] }
+        var args = ["--json", "--client", expanded.joined(separator: ","), "--group-by", "client,session,model"]
         switch period {
         case "today": args.append("--today")
         case "month": args.append("--month")
@@ -173,8 +224,9 @@ final class TokscaleRunner {
     }
 
     func graph(clients: [String]) throws -> TokscaleGraph {
-        guard !clients.isEmpty else { return TokscaleGraph(meta: nil, summary: nil, timeMetrics: nil, contributions: []) }
-        let result = try run(["graph", "--client", clients.joined(separator: ","), "--no-spinner"], pricingCacheOnly: true)
+        let expanded = Self.expandClientFilter(clients)
+        guard !expanded.isEmpty else { return TokscaleGraph(meta: nil, summary: nil, timeMetrics: nil, contributions: []) }
+        let result = try run(["graph", "--client", expanded.joined(separator: ","), "--no-spinner"], pricingCacheOnly: true)
         guard result.exitCode == 0 else {
             throw CollectorError.tokscaleFailed("graph exit \(result.exitCode)")
         }
@@ -227,9 +279,10 @@ final class TokscaleRunner {
     /// period and graph scans then use that cache without touching the network.
     @discardableResult
     func refreshUsagePricing(clients: [String]) -> Bool {
-        guard !clients.isEmpty else { return true }
+        let expanded = Self.expandClientFilter(clients)
+        guard !expanded.isEmpty else { return true }
         let args = [
-            "--json", "--client", clients.joined(separator: ","),
+            "--json", "--client", expanded.joined(separator: ","),
             "--group-by", "client,model", "--today", "--no-spinner"
         ]
         do {

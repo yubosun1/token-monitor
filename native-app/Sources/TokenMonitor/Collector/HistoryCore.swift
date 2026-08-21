@@ -24,7 +24,7 @@ enum HistoryCore {
             var day = Day(date: date)
             day.activeTimeMs = row.activeTimeMs ?? 0
             for client in row.clients ?? [] {
-                let clientId = client.client ?? "unknown"
+                let clientId = UsageCore.normalizeClientName(client.client) ?? client.client ?? "unknown"
                 let model = UsageCore.canonicalModelName(client.modelId ?? "unknown")
                 let breakdown = client.tokens ?? TokscaleGraph.Breakdown(input: nil, output: nil, cacheRead: nil, cacheWrite: nil, reasoning: nil)
                 let tokens = (breakdown.input ?? 0) + (breakdown.output ?? 0)

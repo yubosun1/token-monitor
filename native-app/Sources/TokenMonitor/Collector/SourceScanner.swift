@@ -34,6 +34,12 @@ enum SourceScanner {
             home + "/.hanako/agents/hanako/activity"
         ]
         case "dsh": return [home + "/.dsh/sessions"]
+        case "antigravity": return [
+            home + "/.config/tokscale/antigravity-cache",
+            home + "/.gemini/antigravity",
+            home + "/.gemini/antigravity-ide",
+            home + "/.gemini/antigravity-cli/conversations"
+        ]
         default: return []
         }
     }
@@ -56,6 +62,15 @@ enum SourceScanner {
             roots = [home + "/.workbuddy/projects", home + "/.workbuddy/sessions"]
         case "kimi":
             roots = [home + "/.kimi/sessions", kimiCodeHome() + "/sessions"]
+        case "antigravity":
+            roots = [
+                home + "/.gemini/antigravity",
+                home + "/.gemini/antigravity-ide",
+                home + "/.gemini/antigravity-backup",
+                home + "/.gemini/antigravity-cli/conversations",
+                home + "/.config/tokscale/antigravity-cache",
+                home + "/Library/Application Support/tokscale/antigravity-cache"
+            ]
         default:
             roots = []
         }
