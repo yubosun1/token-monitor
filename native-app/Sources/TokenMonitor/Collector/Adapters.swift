@@ -427,12 +427,27 @@ enum Adapters {
         return row
     }
 
-    // MARK: - Hanako (~/.hanako/agents/hanako/{sessions,activity}/**/*.jsonl)
+    // MARK: - Hanako (~/.hanako/agents/*/{sessions,activity}/**/*.jsonl)
 
-    static let hanakoRoots = [
-        NSHomeDirectory() + "/.hanako/agents/hanako/sessions",
-        NSHomeDirectory() + "/.hanako/agents/hanako/activity"
-    ]
+    static var hanakoRoots: [String] {
+        let home = NSHomeDirectory()
+        let agentsBase = home + "/.hanako/agents"
+        var agentNames = Set(["hanako", "ming", "butter"])
+        if let contents = try? FileManager.default.contentsOfDirectory(atPath: agentsBase) {
+            for item in contents where !item.hasPrefix(".") {
+                var isDir: ObjCBool = false
+                if FileManager.default.fileExists(atPath: "\(agentsBase)/\(item)", isDirectory: &isDir), isDir.boolValue {
+                    agentNames.insert(item)
+                }
+            }
+        }
+        var roots: [String] = []
+        for agent in agentNames.sorted() {
+            roots.append("\(agentsBase)/\(agent)/sessions")
+            roots.append("\(agentsBase)/\(agent)/activity")
+        }
+        return roots
+    }
 
     private struct HanakoFileResult {
         var rows: [UsageCore.UsageRow] = []
@@ -475,6 +490,11 @@ enum Adapters {
         guard let data = try? Data(contentsOf: file) else { return result }
         let sessionId = "\(file.deletingPathExtension().lastPathComponent)@\(sourceId)"
         var seenInFile = Set<String>()
+        var agentName = ""
+        let parts = file.pathComponents
+        if let idx = parts.firstIndex(of: "agents"), idx + 1 < parts.count {
+            agentName = parts[idx + 1]
+        }
         for obj in parseJsonlLines(data) {
             guard let msg = obj["message"] as? JSON, let u = msg["usage"] as? JSON else { continue }
             let messageId = (obj["id"] as? String) ?? ((msg["id"] as? String).map { String($0) })
@@ -501,8 +521,8 @@ enum Adapters {
                 cost: 0,
                 startedAt: createdAt,
                 lastUsedAt: createdAt,
-                projectId: "",
-                projectLabel: "",
+                projectId: agentName,
+                projectLabel: agentName,
                 performance: nil
             ))
             result.messageIds.append(messageId ?? "")

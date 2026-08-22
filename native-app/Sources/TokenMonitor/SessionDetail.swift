@@ -692,7 +692,7 @@ enum SessionDetailCore {
             return nil
         case "hanako":
             let name = adapterFileName(id)
-            for root in ["\(home)/.hanako/agents/hanako/sessions", "\(home)/.hanako/agents/hanako/activity"] {
+            for root in Adapters.hanakoRoots {
                 if let path = findSessionFile(root: root, sessionId: name) { return path }
             }
             return nil

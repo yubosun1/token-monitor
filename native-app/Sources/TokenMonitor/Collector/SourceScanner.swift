@@ -29,10 +29,10 @@ enum SourceScanner {
         let home = NSHomeDirectory()
         switch client {
         case "proma": return [home + "/.proma/agent-sessions"]
-        case "hanako": return [
-            home + "/.hanako/agents/hanako/sessions",
-            home + "/.hanako/agents/hanako/activity"
-        ]
+        case "hanako":
+            var roots = [home + "/.hanako/agents", home + "/.hanako"]
+            roots.append(contentsOf: Adapters.hanakoRoots)
+            return Array(Set(roots)).sorted()
         case "dsh": return [home + "/.dsh/sessions"]
         case "antigravity": return [
             home + "/.config/tokscale/antigravity-cache",

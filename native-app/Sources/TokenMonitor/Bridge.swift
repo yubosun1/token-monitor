@@ -413,7 +413,11 @@ final class BridgeCore {
         case "proma":
             return [("proma-sessions", "\(home)/.proma/agent-sessions")]
         case "hanako":
-            return [("hanako-sessions", "\(home)/.hanako/agents/hanako/sessions"), ("hanako-activity", "\(home)/.hanako/agents/hanako/activity")]
+            return Adapters.hanakoRoots.map { root in
+                let suffix = root.replacingOccurrences(of: "\(home)/.hanako/agents/", with: "")
+                    .replacingOccurrences(of: "/", with: "-")
+                return ("hanako-\(suffix)", root)
+            }
         case "dsh":
             return [("dsh-sessions", "\(home)/.dsh/sessions")]
         default:

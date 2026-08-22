@@ -1248,7 +1248,7 @@ final class Collector {
         ]
         case "workbuddy": candidates = ["\(home)/.workbuddy"]
         case "proma": candidates = ["\(home)/.proma/agent-sessions", "\(home)/.proma"]
-        case "hanako": candidates = ["\(home)/.hanako/agents/hanako/sessions", "\(home)/.hanako"]
+        case "hanako": candidates = ["\(home)/.hanako/agents", "\(home)/.hanako/agents/hanako/sessions", "\(home)/.hanako"]
         case "dsh": candidates = ["\(home)/.dsh/sessions", "\(home)/.dsh"]
         case "antigravity": candidates = [
             "\(home)/.gemini/antigravity",
