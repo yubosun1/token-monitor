@@ -734,13 +734,14 @@ final class DashboardWindowController: GlassWindowController {
             panel.isFloatingPanel = false
             panel.level = .normal
             panel.collectionBehavior = [.canJoinAllSpaces]
-            panel.orderFront(nil)
         case "floating":
             fallthrough
         default:
             panel.isFloatingPanel = true
             panel.level = .floating
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        }
+        if panel.isVisible {
             panel.orderFront(nil)
         }
     }
@@ -809,10 +810,11 @@ final class DashboardViewWindowController: GlassWindowController {
         if pinned {
             window.level = .floating
             window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-            window.orderFront(nil)
         } else {
             window.level = .normal
             window.collectionBehavior = []
+        }
+        if window.isVisible {
             window.orderFront(nil)
         }
     }

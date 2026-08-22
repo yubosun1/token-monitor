@@ -1304,7 +1304,10 @@ function sessionRowsForPeriod(period) {
     archivedLabel: t('session.archived'),
     nativeSessions: state.stats?.nativeSessions?.[state.period] || {}
   });
-  if (rows.length > 0) return rows.sort((a, b) => b.sortTime - a.sortTime || b.value - a.value || b.cost - a.cost || a.name.localeCompare(b.name));
+  if (rows.length > 0) {
+    const sorted = rows.sort((a, b) => b.sortTime - a.sortTime || b.value - a.value || b.cost - a.cost || a.name.localeCompare(b.name));
+    return sorted.slice(0, 50);
+  }
   if (Number(period?.totalTokens || 0) === 0) return [];
   return modelRowsForPeriod(period);
 }
