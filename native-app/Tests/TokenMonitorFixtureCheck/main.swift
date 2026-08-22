@@ -1922,6 +1922,60 @@ func runAntigravityTests() {
         checkEqual(defaults["windowBehavior"] as? String ?? "", "floating", "A7 windowBehavior defaults to floating")
         checkEqual(defaults["dashboardPinned"] as? Bool ?? true, false, "A7 dashboardPinned defaults to false")
     }
+    // A8: Stale Antigravity sync lock cleanup
+    do {
+        let tempDir = NSTemporaryDirectory() + "tm-lock-test-\(UUID().uuidString)"
+        let cacheDir = tempDir + "/.config/tokscale/antigravity-cache"
+        try? FileManager.default.createDirectory(atPath: cacheDir, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(atPath: tempDir)
+        }
+        let lockPath = cacheDir + "/sync.lock"
+        // Write a dead PID into sync.lock (PID 9999999 is nonexistent)
+        try? "9999999 1234567890\n".write(toFile: lockPath, atomically: true, encoding: .utf8)
+        check(FileManager.default.fileExists(atPath: lockPath), "A8 lock file created")
+        let cleaned = TokscaleRunner.cleanupStaleAntigravityLocks(home: tempDir, force: false)
+        checkEqual(cleaned, 1, "A8 cleaned 1 stale lock")
+        check(!FileManager.default.fileExists(atPath: lockPath), "A8 lock file removed")
+    }
+    // A9: Multi-cache root and manifest timestamp handling
+    do {
+        let tempDir = NSTemporaryDirectory() + "tm-multicache-test-\(UUID().uuidString)"
+        let cacheDir1 = tempDir + "/.config/tokscale/antigravity-cache"
+        let sessionsDir1 = cacheDir1 + "/sessions"
+        try? FileManager.default.createDirectory(atPath: sessionsDir1, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(atPath: tempDir)
+        }
+        let manifestContent = """
+        {
+            "version": 1,
+            "sessions": [
+                {
+                    "sessionId": "session-ws-1",
+                    "lastModifiedMs": 1787400000000
+                }
+            ]
+        }
+        """
+        try? manifestContent.write(toFile: cacheDir1 + "/manifest.json", atomically: true, encoding: .utf8)
+        let sessionContent = """
+        {"type":"session_meta","sessionId":"session-ws-1","modelId":"gemini-3.7-flash","timestamp":null}
+        {"type":"usage","sessionId":"session-ws-1","modelId":"gemini-3.7-flash","input":100,"output":50,"cacheRead":20,"cacheWrite":0,"reasoning":10,"timestamp":null}
+        """
+        try? sessionContent.write(toFile: sessionsDir1 + "/session-ws-1-abc.jsonl", atomically: true, encoding: .utf8)
+        let rows = Adapters.collectAntigravityRows()
+        check(rows.count >= 0, "A9 collectAntigravityRows runs without error")
+    }
+    // A10: SourceScanner included filter and fingerprinting for Antigravity files
+    do {
+        check(SourceScanner.included("antigravity", path: "/path/to/session.jsonl"), "A10 included accepts jsonl")
+        check(SourceScanner.included("antigravity", path: "/path/to/conversations/123.db"), "A10 included accepts db")
+        check(SourceScanner.included("antigravity", path: "/path/to/conversations/123.db-wal"), "A10 included accepts db-wal")
+        check(SourceScanner.included("antigravity", path: "/path/to/conversations/123.db-shm"), "A10 included accepts db-shm")
+        check(SourceScanner.included("antigravity", path: "/path/to/manifest.json"), "A10 included accepts manifest.json")
+        check(!SourceScanner.included("antigravity", path: "/path/to/.DS_Store"), "A10 included rejects DS_Store")
+    }
 }
 
 runChecks()

@@ -177,15 +177,78 @@ final class TokscaleRunner {
         return ordered
     }
 
+    /// Known lock paths for Antigravity sync operations.
+    static func antigravityLockPaths(home: String = NSHomeDirectory()) -> [String] {
+        var dirs = [
+            home + "/.config/tokscale/antigravity-cache",
+            home + "/Library/Application Support/tokscale/antigravity-cache"
+        ]
+        if let env = ProcessInfo.processInfo.environment["TOKSCALE_CONFIG_DIR"], !env.isEmpty {
+            dirs.append(env + "/antigravity-cache")
+        }
+        var paths: [String] = []
+        for dir in dirs {
+            paths.append(dir + "/sync.lock")
+            paths.append(dir + "/sync.os.lock")
+            paths.append(dir + ".lock")
+        }
+        return paths
+    }
+
+    /// Cleans up stale Antigravity sync locks left by killed/crashed tokscale processes.
+    @discardableResult
+    static func cleanupStaleAntigravityLocks(home: String = NSHomeDirectory(), force: Bool = false) -> Int {
+        let fm = FileManager.default
+        var cleaned = 0
+        let now = Date().timeIntervalSince1970
+        for path in antigravityLockPaths(home: home) {
+            guard fm.fileExists(atPath: path) else { continue }
+            if force {
+                try? fm.removeItem(atPath: path)
+                cleaned += 1
+                continue
+            }
+            var isStale = false
+            if let content = try? String(contentsOfFile: path, encoding: .utf8) {
+                let parts = content.split(whereSeparator: \.isWhitespace)
+                if let first = parts.first, let pid = Int32(first) {
+                    if pid > 0 && kill(pid, 0) != 0 && errno == ESRCH {
+                        isStale = true
+                    }
+                }
+            }
+            if !isStale {
+                if let attrs = try? fm.attributesOfItem(atPath: path),
+                   let mtime = attrs[.modificationDate] as? Date,
+                   now - mtime.timeIntervalSince1970 > 30.0 {
+                    isStale = true
+                }
+            }
+            if isStale {
+                try? fm.removeItem(atPath: path)
+                cleaned += 1
+            }
+        }
+        return cleaned
+    }
+
     /// Whether Antigravity IDE native session roots are present on disk.
     static func antigravityDataPresent(home: String = NSHomeDirectory()) -> Bool {
-        let roots = ["antigravity", "antigravity-ide", "antigravity-backup"].map { home + "/.gemini/" + $0 }
+        let roots = [
+            "antigravity", "antigravity-ide", "antigravity-backup", "antigravity-cli"
+        ].map { home + "/.gemini/" + $0 } + [
+            home + "/Library/Application Support/Antigravity",
+            home + "/.config/tokscale/antigravity-cache",
+            home + "/Library/Application Support/tokscale/antigravity-cache"
+        ]
         return roots.contains { FileManager.default.fileExists(atPath: $0) }
     }
 
-    /// Runs `tokscale antigravity sync` to synchronize language server sessions.
+    /// Runs `tokscale antigravity sync` to synchronize language server sessions across workspaces.
     @discardableResult
     func syncAntigravity(home: String? = nil, timeout: TimeInterval = 30) -> Bool {
+        let targetHome = home ?? NSHomeDirectory()
+        Self.cleanupStaleAntigravityLocks(home: targetHome, force: false)
         var args = ["antigravity", "sync"]
         if let home, !home.isEmpty {
             args.append(contentsOf: ["--home", home])
@@ -193,6 +256,12 @@ final class TokscaleRunner {
         do {
             let result = try run(args, timeout: timeout)
             if result.exitCode != 0 {
+                if result.stderr.contains("sync lock") || result.stderr.contains("already exists") || result.stderr.contains("lock") {
+                    Self.cleanupStaleAntigravityLocks(home: targetHome, force: true)
+                    if let retry = try? run(args, timeout: timeout), retry.exitCode == 0 {
+                        return true
+                    }
+                }
                 NSLog("[antigravity] sync exited %d: %@", result.exitCode, result.stderr)
                 return false
             }

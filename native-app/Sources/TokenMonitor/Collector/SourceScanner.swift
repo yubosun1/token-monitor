@@ -34,12 +34,20 @@ enum SourceScanner {
             roots.append(contentsOf: Adapters.hanakoRoots)
             return Array(Set(roots)).sorted()
         case "dsh": return [home + "/.dsh/sessions"]
-        case "antigravity": return [
-            home + "/.config/tokscale/antigravity-cache",
-            home + "/.gemini/antigravity",
-            home + "/.gemini/antigravity-ide",
-            home + "/.gemini/antigravity-cli/conversations"
-        ]
+        case "antigravity":
+            var roots = [
+                home + "/.config/tokscale/antigravity-cache",
+                home + "/Library/Application Support/tokscale/antigravity-cache",
+                home + "/.gemini/antigravity",
+                home + "/.gemini/antigravity-ide",
+                home + "/.gemini/antigravity-backup",
+                home + "/.gemini/antigravity-cli/conversations",
+                home + "/Library/Application Support/Antigravity"
+            ]
+            if let env = ProcessInfo.processInfo.environment["TOKSCALE_CONFIG_DIR"], !env.isEmpty {
+                roots.append(env + "/antigravity-cache")
+            }
+            return Array(Set(roots)).sorted()
         default: return []
         }
     }
@@ -69,7 +77,8 @@ enum SourceScanner {
                 home + "/.gemini/antigravity-backup",
                 home + "/.gemini/antigravity-cli/conversations",
                 home + "/.config/tokscale/antigravity-cache",
-                home + "/Library/Application Support/tokscale/antigravity-cache"
+                home + "/Library/Application Support/tokscale/antigravity-cache",
+                home + "/Library/Application Support/Antigravity"
             ]
         default:
             roots = []
@@ -104,6 +113,15 @@ enum SourceScanner {
             return path.hasSuffix(".jsonl") && !Adapters.isDiagArtifact(path)
         case "dsh":
             return path.hasSuffix("session.jsonl.zstd")
+        case "antigravity":
+            let lower = path.lowercased()
+            return lower.hasSuffix(".jsonl")
+                || lower.hasSuffix(".json")
+                || lower.hasSuffix(".db")
+                || lower.hasSuffix(".db-wal")
+                || lower.hasSuffix(".db-shm")
+                || lower.hasSuffix(".pb")
+                || lower.hasSuffix(".pbtxt")
         default:
             return true
         }
@@ -116,12 +134,15 @@ enum SourceScanner {
     /// nothing; an empty fingerprint means "no source files at all".
     static func fingerprint(client: String, roots: [String]) -> Fingerprint {
         var stamps: [FileStamp] = []
+        let enumOptions: FileManager.DirectoryEnumerationOptions = (client == "antigravity" || client == "tokscale")
+            ? []
+            : [.skipsHiddenFiles]
         for root in roots {
             let url = URL(fileURLWithPath: root)
             guard let enumerator = FileManager.default.enumerator(
                 at: url,
                 includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey],
-                options: [.skipsHiddenFiles],
+                options: enumOptions,
                 errorHandler: { _, _ in true }
             ) else { continue }
             for case let file as URL in enumerator {

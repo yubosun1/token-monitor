@@ -1253,8 +1253,12 @@ final class Collector {
         case "antigravity": candidates = [
             "\(home)/.gemini/antigravity",
             "\(home)/.gemini/antigravity-ide",
+            "\(home)/.gemini/antigravity-backup",
             "\(home)/.gemini/antigravity-cli/conversations",
-            "\(home)/.config/tokscale/antigravity-cache"
+            "\(home)/.gemini/antigravity-cli",
+            "\(home)/.config/tokscale/antigravity-cache",
+            "\(home)/Library/Application Support/tokscale/antigravity-cache",
+            "\(home)/Library/Application Support/Antigravity"
         ]
         default: candidates = []
         }

@@ -535,40 +535,80 @@ enum Adapters {
     static let antigravityCacheRoot = NSHomeDirectory() + "/.config/tokscale/antigravity-cache"
     static let antigravitySessionsRoot = NSHomeDirectory() + "/.config/tokscale/antigravity-cache/sessions"
 
+    static var antigravityCacheRoots: [String] {
+        let home = NSHomeDirectory()
+        var roots = [
+            home + "/.config/tokscale/antigravity-cache",
+            home + "/Library/Application Support/tokscale/antigravity-cache"
+        ]
+        if let env = ProcessInfo.processInfo.environment["TOKSCALE_CONFIG_DIR"], !env.isEmpty {
+            roots.append(env + "/antigravity-cache")
+        }
+        var seen = Set<String>()
+        return roots.filter { seen.insert($0).inserted && FileManager.default.fileExists(atPath: $0) }
+    }
+
+    static var antigravitySessionsRoots: [String] {
+        return antigravityCacheRoots.map { $0 + "/sessions" }.filter { FileManager.default.fileExists(atPath: $0) }
+    }
+
     static func collectAntigravityRows() -> [UsageCore.UsageRow] {
-        let sourceId = sourceNamespace(antigravitySessionsRoot)
         let sessionTimestamps = loadAntigravityManifestTimestamps()
         var rows: [UsageCore.UsageRow] = []
-        for file in jsonlFiles(root: antigravitySessionsRoot, recursive: false, client: "antigravity") {
-            autoreleasepool {
-                rows.append(contentsOf: antigravityFileRows(file, sourceId: sourceId, sessionTimestamps: sessionTimestamps))
+        var seenFileNames = Set<String>()
+
+        let defaultRoot = antigravitySessionsRoot
+        let candidateRoots = antigravitySessionsRoots.isEmpty ? [defaultRoot] : antigravitySessionsRoots
+
+        for sessionsRoot in candidateRoots {
+            let sourceId = sourceNamespace(sessionsRoot)
+            for file in jsonlFiles(root: sessionsRoot, recursive: false, client: "antigravity") {
+                let filename = file.lastPathComponent
+                guard seenFileNames.insert(filename).inserted else { continue }
+                autoreleasepool {
+                    rows.append(contentsOf: antigravityFileRows(file, sourceId: sourceId, sessionTimestamps: sessionTimestamps))
+                }
             }
         }
         return sortRows(rows)
     }
 
     private static func loadAntigravityManifestTimestamps() -> [String: Double] {
-        let manifestUrl = URL(fileURLWithPath: antigravityCacheRoot + "/manifest.json")
-        guard let data = try? Data(contentsOf: manifestUrl),
-              let json = try? JSONSerialization.jsonObject(with: data) as? JSON,
-              let sessions = json["sessions"] as? [JSON] else { return [:] }
         var map: [String: Double] = [:]
-        for s in sessions {
-            guard let sid = s["sessionId"] as? String else { continue }
-            if let ms = s["lastModifiedMs"] as? Double {
-                map[sid] = ms
-            } else if let msInt = s["lastModifiedMs"] as? Int64 {
-                map[sid] = Double(msInt)
-            } else if let msInt = s["lastModifiedMs"] as? Int {
-                map[sid] = Double(msInt)
+        let candidateRoots = antigravityCacheRoots.isEmpty ? [antigravityCacheRoot] : antigravityCacheRoots
+        for cacheRoot in candidateRoots {
+            let manifestUrl = URL(fileURLWithPath: cacheRoot + "/manifest.json")
+            guard let data = try? Data(contentsOf: manifestUrl),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? JSON,
+                  let sessions = json["sessions"] as? [JSON] else { continue }
+            for s in sessions {
+                guard let sid = s["sessionId"] as? String else { continue }
+                var msValue: Double?
+                if let ms = s["lastModifiedMs"] as? Double {
+                    msValue = ms
+                } else if let msInt = s["lastModifiedMs"] as? Int64 {
+                    msValue = Double(msInt)
+                } else if let msInt = s["lastModifiedMs"] as? Int {
+                    msValue = Double(msInt)
+                }
+                if let msValue {
+                    if let existing = map[sid] {
+                        map[sid] = max(existing, msValue)
+                    } else {
+                        map[sid] = msValue
+                    }
+                }
             }
         }
         return map
     }
 
     private static func antigravityFileRows(_ file: URL, sourceId: String, sessionTimestamps: [String: Double]) -> [UsageCore.UsageRow] {
+        let sid = file.deletingPathExtension().lastPathComponent
+        let manifestTs = sessionTimestamps[sid] ?? 0
         if let stamp = fileStamp(file) {
-            return cachedValue("antigravity|\(file.path)", stamp: stamp) {
+            let cacheKey = "antigravity|\(file.path)|\(manifestTs)"
+            return cachedValue(cacheKey, stamp: stamp) {
                 parseAntigravityFile(file, sourceId: sourceId, sessionTimestamps: sessionTimestamps)
             }
         }
