@@ -278,30 +278,17 @@ final class BridgeCore {
             settings.update(["subscriptionsOrphaned": [Any]()])
             return ["ok": true]
 
-        case "floatingBubble:setCollapsedSize":
-            return [String: Any]()
-
-        // Account/profile surfaces for tools the native app no longer manages.
-        case "mimo:accounts", "mimo:addAccount", "mimo:openConsole", "mimo:removeAccount",
-             "mimo:setAccountEnabled":
-            return [String: Any]()
-        case "opencode:getProfiles", "openrouter:getProfiles", "thirdparty:getProfiles":
-            if method == "opencode:getProfiles" {
-                // Same shape as the Electron app: an object keyed by profile
-                // name with capability flags only — credentials never cross
-                // to the renderer.
-                var safe: [String: Any] = [:]
-                for profile in CredentialStore.shared.opencodeProfiles() {
-                    safe[profile.name] = [
-                        "enabled": profile.enabled,
-                        "hasApiKey": !profile.apiKey.isEmpty,
-                        "hasCookie": !profile.cookie.isEmpty,
-                        "usesAmbientKey": false
-                    ]
-                }
-                return ["profiles": safe, "hasEnvVar": false, "hasAmbientKey": false]
+        case "opencode:getProfiles":
+            var safe: [String: Any] = [:]
+            for profile in CredentialStore.shared.opencodeProfiles() {
+                safe[profile.name] = [
+                    "enabled": profile.enabled,
+                    "hasApiKey": !profile.apiKey.isEmpty,
+                    "hasCookie": !profile.cookie.isEmpty,
+                    "usesAmbientKey": false
+                ]
             }
-            return ["profiles": [String: Any]()]
+            return ["profiles": safe, "hasEnvVar": false, "hasAmbientKey": false]
         case "opencode:saveProfile":
             let name = args.first as? String ?? ""
             let cookie = args.count > 1 ? (args[1] as? String ?? "") : ""
