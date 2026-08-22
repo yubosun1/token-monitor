@@ -91,8 +91,9 @@ final class SettingsStore {
     static func defaults() -> [String: Any] {
         return [
             // Window
-            "windowBehavior": "floating",
+            "windowPinned": false,
             "dashboardPinned": false,
+            "windowBehavior": "floating",
             "glassOpacity": 68,
             "glassBlur": 32,
             "systemGlass": true,

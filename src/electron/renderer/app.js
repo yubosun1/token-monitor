@@ -6353,9 +6353,8 @@ function nextWindowBehavior(mode) {
 }
 
 function syncWindowBehaviorControls() {
-  const mode = currentWindowBehavior();
-  const pinned = mode === 'floating';
-  if (els.windowBehaviorInput) els.windowBehaviorInput.value = mode;
+  const pinned = state.settings?.windowPinned === true;
+  if (els.windowBehaviorInput) els.windowBehaviorInput.value = pinned ? 'floating' : 'normal';
   if (els.pinButton) {
     els.pinButton.textContent = '📌';
     els.pinButton.classList.toggle('is-pinned', pinned);
@@ -8742,10 +8741,12 @@ els.refreshButton.addEventListener('click', () => {
   else refreshStats({ force: true, forceHistory: true, forceSelfSync: true, refreshPricing: true, feedback: true });
 });
 els.pinButton?.addEventListener('click', () => {
-  saveSettings({ windowBehavior: nextWindowBehavior(currentWindowBehavior()) });
+  const pinned = state.settings?.windowPinned === true;
+  saveSettings({ windowPinned: !pinned, windowBehavior: !pinned ? 'floating' : 'normal' });
 });
 els.windowBehaviorInput?.addEventListener('change', () => {
-  saveSettings({ windowBehavior: els.windowBehaviorInput.value });
+  const pinned = els.windowBehaviorInput.value === 'floating';
+  saveSettings({ windowPinned: pinned, windowBehavior: els.windowBehaviorInput.value });
 });
 els.closeButton.addEventListener('click', () => window.tokenMonitor.close());
 els.trendsPanel.addEventListener('click', (event) => {

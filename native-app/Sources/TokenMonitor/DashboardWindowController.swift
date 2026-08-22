@@ -692,9 +692,8 @@ final class DashboardWindowController: GlassWindowController {
 
     override var canAutoHideOnResign: Bool {
         let settings = BridgeCore.shared.settings.snapshot()
-        let behavior = settings["windowBehavior"] as? String ?? "floating"
-        // When pinned (floating above apps), stay visible across app focus changes
-        if behavior == "floating" {
+        let pinned = settings["windowPinned"] as? Bool ?? false
+        if pinned {
             return false
         }
         let trayMode = settings["trayMode"] as? Bool ?? true
@@ -710,8 +709,8 @@ final class DashboardWindowController: GlassWindowController {
         // the dashboard window stays put.
         enableAutoHideOnResign()
 
-        let initialBehavior = BridgeCore.shared.settings.snapshot()["windowBehavior"] as? String ?? "floating"
-        applyWindowBehavior(initialBehavior)
+        let initialPinned = BridgeCore.shared.settings.snapshot()["windowPinned"] as? Bool ?? false
+        applyWindowPinned(initialPinned)
 
         settingsNotificationObserver = NotificationCenter.default.addObserver(
             forName: SettingsStore.changedNotification,
@@ -720,30 +719,35 @@ final class DashboardWindowController: GlassWindowController {
         ) { [weak self] note in
             guard let self else { return }
             let keys = note.userInfo?["keys"] as? [String] ?? []
-            if keys.contains("windowBehavior") {
-                let behavior = BridgeCore.shared.settings.snapshot()["windowBehavior"] as? String ?? "floating"
-                self.applyWindowBehavior(behavior)
+            if keys.contains("windowPinned") {
+                let pinned = BridgeCore.shared.settings.snapshot()["windowPinned"] as? Bool ?? false
+                self.applyWindowPinned(pinned)
             }
         }
     }
 
-    func applyWindowBehavior(_ mode: String) {
+    func applyWindowPinned(_ pinned: Bool) {
         guard let panel = window as? GlassPanel else { return }
-        switch mode.lowercased() {
-        case "normal":
-            panel.isFloatingPanel = false
-            panel.level = .normal
-            panel.collectionBehavior = [.canJoinAllSpaces]
-        case "floating":
-            fallthrough
-        default:
+        if pinned {
             panel.isFloatingPanel = true
             panel.level = .floating
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        } else {
+            panel.isFloatingPanel = false
+            panel.level = .normal
+            panel.collectionBehavior = [.canJoinAllSpaces]
         }
         if panel.isVisible {
             panel.orderFront(nil)
         }
+    }
+
+    override func tearDown() {
+        if let settingsNotificationObserver {
+            NotificationCenter.default.removeObserver(settingsNotificationObserver)
+            self.settingsNotificationObserver = nil
+        }
+        super.tearDown()
     }
 
     /// Every managed hide (tray/hotkey/close/auto-hide/miniaturize) starts
@@ -817,6 +821,14 @@ final class DashboardViewWindowController: GlassWindowController {
         if window.isVisible {
             window.orderFront(nil)
         }
+    }
+
+    override func tearDown() {
+        if let settingsNotificationObserver {
+            NotificationCenter.default.removeObserver(settingsNotificationObserver)
+            self.settingsNotificationObserver = nil
+        }
+        super.tearDown()
     }
 
     override func bridgeDidRequestClose(_ bridge: Bridge) {

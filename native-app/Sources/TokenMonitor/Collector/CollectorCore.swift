@@ -469,7 +469,9 @@ final class Collector {
                 pricingGeneration += 1
                 PerfDiag.log("pricing purged (customModelPricing change), generation=\(pricingGeneration)")
             }
-            tick(kind: pending.kind, reason: pending.reason, refreshPricing: pending.refreshPricing)
+            autoreleasepool {
+                tick(kind: pending.kind, reason: pending.reason, refreshPricing: pending.refreshPricing)
+            }
         }
     }
 
@@ -861,32 +863,34 @@ final class Collector {
     /// tick. Runs on the worker queue (single writer).
     func reemitStats() {
         workerQueue.async { [weak self] in
-            guard let self, let periods = self.cachedPeriods else { return }
-            let settings = self.environment.settings()
-            let clients = self.cachedClients.isEmpty ? self.enabledClients(settings) : self.cachedClients
-            let stats = self.buildStats(
-                settings: settings,
-                clients: clients,
-                today: periods.today,
-                month: periods.month,
-                allTime: periods.allTime,
-                history: self.cachedHistory,
-                collectedAt: Date()
-            )
-            self.stateLock.lock()
-            let previous = self.statsCache
-            self.statsCache = stats
-            self.stateLock.unlock()
-            // Gate like the main tick: only push when the payload actually
-            // changed, so a limits refresh with no new data skips the push.
-            let changed: Bool
-            if let previous {
-                changed = !(previous as NSDictionary).isEqual(to: stats)
-            } else {
-                changed = true
-            }
-            if changed {
-                self.environment.push("stats:push", BridgeCore.shared.statsPushPayload(stats))
+            autoreleasepool {
+                guard let self, let periods = self.cachedPeriods else { return }
+                let settings = self.environment.settings()
+                let clients = self.cachedClients.isEmpty ? self.enabledClients(settings) : self.cachedClients
+                let stats = self.buildStats(
+                    settings: settings,
+                    clients: clients,
+                    today: periods.today,
+                    month: periods.month,
+                    allTime: periods.allTime,
+                    history: self.cachedHistory,
+                    collectedAt: Date()
+                )
+                self.stateLock.lock()
+                let previous = self.statsCache
+                self.statsCache = stats
+                self.stateLock.unlock()
+                // Gate like the main tick: only push when the payload actually
+                // changed, so a limits refresh with no new data skips the push.
+                let changed: Bool
+                if let previous {
+                    changed = !(previous as NSDictionary).isEqual(to: stats)
+                } else {
+                    changed = true
+                }
+                if changed {
+                    self.environment.push("stats:push", BridgeCore.shared.statsPushPayload(stats))
+                }
             }
         }
     }

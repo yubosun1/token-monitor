@@ -348,7 +348,9 @@ enum Adapters {
         let sourceId = sourceNamespace(promaRoot)
         var rows: [UsageCore.UsageRow] = []
         for file in jsonlFiles(root: promaRoot, recursive: false, client: "proma") {
-            rows.append(contentsOf: promaFileRows(file, sourceId: sourceId))
+            autoreleasepool {
+                rows.append(contentsOf: promaFileRows(file, sourceId: sourceId))
+            }
         }
         return sortRows(rows)
     }
@@ -518,7 +520,9 @@ enum Adapters {
         let sessionTimestamps = loadAntigravityManifestTimestamps()
         var rows: [UsageCore.UsageRow] = []
         for file in jsonlFiles(root: antigravitySessionsRoot, recursive: false, client: "antigravity") {
-            rows.append(contentsOf: antigravityFileRows(file, sourceId: sourceId, sessionTimestamps: sessionTimestamps))
+            autoreleasepool {
+                rows.append(contentsOf: antigravityFileRows(file, sourceId: sourceId, sessionTimestamps: sessionTimestamps))
+            }
         }
         return sortRows(rows)
     }
@@ -723,9 +727,11 @@ enum Adapters {
         var rows: [UsageCore.UsageRow] = []
         var totalEvents = 0
         for file in files {
-            let parsed = cachedSessionFileRows(file)
-            totalEvents += parsed.events
-            rows.append(contentsOf: parsed.rows)
+            autoreleasepool {
+                let parsed = cachedSessionFileRows(file)
+                totalEvents += parsed.events
+                rows.append(contentsOf: parsed.rows)
+            }
         }
         if diag {
             NSLog("[dsh] files=%d usageEvents=%d rows=%d", files.count, totalEvents, rows.count)

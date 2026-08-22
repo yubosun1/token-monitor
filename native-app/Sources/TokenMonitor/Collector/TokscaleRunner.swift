@@ -133,6 +133,8 @@ final class TokscaleRunner {
         }
         let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
         let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+        try? outPipe.fileHandleForReading.close()
+        try? errPipe.fileHandleForReading.close()
         process.waitUntilExit()
         timeoutWorkItem.cancel()
         let elapsedMs = Date().timeIntervalSince(started) * 1000
