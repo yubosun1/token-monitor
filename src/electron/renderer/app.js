@@ -51,7 +51,8 @@ const KNOWN_CLIENTS = [
 const LIMIT_PROVIDERS = [
   { id: 'deepseek', label: 'DeepSeek' },
   { id: 'opencode', label: 'OpenCode' },
-  { id: 'kimi', label: 'Kimi' }
+  { id: 'kimi', label: 'Kimi' },
+  { id: 'workbuddy', label: 'WorkBuddy' }
 ];
 const LIMIT_PROVIDER_ACCOUNT_GROUP_IDS = {
   opencode: 'opencodeCookieGroup',
@@ -63,7 +64,9 @@ const LIMIT_PROVIDER_ACCOUNT_STATUS_IDS = {
   deepseek: 'deepseekApiKeyStatus',
   kimi: 'kimiAccountStatus'
 };
-const LIMIT_PROVIDER_CONNECTION_DETAIL_KEYS = {};
+const LIMIT_PROVIDER_CONNECTION_DETAIL_KEYS = {
+  workbuddy: 'workbuddy'
+};
 const TRAY_ICON_VARIANTS = [
   { id: 'claude-brand', label: 'Claude', after: 'claude' },
   { id: 'chatgpt', label: 'ChatGPT', after: 'codex' }
@@ -258,7 +261,12 @@ Object.assign(elsMap, {
   mainSettingsSummary: document.getElementById('mainSettingsSummary'),
   subscriptionsSettingsSummary: document.getElementById('subscriptionsSettingsSummary'),
   sessionDetail: document.getElementById('session-detail'),
-  sessionDetailHead: document.getElementById('session-detail-head')
+  sessionDetailHead: document.getElementById('session-detail-head'),
+  showTrayIconInput: document.getElementById('showTrayIconInput'),
+  trayIconOptions: document.getElementById('trayIconOptions'),
+  trayModeInput: document.getElementById('trayModeInput'),
+  trayOptions: document.getElementById('trayOptions'),
+  showTrayProviderBadgeInput: document.getElementById('showTrayProviderBadgeInput')
 });
 
 function toggleAccordionRow(row) {
@@ -6415,6 +6423,22 @@ function syncSettingsForm() {
   const showLimitUsed = state.settings.showLimitUsed ? 'used' : 'remaining';
   for (const input of els.showLimitUsedInputs || []) input.checked = input.value === showLimitUsed;
   refreshTrayComposers();
+  const showTrayIcon = state.settings.showTrayIcon !== false;
+  if (els.showTrayIconInput) els.showTrayIconInput.checked = showTrayIcon;
+  if (els.trayModeInput) {
+    els.trayModeInput.disabled = !showTrayIcon;
+    els.trayModeInput.checked = showTrayIcon && Boolean(state.settings.trayMode);
+  }
+  if (els.trayContentInput) {
+    els.trayContentInput.value = ['tokens', 'cost', 'both', 'tokensAll', 'costAll', 'bothAll', 'limitsAllSessions', 'bars', 'barsSession', 'barsWeekly', 'barsAllSessions', 'icon', 'custom'].includes(state.settings.trayContent) ? state.settings.trayContent : 'tokens';
+    els.trayContentInput.disabled = !showTrayIcon;
+  }
+  if (els.showTrayProviderBadgeInput) {
+    els.showTrayProviderBadgeInput.checked = state.settings.showTrayProviderBadge === true;
+    els.showTrayProviderBadgeInput.disabled = !showTrayIcon;
+  }
+  els.trayIconOptions?.classList.toggle('hidden', !showTrayIcon);
+  els.trayOptions?.classList.toggle('hidden', !showTrayIcon || !state.settings.trayMode);
   syncWindowShortcutStatus();
   if (els.startAtLoginInput) {
     els.startAtLoginInput.disabled = !state.appInfo?.loginItemSupported;
@@ -8772,6 +8796,35 @@ window.addEventListener('resize', () => { if (!numberAnimHandle) fitTotalNumber(
 els.windowToggleShortcutValue?.addEventListener('click', startWindowShortcutRecording);
 els.windowToggleShortcutClearButton?.addEventListener('click', () => setWindowToggleShortcut('').catch(() => {}));
 els.startAtLoginInput?.addEventListener('change', () => saveSettings({ startAtLogin: els.startAtLoginInput.checked }));
+els.showTrayIconInput?.addEventListener('change', () => {
+  const showTrayIcon = els.showTrayIconInput.checked;
+  state.settings.showTrayIcon = showTrayIcon;
+  if (els.trayModeInput) {
+    els.trayModeInput.disabled = !showTrayIcon;
+    if (!showTrayIcon) els.trayModeInput.checked = false;
+  }
+  if (els.trayContentInput) els.trayContentInput.disabled = !showTrayIcon;
+  if (els.showTrayProviderBadgeInput) els.showTrayProviderBadgeInput.disabled = !showTrayIcon;
+  els.trayIconOptions?.classList.toggle('hidden', !showTrayIcon);
+  els.trayOptions?.classList.toggle('hidden', !showTrayIcon || !els.trayModeInput?.checked);
+  refreshTrayComposers();
+  saveSettings({ showTrayIcon, trayMode: showTrayIcon ? Boolean(els.trayModeInput?.checked) : false });
+});
+els.trayModeInput?.addEventListener('change', () => {
+  els.trayOptions?.classList.toggle('hidden', !els.showTrayIconInput?.checked || !els.trayModeInput.checked);
+  saveSettings({ trayMode: els.trayModeInput.checked });
+});
+els.trayContentInput?.addEventListener('change', () => {
+  state.settings.trayContent = els.trayContentInput.value;
+  refreshTrayComposers();
+  maybeUpdateBarsIcon();
+  saveSettings({ trayContent: els.trayContentInput.value });
+});
+els.showTrayProviderBadgeInput?.addEventListener('change', () => {
+  state.settings.showTrayProviderBadge = els.showTrayProviderBadgeInput.checked;
+  void maybeUpdateBarsIcon();
+  saveSettings({ showTrayProviderBadge: els.showTrayProviderBadgeInput.checked });
+});
 els.refreshButton.addEventListener('click', () => {
   if (state.breakdown === 'status') refreshStatusViewManually().catch(() => {});
   // Only this button asks for a history rescan and a self-sync: `{ force: true }` is

@@ -3038,6 +3038,10 @@ html.is-windows .settings-panel select option {
   -webkit-mask-image: url(../../../assets/icons/kimi.svg);
   mask-image: url(../../../assets/icons/kimi.svg);
 }
+.limit-icon-workbuddy {
+  -webkit-mask-image: url(../../../assets/icons/workbuddy.svg);
+  mask-image: url(../../../assets/icons/workbuddy.svg);
+}
 .row-label {
   display: grid;
   min-width: 0;

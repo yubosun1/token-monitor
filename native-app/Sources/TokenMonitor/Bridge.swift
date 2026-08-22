@@ -282,6 +282,10 @@ final class BridgeCore {
             return [String: Any]()
 
         case "tray:setIcons":
+            let icons = args.first as? [String: Any] ?? [:]
+            DispatchQueue.main.async {
+                (NSApp.delegate as? AppDelegate)?.updateTrayIcons(icons)
+            }
             return true
 
         // Account/profile surfaces for tools the native app no longer manages.

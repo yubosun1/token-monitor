@@ -117,6 +117,15 @@ final class LimitsRuntime {
                 }
                 semaphore.wait()
                 providers.append(fetched)
+            case "workbuddy":
+                let semaphore = DispatchSemaphore(value: 0)
+                var fetched: JSON = [:]
+                Task {
+                    fetched = await WorkbuddyLimits.fetchLimits(nowMs: nowMs)
+                    semaphore.signal()
+                }
+                semaphore.wait()
+                providers.append(fetched)
             default:
                 break
             }

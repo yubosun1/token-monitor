@@ -120,8 +120,8 @@ final class SettingsStore {
             ],
             // Limits
             "limitsEnabled": true,
-            "limitProviders": "deepseek,opencode,kimi",
-            "limitProviderOrder": "deepseek,opencode,kimi",
+            "limitProviders": "deepseek,opencode,kimi,workbuddy",
+            "limitProviderOrder": "deepseek,opencode,kimi,workbuddy",
             "homeLimitProviderOrder": "",
             "hiddenHomeLimitProviders": "",
             "homeLimitAccountCount": 3,

@@ -24,6 +24,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, BridgeDelegate {
         ShortcutController.shared.start(settings: BridgeCore.shared.settings.snapshot())
         Collector.shared.start()
         LimitsRuntime.shared.start()
+        NotificationCenter.default.addObserver(
+            forName: SettingsStore.changedNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            let settings = BridgeCore.shared.settings.snapshot()
+            let showTrayIcon = settings["showTrayIcon"] as? Bool ?? true
+            self?.statusItem?.isVisible = showTrayIcon
+            let mode = settings["trayContent"] as? String ?? "tokens"
+            if mode == "icon" || !showTrayIcon {
+                self?.updateTrayIcons([:])
+            }
+        }
         // Tray-only by default (matches the user's Electron configuration):
         // the window appears on tray click or ⌘E, not at launch.
         let trayMode = BridgeCore.shared.settings.snapshot()["trayMode"] as? Bool ?? true
@@ -232,6 +245,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, BridgeDelegate {
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
         statusItem = item
+    }
+
+    func updateTrayIcons(_ icons: [String: Any]) {
+        let settings = BridgeCore.shared.settings.snapshot()
+        let mode = settings["trayContent"] as? String ?? "tokens"
+        let showTrayIcon = settings["showTrayIcon"] as? Bool ?? true
+        guard showTrayIcon else {
+            statusItem?.isVisible = false
+            return
+        }
+        statusItem?.isVisible = true
+
+        if let dataUrl = icons[mode] as? String,
+           let commaIndex = dataUrl.firstIndex(of: ",") {
+            let base64String = String(dataUrl[dataUrl.index(after: commaIndex)...])
+            if let imageData = Data(base64Encoded: base64String),
+               let image = NSImage(data: imageData) {
+                image.isTemplate = true
+                let pointWidth = image.size.width > 0 ? (image.size.width / 2.0) : 22.0
+                let pointHeight: CGFloat = 22.0
+                image.size = NSSize(width: pointWidth, height: pointHeight)
+                statusItem?.button?.image = image
+                statusItem?.button?.imagePosition = .imageOnly
+                statusItem?.length = pointWidth + 6
+                return
+            }
+        }
+
+        if let iconUrl = Bundle.main.url(forResource: "tray-token-monitor", withExtension: "png"),
+           let icon = NSImage(contentsOf: iconUrl) {
+            icon.isTemplate = true
+            icon.size = NSSize(width: 20, height: 20)
+            statusItem?.button?.image = icon
+            statusItem?.button?.imagePosition = .imageOnly
+            statusItem?.length = NSStatusItem.squareLength
+        }
     }
 
     @objc private func statusItemClicked(_ sender: NSStatusBarButton) {

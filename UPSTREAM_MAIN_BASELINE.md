@@ -1,19 +1,34 @@
 # Upstream Main Review Baseline
 
 - Upstream remote: `https://github.com/Javis603/token-monitor.git`
-- Local `main` synchronized through: `bed9fc32e17ffcd165f98cb8da4b68fdfed220a9`
-- Upstream subject: `chore: release v0.46.0`
-- Reviewed on: `2026-08-19`
+- Local `main` synchronized through: `7ad2acce0580d5be23b8a5930a67cb836370a500`
+- Upstream subject: `feat(trae): add Trae CN credit limits (#483)`
+- Reviewed on: `2026-08-22`
 - Native branch: `macos-native`
 
 This is a review baseline, not a claim that `macos-native` contains every
 upstream change. For the next upstream review, start with:
 
 ```text
-bed9fc32e17ffcd165f98cb8da4b68fdfed220a9..upstream/main
+7ad2acce0580d5be23b8a5930a67cb836370a500..upstream/main
 ```
 
 ## Reviewed Compatibility Notes
+
+Range `bed9fc32..7ad2acce` (v0.47.0) reviewed on 2026-08-22:
+
+- `a0af301e` `feat(workbuddy): add local app credits monitoring (#378)`:
+  Ported to `macos-native`. Implemented `WorkbuddyLimits.swift` in Swift
+  (reads local session from `~/Library/Application Support/CodeBuddyExtension/Data/Public/auth/auth.json`,
+  polls Tencent billing API, handles Personal/Enterprise accounts, and computes spendable credits).
+  Wired into `LimitsRuntime.swift`, `SettingsStore.swift`, and renderer presentation/i18n.
+- `1519ecf7` `feat(tray): add balance meter percentage option (#470)`:
+  Ported to `macos-native`. Updated `trayLayout.js`, `trayComposer.js`, and
+  `i18n.js` to support selecting `creditsDisplay: 'percent'` on credits/balance items.
+- `b98fb089` `feat(cherrystudio)` (#387), `7ad2acce` `feat(trae)` (#483),
+  `cc79febc` `fix(codex)` (#473): deferred per maintainer request.
+- Electron-specific fixes (`#464`, `#467`, `1558506b`): not applicable or
+  handled natively in Swift.
 
 Range `88a2927b..bed9fc32` (v0.46.0) reviewed on 2026-08-19:
 
