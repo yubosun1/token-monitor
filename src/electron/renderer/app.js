@@ -5860,8 +5860,7 @@ function render() {
     }
     renderRows(rows, { incompleteHint });
   }
-  
-  renderFloatingBubbleContent();
+
   // Tell main the window has painted real content (not the static "0" defaults),
   // so a recreated window can stay hidden until it's populated. See loadWindowFile.
   if (!contentReadySignaled) {
@@ -6380,7 +6379,6 @@ function syncSettingsForm() {
   renderSubscriptionSettings();
   const showLimitUsed = state.settings.showLimitUsed ? 'used' : 'remaining';
   for (const input of els.showLimitUsedInputs || []) input.checked = input.value === showLimitUsed;
-  refreshTrayComposers();
   syncWindowShortcutStatus();
   if (els.startAtLoginInput) {
     els.startAtLoginInput.disabled = !state.appInfo?.loginItemSupported;
@@ -8525,7 +8523,6 @@ async function init() {
   try { state.appInfo = await window.tokenMonitor.getAppInfo?.(); } catch (_) {}
   state.settings = await window.tokenMonitor.getSettings();
   applyEffectiveCurrencyRates();
-  deliverTrayProviderIcons();
 
   if (state.appInfo?.loginItemSupported) {
     state.settings.startAtLogin = Boolean(state.appInfo.loginItemOpenAtLogin);
