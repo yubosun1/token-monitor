@@ -20,24 +20,20 @@
   }
 
   function supportsLocalizedCompactTokenUnits(locale) {
-    return /^(zh|ja|ko)(?:-|$)/.test(normalizedLocale(locale));
+    return true;
   }
 
   function effectiveCompactTokenUnits(unitSystem, locale) {
     const normalized = normalizeCompactTokenUnits(unitSystem);
-    return normalized === 'localized' && supportsLocalizedCompactTokenUnits(locale)
-      ? 'localized'
-      : 'western';
+    return normalized === 'localized' ? 'localized' : 'western';
   }
 
   function localizedSuffixes(locale) {
     const language = normalizedLocale(locale);
     if (language.startsWith('ko')) return ['만', '억'];
-    const isSimplifiedChinese = language.startsWith('zh-hans')
-      || /^(?:zh)(?:-[a-z0-9]+)*-(?:cn|sg|my)(?:-|$)/.test(language);
-    if (isSimplifiedChinese) return ['万', '亿'];
     if (language.startsWith('ja')) return ['万', '億'];
-    return ['萬', '億'];
+    if (language.startsWith('zh-hant') || language.startsWith('zh-tw') || language.startsWith('zh-hk')) return ['萬', '億'];
+    return ['万', '亿'];
   }
 
   function unitsFor(unitSystem, locale) {

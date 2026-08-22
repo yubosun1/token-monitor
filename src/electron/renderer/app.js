@@ -239,7 +239,8 @@ let viewSwitcherLongPressTriggered = false;
 let viewSwitcherHoverCloseTimer = null;
 const elsMap = {
   shell: document.querySelector('.shell'), status: document.getElementById('status'), liveDot: document.getElementById('liveDot'), tokenRateReveal: document.getElementById('tokenRateReveal'), totalTokens: document.getElementById('totalTokens'), totalTokensCompact: document.getElementById('totalTokensCompact'), cost: document.getElementById('cost'), homePanel: document.getElementById('homePanel'), breakdown: document.getElementById('breakdown'), serviceStatusPanel: document.getElementById('serviceStatusPanel'), limitsPanel: document.getElementById('limitsPanel'), trendsPanel: document.getElementById('trendsPanel'), viewSwitcher: document.getElementById('viewSwitcher'), pinButton: document.getElementById('pinButton'), windowBehaviorInput: document.getElementById('windowBehaviorInput'), utilityActions: document.getElementById('utilityActions'), settingsButton: document.getElementById('settingsButton'), settingsPanel: document.getElementById('settingsPanel'), currencyInput: document.getElementById('currencyInput'), currencyRateRow: document.getElementById('currencyRateRow'), currencyRateModeAuto: document.getElementById('currencyRateModeAuto'), currencyRateModeManual: document.getElementById('currencyRateModeManual'), currencyRateManualField: document.getElementById('currencyRateManualField'), currencyRateOverrideInput: document.getElementById('currencyRateOverrideInput'), currencyRateStatus: document.getElementById('currencyRateStatus'), limitProviderCheckboxes: document.getElementById('limitProviderCheckboxes'), limitsRefreshInput: document.getElementById('limitsRefreshInput'), refreshIntervalInput: document.getElementById('refreshIntervalInput'), showLimitSourceInput: document.getElementById('showLimitSourceInput'), maskLimitAccountEmailsInput: document.getElementById('maskLimitAccountEmailsInput'), showLimitUsedInputs: Array.from(document.querySelectorAll('input[name="showLimitUsed"]')), windowToggleShortcutValue: document.getElementById('windowToggleShortcutValue'), windowToggleShortcutClearButton: document.getElementById('windowToggleShortcutClearButton'), windowToggleShortcutNote: document.getElementById('windowToggleShortcutNote'), clientDisplayList: document.getElementById('clientDisplayList'), refreshButton: document.getElementById('refreshButton'), closeButton: document.getElementById('closeButton'),
-  subscriptionList: document.getElementById('subscriptionList'), subscriptionAddForm: document.getElementById('subscriptionAddForm'), subscriptionAddToggle: document.getElementById('subscriptionAddToggle'), subscriptionAddDetails: document.getElementById('subscriptionAddDetails'), subscriptionProviderInput: document.getElementById('subscriptionProviderInput'), subscriptionAccountInput: document.getElementById('subscriptionAccountInput'), subscriptionPlanNameInput: document.getElementById('subscriptionPlanNameInput'), subscriptionAmountInput: document.getElementById('subscriptionAmountInput'), subscriptionCurrencyInput: document.getElementById('subscriptionCurrencyInput'), subscriptionIntervalCountInput: document.getElementById('subscriptionIntervalCountInput'), subscriptionIntervalInput: document.getElementById('subscriptionIntervalInput'), subscriptionStartDateInput: document.getElementById('subscriptionStartDateInput'), subscriptionAutoRenewInput: document.getElementById('subscriptionAutoRenewInput'), subscriptionNextRenewalInput: document.getElementById('subscriptionNextRenewalInput'), subscriptionNote: document.getElementById('subscriptionNote'), subscriptionOrphanNotice: document.getElementById('subscriptionOrphanNotice'), subscriptionOrphanText: document.getElementById('subscriptionOrphanText'), subscriptionOrphanAdopt: document.getElementById('subscriptionOrphanAdopt'), subscriptionOrphanDiscard: document.getElementById('subscriptionOrphanDiscard'), subscriptionSyncError: document.getElementById('subscriptionSyncError'), subscriptionNextRenewalLabel: document.getElementById('subscriptionNextRenewalLabel'), subscriptionNextRenewalNote: document.getElementById('subscriptionNextRenewalNote'), subscriptionSubmit: document.getElementById('subscriptionSubmit'), subscriptionCancelEdit: document.getElementById('subscriptionCancelEdit'), subscriptionTotalRow: document.getElementById('subscriptionTotalRow'), subscriptionErrorMessage: document.getElementById('subscriptionErrorMessage'), subscriptionPlanFields: document.getElementById('subscriptionPlanFields'), subscriptionTopUpFields: document.getElementById('subscriptionTopUpFields'), subscriptionTopUpList: document.getElementById('subscriptionTopUpList'), subscriptionTopUpDateInput: document.getElementById('subscriptionTopUpDateInput'), subscriptionTopUpAmountInput: document.getElementById('subscriptionTopUpAmountInput'), subscriptionTopUpAddButton: document.getElementById('subscriptionTopUpAddButton'), subscriptionAmountRow: document.getElementById('subscriptionAmountRow'), subscriptionTopUpHeadingRow: document.getElementById('subscriptionTopUpHeadingRow'), subscriptionKindInputs: [...document.querySelectorAll('input[name="subscriptionKind"]')]
+  subscriptionList: document.getElementById('subscriptionList'), subscriptionAddForm: document.getElementById('subscriptionAddForm'), subscriptionAddToggle: document.getElementById('subscriptionAddToggle'), subscriptionAddDetails: document.getElementById('subscriptionAddDetails'), subscriptionProviderInput: document.getElementById('subscriptionProviderInput'), subscriptionAccountInput: document.getElementById('subscriptionAccountInput'), subscriptionPlanNameInput: document.getElementById('subscriptionPlanNameInput'), subscriptionAmountInput: document.getElementById('subscriptionAmountInput'), subscriptionCurrencyInput: document.getElementById('subscriptionCurrencyInput'), subscriptionIntervalCountInput: document.getElementById('subscriptionIntervalCountInput'), subscriptionIntervalInput: document.getElementById('subscriptionIntervalInput'), subscriptionStartDateInput: document.getElementById('subscriptionStartDateInput'), subscriptionAutoRenewInput: document.getElementById('subscriptionAutoRenewInput'), subscriptionNextRenewalInput: document.getElementById('subscriptionNextRenewalInput'), subscriptionNote: document.getElementById('subscriptionNote'), subscriptionOrphanNotice: document.getElementById('subscriptionOrphanNotice'), subscriptionOrphanText: document.getElementById('subscriptionOrphanText'), subscriptionOrphanAdopt: document.getElementById('subscriptionOrphanAdopt'), subscriptionOrphanDiscard: document.getElementById('subscriptionOrphanDiscard'), subscriptionSyncError: document.getElementById('subscriptionSyncError'), subscriptionNextRenewalLabel: document.getElementById('subscriptionNextRenewalLabel'), subscriptionNextRenewalNote: document.getElementById('subscriptionNextRenewalNote'), subscriptionSubmit: document.getElementById('subscriptionSubmit'), subscriptionCancelEdit: document.getElementById('subscriptionCancelEdit'), subscriptionTotalRow: document.getElementById('subscriptionTotalRow'), subscriptionErrorMessage: document.getElementById('subscriptionErrorMessage'), subscriptionPlanFields: document.getElementById('subscriptionPlanFields'), subscriptionTopUpFields: document.getElementById('subscriptionTopUpFields'), subscriptionTopUpList: document.getElementById('subscriptionTopUpList'), subscriptionTopUpDateInput: document.getElementById('subscriptionTopUpDateInput'), subscriptionTopUpAmountInput: document.getElementById('subscriptionTopUpAmountInput'), subscriptionTopUpAddButton: document.getElementById('subscriptionTopUpAddButton'), subscriptionAmountRow: document.getElementById('subscriptionAmountRow'), subscriptionTopUpHeadingRow: document.getElementById('subscriptionTopUpHeadingRow'), subscriptionKindInputs: [...document.querySelectorAll('input[name="subscriptionKind"]')],
+  compactTokensInput: document.getElementById('compactTokensInput')
 };
 Object.assign(elsMap, {
   appTitleMark: document.querySelector('.app-title-mark'),
@@ -525,6 +526,16 @@ function renderSettingsSummaries() {
 }
 
 function formatNumber(value) { return Math.round(Number(value || 0)).toLocaleString('en-US'); }
+function isCompactTokensEnabled() {
+  return state.settings?.compactTokens !== false;
+}
+function formatTokenDisplay(value, options = {}) {
+  const num = Math.round(Number(value || 0));
+  if (isCompactTokensEnabled() && Math.abs(num) >= 10000) {
+    return compactTokenApi.formatCompactTokens(num, 'localized', currentLocale(), options);
+  }
+  return formatNumber(num);
+}
 function formatCompact(value, unitSystem, locale) {
   return compactTokenApi.formatCompactTokens(
     value,
@@ -834,7 +845,8 @@ function settleMotionAnimations() {
   for (const [el, motion] of rowNumberAnimations) {
     cancelAnimationFrame(motion.handle);
     const target = Number(motion.target ?? el.dataset.motionTarget ?? el.dataset.motionValue ?? 0);
-    el.textContent = formatNumber(target);
+    el.textContent = formatTokenDisplay(target);
+    el.title = `${formatNumber(target)} tokens`;
     el.dataset.motionValue = String(target);
     delete el.dataset.motionTarget;
   }
@@ -876,7 +888,8 @@ function animateRowNumber(el, from, to, duration = 420) {
   if (previous) cancelAnimationFrame(previous.handle);
   const startValue = Number.isFinite(previous?.value) ? previous.value : from;
   if (!Number.isFinite(startValue) || !Number.isFinite(to) || startValue === to || prefersReducedMotion()) {
-    el.textContent = formatNumber(to);
+    el.textContent = formatTokenDisplay(to);
+    el.title = `${formatNumber(to)} tokens`;
     el.dataset.motionValue = String(Number(to) || 0);
     delete el.dataset.motionTarget;
     rowNumberAnimations.delete(el);
@@ -885,12 +898,14 @@ function animateRowNumber(el, from, to, duration = 420) {
   const startedAt = performance.now();
   const delta = to - startValue;
   const motion = { handle: 0, target: to, value: startValue };
-  el.textContent = formatNumber(startValue);
+  el.textContent = formatTokenDisplay(startValue);
+  el.title = `${formatNumber(to)} tokens`;
   el.dataset.motionValue = String(startValue);
   el.dataset.motionTarget = String(to);
   function frame(now) {
     if (prefersReducedMotion()) {
-      el.textContent = formatNumber(to);
+      el.textContent = formatTokenDisplay(to);
+      el.title = `${formatNumber(to)} tokens`;
       el.dataset.motionValue = String(Number(to) || 0);
       delete el.dataset.motionTarget;
       if (rowNumberAnimations.get(el) === motion) rowNumberAnimations.delete(el);
@@ -898,11 +913,13 @@ function animateRowNumber(el, from, to, duration = 420) {
     }
     const progress = Math.min(1, (now - startedAt) / duration);
     motion.value = startValue + delta * easeOutQuart(progress);
-    el.textContent = formatNumber(motion.value);
+    el.textContent = formatTokenDisplay(motion.value);
     el.dataset.motionValue = String(motion.value);
     if (progress < 1) {
       motion.handle = requestAnimationFrame(frame);
     } else {
+      el.textContent = formatTokenDisplay(to);
+      el.title = `${formatNumber(to)} tokens`;
       delete el.dataset.motionTarget;
       if (rowNumberAnimations.get(el) === motion) rowNumberAnimations.delete(el);
     }
@@ -1135,9 +1152,11 @@ function updateRow(row, { name, subtitle, detail, value, cost, max, color, barBa
     row.dataset.tokenDataUnavailable = 'true';
     cancelRowNumberAnimation(valueEl);
     valueEl.textContent = t('detailTokenUnavailable') || 'Unavailable';
+    valueEl.removeAttribute('title');
   } else {
     delete row.dataset.tokenDataUnavailable;
-    valueEl.textContent = formatNumber(value);
+    valueEl.textContent = formatTokenDisplay(value);
+    valueEl.title = `${formatNumber(value)} tokens`;
   }
   valueEl.dataset.motionValue = String(Number(value) || 0);
   row.dataset.motionValue = String(Number(value) || 0);
@@ -1161,15 +1180,15 @@ function updateRow(row, { name, subtitle, detail, value, cost, max, color, barBa
       <div class="accordion-content">
         <div class="accordion-row">
           <div class="accordion-label">${t('dashboard.tooltip.inputCacheHit')} <span class="accordion-pct">${hitPct}%</span></div>
-          <div class="accordion-value">${formatNumber(cacheRead)}</div>
+          <div class="accordion-value" title="${formatNumber(cacheRead)} tokens">${formatTokenDisplay(cacheRead)}</div>
         </div>
         <div class="accordion-row">
           <div class="accordion-label">${t('dashboard.tooltip.inputCacheMiss')} <span class="accordion-pct">${missPct}%</span></div>
-          <div class="accordion-value">${formatNumber(cacheMiss)}</div>
+          <div class="accordion-value" title="${formatNumber(cacheMiss)} tokens">${formatTokenDisplay(cacheMiss)}</div>
         </div>
         <div class="accordion-row">
           <div class="accordion-label">${t('dashboard.tooltip.output')}</div>
-          <div class="accordion-value">${formatNumber(output)}</div>
+          <div class="accordion-value" title="${formatNumber(output)} tokens">${formatTokenDisplay(output)}</div>
         </div>
       </div>
     `;
@@ -6373,6 +6392,7 @@ function syncSettingsForm() {
   syncPeriodTabs();
   syncWindowBehaviorControls();
   if (els.currencyInput) els.currencyInput.value = currentCurrency();
+  if (els.compactTokensInput) els.compactTokensInput.checked = Boolean(state.settings?.compactTokens !== false);
   syncCurrencyRateControls();
   els.limitsRefreshInput.value = String(LIMIT_REFRESH_OPTIONS.includes(Number(state.settings.limitsRefreshMs)) ? state.settings.limitsRefreshMs : 300000);
   if (els.refreshIntervalInput) els.refreshIntervalInput.value = String(Number(state.settings?.refreshMs) || 15000);
@@ -8732,6 +8752,7 @@ window.addEventListener('resize', () => { if (!numberAnimHandle) fitTotalNumber(
 els.windowToggleShortcutValue?.addEventListener('click', startWindowShortcutRecording);
 els.windowToggleShortcutClearButton?.addEventListener('click', () => setWindowToggleShortcut('').catch(() => {}));
 els.startAtLoginInput?.addEventListener('change', () => saveSettings({ startAtLogin: els.startAtLoginInput.checked }));
+els.compactTokensInput?.addEventListener('change', () => { saveSettings({ compactTokens: els.compactTokensInput.checked }); render(); });
 els.refreshButton.addEventListener('click', () => {
   if (state.breakdown === 'status') refreshStatusViewManually().catch(() => {});
   // Only this button asks for a history rescan and a self-sync: `{ force: true }` is
@@ -8764,6 +8785,7 @@ window.tokenMonitor.onSettingsPush?.((next) => {
   state.settingsPushRevision += 1;
   const prevMetric = effectiveHeatmapMetric(state.settings);
   const prevLanguage = state.settings?.language;
+  const prevCompactTokens = state.settings?.compactTokens;
   const prevCompactTokenUnits = state.settings?.compactTokenUnits;
   const prevShowCompactTotalTokens = state.settings?.showCompactTotalTokens;
   state.settings = next;
@@ -8774,6 +8796,7 @@ window.tokenMonitor.onSettingsPush?.((next) => {
     render();
   } else if (
     prevLanguage !== next.language
+    || prevCompactTokens !== next.compactTokens
     || prevCompactTokenUnits !== next.compactTokenUnits
   ) {
     render();
