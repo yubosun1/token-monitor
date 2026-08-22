@@ -132,6 +132,7 @@ final class Collector {
 
     private var timer: Timer?
     private var settingsObserver: NSObjectProtocol?
+    private var hasActiveWindows = true
 
     // Worker-owned results (read by the UI through stateLock).
     private var statsCache: [String: Any]?
@@ -270,7 +271,24 @@ final class Collector {
         requestRefresh(.full, reason: .startup)
     }
 
+    /// Adaptive window visibility: toggles between high-cadence active polling
+    /// and low-power background polling to save CPU and memory when windows are hidden.
+    func setHasActiveWindows(_ hasActive: Bool) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard hasActiveWindows != hasActive else { return }
+        hasActiveWindows = hasActive
+        rebuildTimer()
+        if hasActive {
+            requestRefresh(.cheap, reason: .manual)
+        }
+    }
+
     private func refreshInterval() -> TimeInterval {
+        if !hasActiveWindows {
+            // When all windows are closed/hidden, throttle background polling to 180s (3m)
+            // to minimize background CPU wakeups and temporary memory allocations.
+            return 180.0
+        }
         let raw = UsageCore.doubleValue(environment.settings()["refreshMs"])
         let ms = raw > 0 ? raw : 15000
         return max(3.0, ms / 1000.0)

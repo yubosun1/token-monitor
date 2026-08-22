@@ -73,10 +73,13 @@ function captureGeometry(root, selector = '[data-motion-key]') {
 }
 
 function animateChartGeometry(previous, { fromZero = false } = {}) {
-  if (state.motion === 'none' || prefersReducedMotion()) return;
+  if (state.motion === 'none' || prefersReducedMotion() || state.windowVisible === false) return;
   if (state.chartKind === 'candle') {
     animateCandles();
     return;
+  }
+  for (const animation of els.chart?.getAnimations?.() || []) {
+    try { animation.cancel(); } catch (_) {}
   }
   const shapes = Array.from(els.chart.querySelectorAll('.bar-stack[data-motion-key]'));
   shapes.forEach((shape, index) => {
@@ -103,6 +106,10 @@ function animateChartGeometry(previous, { fromZero = false } = {}) {
 }
 
 function animateCandles() {
+  if (state.windowVisible === false) return;
+  for (const animation of els.chart?.getAnimations?.() || []) {
+    try { animation.cancel(); } catch (_) {}
+  }
   const candles = Array.from(els.chart.querySelectorAll('.candle-stack'));
   candles.forEach((candle, index) => {
     const delay = Math.min(index, 18) * 10;
@@ -737,7 +744,11 @@ window.tokenMonitor.onDashboardHistoryChanged?.(() => { void refresh(); });
 
 window.tokenMonitor.onVisibility?.(({ visible }) => {
   state.windowVisible = visible;
-  if (visible && state.historyDirty) {
+  if (!visible) {
+    for (const animation of document.getAnimations?.() || []) {
+      try { animation.cancel(); } catch (_) {}
+    }
+  } else if (state.historyDirty) {
     state.historyDirty = false;
     state.motion = 'update';
     render();

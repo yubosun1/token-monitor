@@ -74,10 +74,6 @@ final class GlassWindow: NSWindow {
 /// Base window controller: transparent HUD-vibrancy panel hosting a
 /// transparent WKWebView, with titlebar drag and bounds persistence.
 class GlassWindowController: NSWindowController, WindowDragController, WKNavigationDelegate, WindowLifecycleDelegate {
-    /// Shared process pool: lets the widget and dashboard webviews reuse one
-    /// WebContent process instead of each owning one (~30-60MB when both
-    /// windows are open).
-    static let sharedProcessPool = WKProcessPool()
     let bridge = Bridge()
     private(set) var webView: WKWebView!
     private let boundsKey: String
@@ -167,7 +163,9 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
         container.addSubview(effect)
 
         let config = WKWebViewConfiguration()
-        config.processPool = Self.sharedProcessPool
+        // Non-persistent data store: avoids writing disk caches, network caches,
+        // cookies, and IndexedDB to disk for local bundled HTML/JS assets.
+        config.websiteDataStore = .nonPersistent()
         // Renderer probes (and any page fetch of bundled assets) may use
         // fetch() on file:// resources.
         config.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
@@ -203,6 +201,7 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
     /// matter how many hide/show triggers fire in a row.
     private(set) lazy var visibility = ManagedVisibility { [weak self] visible in
         self?.bridge.pushLocal("window:visibility", ["visible": visible])
+        NotificationCenter.default.post(name: NSNotification.Name("TokenMonitorWindowVisibilityChanged"), object: nil)
     }
 
     private var visibilityObservers: [NSObjectProtocol] = []

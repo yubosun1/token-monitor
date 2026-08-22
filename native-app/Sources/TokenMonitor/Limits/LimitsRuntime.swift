@@ -16,6 +16,7 @@ final class LimitsRuntime {
     private var settingsObserver: NSObjectProtocol?
     private var currentSummary: JSON = ["providers": [Any](), "updatedAt": NSNull(), "refreshMs": 300000]
     private var refreshing = false
+    private var hasActiveWindows = true
 
     func start() {
         rebuildTimer()
@@ -37,6 +38,16 @@ final class LimitsRuntime {
         }
     }
 
+    func setHasActiveWindows(_ hasActive: Bool) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard hasActiveWindows != hasActive else { return }
+        hasActiveWindows = hasActive
+        rebuildTimer()
+        if hasActive {
+            refreshNow()
+        }
+    }
+
     private func rebuildTimer() {
         dispatchPrecondition(condition: .onQueue(.main))
         timer?.invalidate()
@@ -49,6 +60,10 @@ final class LimitsRuntime {
     }
 
     private func refreshInterval() -> TimeInterval {
+        if !hasActiveWindows {
+            // When hidden, throttle limits polling to 10 minutes (600s)
+            return 600.0
+        }
         // Tolerant numeric read (Int/Double/String), same reason as the
         // collector timer: in-process updates may store Swift Ints.
         let raw = UsageCore.doubleValue(core.settings.snapshot()["limitsRefreshMs"])

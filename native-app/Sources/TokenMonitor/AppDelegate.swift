@@ -4,6 +4,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, BridgeDelegate {
     private var statusItem: NSStatusItem?
     private var mainWindowController: DashboardWindowController?
     private var dashboardWindowController: DashboardViewWindowController?
+    private var windowVisibilityObserver: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // A second launch that lost the single-instance lock asks us to
@@ -24,6 +25,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, BridgeDelegate {
         ShortcutController.shared.start(settings: BridgeCore.shared.settings.snapshot())
         Collector.shared.start()
         LimitsRuntime.shared.start()
+
+        windowVisibilityObserver = NotificationCenter.default.addObserver(
+            forName: NSNotification.Name("TokenMonitorWindowVisibilityChanged"),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.updateActiveWindowState()
+        }
+        updateActiveWindowState()
         // Tray-only by default (matches the user's Electron configuration):
         // the window appears on tray click or ⌘E, not at launch.
         let trayMode = BridgeCore.shared.settings.snapshot()["trayMode"] as? Bool ?? true
@@ -282,6 +292,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, BridgeDelegate {
             // the controller, window and WebView instead of accumulating.
             controller.onTeardown = { [weak self] in
                 self?.dashboardWindowController = nil
+                self?.updateActiveWindowState()
             }
             dashboardWindowController = controller
         }
@@ -310,6 +321,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, BridgeDelegate {
             // from scratch (round-4 Phase 6).
             controller.onTeardown = { [weak self] in
                 self?.mainWindowController = nil
+                self?.updateActiveWindowState()
             }
             mainWindowController = controller
         }
@@ -337,6 +349,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, BridgeDelegate {
             wc.showWindow(nil)
             NSApp.activate(ignoringOtherApps: true)
         }
+    }
+
+    private func updateActiveWindowState() {
+        let mainVisible = mainWindowController?.window?.isVisible == true
+        let dashVisible = dashboardWindowController?.window?.isVisible == true
+        let hasActive = mainVisible || dashVisible
+        Collector.shared.setHasActiveWindows(hasActive)
+        LimitsRuntime.shared.setHasActiveWindows(hasActive)
     }
 
 }

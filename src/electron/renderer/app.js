@@ -6090,6 +6090,10 @@ function renderBreakdownChange(breakdown, options = {}) {
 
 function restartTimer() {
   if (state.refreshTimer) clearInterval(state.refreshTimer);
+  if (state.windowVisible === false) {
+    state.refreshTimer = null;
+    return;
+  }
   const interval = state.streamConnected
     ? 5 * 60 * 1000
     : Number(state.settings?.refreshMs || 15000);
@@ -8821,9 +8825,15 @@ window.tokenMonitor.onVisibility?.(({ visible }) => {
   if (!visible) {
     cancelTokenRateBoost();
     stopServiceStatusTicker();
+    if (state.refreshTimer) {
+      clearInterval(state.refreshTimer);
+      state.refreshTimer = null;
+    }
   } else {
+    restartTimer();
     if (state.breakdown === 'status') ensureServiceStatusTicker();
     statsRenderScheduler.flush();
+    void refresh({ feedback: false });
   }
 });
 
