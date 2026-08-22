@@ -22,6 +22,7 @@
           </nav>
           <div class="actions-hotspot" title="Window controls"></div>
           <div class="window-actions">
+            <button id="pinButton" class="icon-button" title="Pin window on top">📌</button>
             <button id="closeButton" class="icon-button" title="Close">×</button>
           </div>
         </div>
@@ -46,6 +47,15 @@
             </div>
             <div class="settings-subgroup settings-window-group">
               <div class="settings-group-header"><span data-i18n="settings.sections.window">Window</span></div>
+              <label class="settings-item">
+                <span class="settings-item-text">
+                  <span class="settings-item-title" data-i18n="settings.display.windowBehavior">Window behavior</span>
+                </span>
+                <select id="windowBehaviorInput">
+                  <option value="floating" data-i18n="settings.windowBehavior.floating">Floating above apps</option>
+                  <option value="normal" data-i18n="settings.windowBehavior.normal">Normal window</option>
+                </select>
+              </label>
               <div class="settings-item settings-shortcut-item">
                 <span class="settings-item-text"><span class="settings-item-title" data-i18n="settings.display.windowShortcut">Shortcut</span></span>
                 <div class="shortcut-recorder">
@@ -53,37 +63,6 @@
                   <button id="windowToggleShortcutClearButton" type="button" data-i18n="settings.shortcut.clear">Clear</button>
                 </div>
                 <p id="windowToggleShortcutNote" class="settings-note settings-item-desc" data-i18n="settings.display.windowShortcutNote">Record a global shortcut to show or hide the window.</p>
-              </div>
-            </div>
-            <div class="settings-subgroup settings-display-group">
-              <div class="settings-group-header"><span data-i18n="settings.display.modeSection">Display</span></div>
-              <div class="presence-feature">
-                <label class="checkbox-label settings-item"><span class="settings-item-text"><span class="settings-item-title" data-i18n="settings.display.showTrayIcon">Show tray/menu bar icon</span></span><input id="showTrayIconInput" type="checkbox" /></label>
-                <div id="trayIconOptions" class="presence-feature-body hidden">
-                  <label class="settings-item"><span class="settings-item-text"><span class="settings-item-title" data-i18n="settings.display.trayText">Tray text</span></span>
-                    <select id="trayContentInput">
-                      <option value="tokens" data-i18n="settings.tray.tokensToday">Tokens Today</option>
-                      <option value="cost" data-i18n="settings.tray.costToday">Cost Today ($1.23)</option>
-                      <option value="both" data-i18n="settings.tray.bothToday">Tokens + Cost Today</option>
-                      <option value="tokensAll" data-i18n="settings.tray.tokensTotal">Tokens Total</option>
-                      <option value="costAll" data-i18n="settings.tray.costTotal">Cost Total ($8.28)</option>
-                      <option value="bothAll" data-i18n="settings.tray.bothTotal">Tokens + Cost Total</option>
-                      <option value="limitsAllSessions" data-i18n="settings.tray.limitsAllSessions">Limits: first two tools' primary quotas (12% · 34%)</option>
-                      <option value="barsSession" data-i18n="settings.tray.barsSession">Limit bars: lowest session remaining</option>
-                      <option value="barsWeekly" data-i18n="settings.tray.barsWeekly">Limit bars: lowest weekly remaining</option>
-                      <option value="barsAllSessions" data-i18n="settings.tray.barsAllSessions">Limit bars: first two tools' primary quotas</option>
-                      <option value="bars" data-i18n="settings.tray.barsWindow">Limit bars: lowest remaining limit</option>
-                      <option value="icon" data-i18n="settings.tray.iconOnly">Icon only</option>
-                      <option value="custom" data-i18n="settings.tray.custom">Custom…</option>
-                    </select>
-                  </label>
-                  <div id="trayComposer" class="tray-composer hidden" data-surface="tray"></div>
-                  <label class="checkbox-label settings-item"><span class="settings-item-text"><span class="settings-item-title" data-i18n="settings.display.trayProviderBadge">Show Token Monitor badge on provider icons</span></span><input id="showTrayProviderBadgeInput" type="checkbox" /></label>
-                  <label class="checkbox-label settings-item"><span class="settings-item-text"><span class="settings-item-title" data-i18n="settings.display.trayMode">Tray-only mode</span></span><input id="trayModeInput" type="checkbox" /></label>
-                  <div id="trayOptions" class="presence-feature-body hidden">
-                    <p class="settings-note" data-i18n="settings.display.trayNote">Hide the main window; show a popover from the macOS menu bar or Windows system tray.</p>
-                  </div>
-                </div>
               </div>
             </div>
           </div>

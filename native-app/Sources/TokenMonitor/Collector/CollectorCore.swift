@@ -1245,7 +1245,13 @@ final class Collector {
 enum CustomPricingSidecar {
     static func sync(settingValue: Any?, settingsFileURL: URL) {
         let entries = normalizeCustomPricing(settingValue)
-        let pricingPath = NSHomeDirectory() + "/.config/tokscale/custom-pricing.json"
+        let configDir: String = {
+            if let env = ProcessInfo.processInfo.environment["TOKSCALE_CONFIG_DIR"], !env.isEmpty {
+                return env
+            }
+            return NSHomeDirectory() + "/.config/tokscale"
+        }()
+        let pricingPath = configDir + "/custom-pricing.json"
         let sidecarPath = settingsFileURL.deletingLastPathComponent().appendingPathComponent("tokscale-managed-pricing.json").path
         let managedModels = buildTokscaleModels(entries)
 

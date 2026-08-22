@@ -92,6 +92,7 @@ final class SettingsStore {
         return [
             // Window
             "windowBehavior": "floating",
+            "dashboardPinned": false,
             "glassOpacity": 68,
             "glassBlur": 32,
             "systemGlass": true,

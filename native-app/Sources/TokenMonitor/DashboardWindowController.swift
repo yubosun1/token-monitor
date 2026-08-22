@@ -363,8 +363,13 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
         super.showWindow(sender)
     }
 
+    var canAutoHideOnResign: Bool {
+        true
+    }
+
     private func autoHideIfNeeded() {
         guard !isDragging else { return }
+        guard canAutoHideOnResign else { return }
         guard let window, window.isVisible else { return }
         let settings = BridgeCore.shared.settings.snapshot()
         let trayMode = settings["trayMode"] as? Bool ?? true
@@ -684,6 +689,19 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
 /// next show rebuilds it — the page pulls stats/settings/history/limits
 /// itself on boot via the bridge invokes, so no native replay is needed.
 final class DashboardWindowController: GlassWindowController {
+    private var settingsNotificationObserver: NSObjectProtocol?
+
+    override var canAutoHideOnResign: Bool {
+        let settings = BridgeCore.shared.settings.snapshot()
+        let behavior = settings["windowBehavior"] as? String ?? "floating"
+        // When pinned (floating above apps), stay visible across app focus changes
+        if behavior == "floating" {
+            return false
+        }
+        let trayMode = settings["trayMode"] as? Bool ?? true
+        return trayMode
+    }
+
     init() {
         super.init(boundsKey: "windowBounds", defaultSize: NSSize(width: 340, height: 650))
         loadPage("index")
@@ -692,6 +710,40 @@ final class DashboardWindowController: GlassWindowController {
         // The widget popover hides when the app loses focus (trayMode);
         // the dashboard window stays put.
         enableAutoHideOnResign()
+
+        let initialBehavior = BridgeCore.shared.settings.snapshot()["windowBehavior"] as? String ?? "floating"
+        applyWindowBehavior(initialBehavior)
+
+        settingsNotificationObserver = NotificationCenter.default.addObserver(
+            forName: SettingsStore.changedNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let self else { return }
+            let keys = note.userInfo?["keys"] as? [String] ?? []
+            if keys.contains("windowBehavior") {
+                let behavior = BridgeCore.shared.settings.snapshot()["windowBehavior"] as? String ?? "floating"
+                self.applyWindowBehavior(behavior)
+            }
+        }
+    }
+
+    func applyWindowBehavior(_ mode: String) {
+        guard let panel = window as? GlassPanel else { return }
+        switch mode.lowercased() {
+        case "normal":
+            panel.isFloatingPanel = false
+            panel.level = .normal
+            panel.collectionBehavior = [.canJoinAllSpaces]
+            panel.orderFront(nil)
+        case "floating":
+            fallthrough
+        default:
+            panel.isFloatingPanel = true
+            panel.level = .floating
+            panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+            panel.orderFront(nil)
+        }
     }
 
     /// Every managed hide (tray/hotkey/close/auto-hide/miniaturize) starts
@@ -711,10 +763,18 @@ final class DashboardWindowController: GlassWindowController {
 /// dashboard page fetches settings and history itself on boot, so state is
 /// restored without any native replay.
 final class DashboardViewWindowController: GlassWindowController {
+    private var settingsNotificationObserver: NSObjectProtocol?
+
     /// Auto-hide keeps the window in memory this long before teardown
     /// (unchanged from review round Phase 5; the main widget uses the
     /// central `WindowLifecycleConstants` default instead).
     override var idleTeardownDelay: TimeInterval { 60 }
+
+    override var canAutoHideOnResign: Bool {
+        let settings = BridgeCore.shared.settings.snapshot()
+        let pinned = settings["dashboardPinned"] as? Bool ?? false
+        return !pinned
+    }
 
     init() {
         // titled: system window-management shortcuts (Globe+Ctrl tiling /
@@ -727,6 +787,35 @@ final class DashboardViewWindowController: GlassWindowController {
         // Dashboard follows the same focus behavior as the widget popover:
         // hide when the app loses key/active status.
         enableAutoHideOnResign()
+
+        let initialPinned = BridgeCore.shared.settings.snapshot()["dashboardPinned"] as? Bool ?? false
+        applyDashboardPinned(initialPinned)
+
+        settingsNotificationObserver = NotificationCenter.default.addObserver(
+            forName: SettingsStore.changedNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let self else { return }
+            let keys = note.userInfo?["keys"] as? [String] ?? []
+            if keys.contains("dashboardPinned") {
+                let pinned = BridgeCore.shared.settings.snapshot()["dashboardPinned"] as? Bool ?? false
+                self.applyDashboardPinned(pinned)
+            }
+        }
+    }
+
+    func applyDashboardPinned(_ pinned: Bool) {
+        guard let window else { return }
+        if pinned {
+            window.level = .floating
+            window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+            window.orderFront(nil)
+        } else {
+            window.level = .normal
+            window.collectionBehavior = []
+            window.orderFront(nil)
+        }
     }
 
     override func bridgeDidRequestClose(_ bridge: Bridge) {

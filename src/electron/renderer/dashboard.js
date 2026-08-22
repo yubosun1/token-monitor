@@ -15,6 +15,7 @@ const BRAND_VENDOR_COLORS = { ...charts.clientColors };
 
 const els = {
   body: document.body,
+  pinBtn: document.getElementById('pinBtn'),
   refreshBtn: document.getElementById('refreshBtn'),
   closeBtn: document.getElementById('closeBtn'),
   tabs: Array.from(document.querySelectorAll('.dash-tab')),
@@ -38,7 +39,7 @@ const state = {
   tab: 'activity', range: '30', stackBy: 'client', mode: 'bars', flat: false,
   locale: 'en', currency: 'USD', compactTokenUnits: 'western', history: null, chartModel: null,
   chartKind: 'bars', motion: 'none', reduceMotion: 'system',
-  heatmapMetric: 'tokens'
+  heatmapMetric: 'tokens', dashboardPinned: false
 };
 
 const DATA_MOTION_MS = 800;
@@ -646,12 +647,26 @@ async function refresh() {
   }
 }
 
+function syncPinButton() {
+  if (!els.pinBtn) return;
+  const pinned = Boolean(state.dashboardPinned);
+  els.pinBtn.classList.toggle('is-pinned', pinned);
+  els.pinBtn.classList.toggle('active', pinned);
+  const title = pinned
+    ? (i18n.t?.('dashboard.unpin') || 'Unpin from top')
+    : (i18n.t?.('dashboard.pin') || 'Pin window on top');
+  els.pinBtn.title = title;
+  els.pinBtn.setAttribute('aria-label', title);
+}
+
 async function boot() {
   let settings = {};
   try { settings = await window.tokenMonitor.getSettings(); } catch (_) {}
   state.locale = i18n.resolveLocale(settings.locale || settings.language, navigator.languages);
   state.currency = settings.currency || 'USD';
   state.compactTokenUnits = compactTokenApi.normalizeCompactTokenUnits(settings.compactTokenUnits);
+  state.dashboardPinned = Boolean(settings.dashboardPinned);
+  syncPinButton();
   if (settings.currencyRatesEffective && window.TokenMonitorCurrency?.configureRates) {
     window.TokenMonitorCurrency.configureRates(settings.currencyRatesEffective);
   }
@@ -672,6 +687,10 @@ async function boot() {
 window.tokenMonitor.onSettingsPush?.((next) => {
   if (!next) return;
   let needsRender = false;
+  if (typeof next.dashboardPinned === 'boolean' && state.dashboardPinned !== next.dashboardPinned) {
+    state.dashboardPinned = next.dashboardPinned;
+    syncPinButton();
+  }
   const nextLocale = i18n.resolveLocale(next.locale || next.language, navigator.languages);
   if (state.locale !== nextLocale) {
     state.locale = nextLocale;
@@ -753,6 +772,12 @@ els.heatmapMetricBtns.forEach((b) => b.addEventListener('click', () => {
   // flag is set, so the legacy "cost" default is never re-applied on launch.
   window.tokenMonitor.updateSettings({ heatmapMetric: state.heatmapMetric, heatmapMetricExplicit: true });
 }));
+els.pinBtn?.addEventListener('click', () => {
+  const nextPinned = !state.dashboardPinned;
+  state.dashboardPinned = nextPinned;
+  syncPinButton();
+  window.tokenMonitor.updateSettings({ dashboardPinned: nextPinned });
+});
 els.refreshBtn.addEventListener('click', refresh);
 els.closeBtn.addEventListener('click', () => window.tokenMonitor.dashboard.close());
 

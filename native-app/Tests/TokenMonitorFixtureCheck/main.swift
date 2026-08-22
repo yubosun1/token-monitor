@@ -1890,6 +1890,38 @@ func runAntigravityTests() {
         check(days.first?.perClient["antigravity"] != nil, "A5 perClient attributed to antigravity")
         checkEqual(days.first?.perClient["antigravity"]?.tokens, 100, "A5 perClient tokens correct")
     }
+    // A6: Custom Pricing Sidecar with custom TOKSCALE_CONFIG_DIR
+    do {
+        let tempDir = NSTemporaryDirectory() + "tokscale-test-\(UUID().uuidString)"
+        setenv("TOKSCALE_CONFIG_DIR", tempDir, 1)
+        defer {
+            unsetenv("TOKSCALE_CONFIG_DIR")
+            try? FileManager.default.removeItem(atPath: tempDir)
+        }
+        let settingsURL = URL(fileURLWithPath: tempDir).appendingPathComponent("settings.native.json")
+        let customPricing: [[String: Any]] = [
+            ["modelId": "gemini-3.7-flash", "inputPerM": 0.75, "outputPerM": 3.75, "cacheReadPerM": 0.07]
+        ]
+        CustomPricingSidecar.sync(settingValue: customPricing, settingsFileURL: settingsURL)
+        let pricingFile = tempDir + "/custom-pricing.json"
+        check(FileManager.default.fileExists(atPath: pricingFile), "A6 custom-pricing.json written to TOKSCALE_CONFIG_DIR")
+        if let data = try? Data(contentsOf: URL(fileURLWithPath: pricingFile)),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let models = json["models"] as? [String: Any],
+           let gemini = models["gemini-3.7-flash"] as? [String: Any] {
+            checkClose(gemini["input_cost_per_million_tokens"] as? Double ?? 0.0, 0.75, "A6 input cost correct")
+            checkClose(gemini["output_cost_per_million_tokens"] as? Double ?? 0.0, 3.75, "A6 output cost correct")
+            checkClose(gemini["cache_read_input_token_cost_per_million_tokens"] as? Double ?? 0.0, 0.07, "A6 cache read cost correct")
+        } else {
+            check(false, "A6 failed to parse custom-pricing.json")
+        }
+    }
+    // A7: Window Behavior and Dashboard Pinning settings defaults
+    do {
+        let defaults = SettingsStore.defaults()
+        checkEqual(defaults["windowBehavior"] as? String ?? "", "floating", "A7 windowBehavior defaults to floating")
+        checkEqual(defaults["dashboardPinned"] as? Bool ?? true, false, "A7 dashboardPinned defaults to false")
+    }
 }
 
 runChecks()

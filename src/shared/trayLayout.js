@@ -139,17 +139,13 @@
     const provider = clean(source.provider, 48).toLowerCase();
     const accountMode = clean(source.accountMode, 24);
     const valueMode = clean(source.valueMode, 24);
-    const normalized = {
+    return {
       provider: provider || 'auto',
       accountMode: ACCOUNT_MODES.has(accountMode) ? accountMode : 'lowest',
       accountKey: clean(source.accountKey),
       window: normalizeWindowSelector(source.window, fallbackWindow),
       valueMode: VALUE_MODES.has(valueMode) ? valueMode : 'remaining'
     };
-    // Balance stays the default headline for compatibility. Persist only the
-    // explicit percentage opt-in so older layouts keep their compact shape.
-    if (source.creditsDisplay === 'percent') normalized.creditsDisplay = 'percent';
-    return normalized;
   }
 
   function infoRowDefaults(metric = 'percent', window = 'primary') {
@@ -774,18 +770,6 @@
     return percent === null ? '--' : `${Math.round(percent)}%`;
   }
 
-  function formatSelectionHeadline(selection) {
-    if (!selection) return '--';
-    const useCreditsPercent = Boolean(
-      selection.moneyText
-      && selection.source?.creditsDisplay === 'percent'
-      && selection.percent !== null
-    );
-    return useCreditsPercent || !selection.moneyText
-      ? formatPercent(selection.percent)
-      : selection.moneyText;
-  }
-
   function formatResetCountdown(value, nowMs = Date.now()) {
     const resetMs = Date.parse(value || '');
     const current = Number(nowMs);
@@ -875,7 +859,7 @@
     const selection = selectSource(stats, item.source, options);
     if (!selection) return { ...item, available: false, text: '--', selection: null };
     const reset = formatResetCountdown(selection.window.resetsAt, options.nowMs);
-    const headline = formatSelectionHeadline(selection);
+    const headline = selection.moneyText || formatPercent(selection.percent);
     let text;
     if (item.metric === 'percent') text = headline;
     else if (item.metric === 'percentReset') text = [headline, reset].filter(Boolean).join(' · ');
@@ -992,7 +976,7 @@
               ? '--'
               : item.metric === 'reset'
                 ? formatResetCountdown(selection.window.resetsAt, options.nowMs) || '--'
-                : formatSelectionHeadline(selection);
+                : formatPercent(selection.percent);
             return {
               source,
               available: Boolean(selection && text !== '--'),

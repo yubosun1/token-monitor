@@ -121,7 +121,7 @@ const {
 const sessionDetailApi = window.TokenMonitorSessionDetail;
 const windowShortcutApi = window.TokenMonitorWindowShortcut;
 const LIMIT_REFRESH_OPTIONS = [60000, 120000, 300000, 900000, 1800000];
-const WINDOW_BEHAVIOR_VALUES = ['floating', 'normal', 'desktop'];
+const WINDOW_BEHAVIOR_VALUES = ['floating', 'normal'];
 const LIMIT_SOURCE_LABELS = { oauth: 'OAuth', cli: 'CLI', web: 'Web', rpc: 'RPC', local: 'Local', api: 'API' };
 const LIMIT_CAPABILITY_TAG_KEYS = {
   Auto: 'settings.limits.capability.auto',
@@ -240,7 +240,7 @@ let viewSwitcherLongPressTimer = null;
 let viewSwitcherLongPressTriggered = false;
 let viewSwitcherHoverCloseTimer = null;
 const elsMap = {
-  shell: document.querySelector('.shell'), status: document.getElementById('status'), liveDot: document.getElementById('liveDot'), tokenRateReveal: document.getElementById('tokenRateReveal'), totalTokens: document.getElementById('totalTokens'), totalTokensCompact: document.getElementById('totalTokensCompact'), cost: document.getElementById('cost'), homePanel: document.getElementById('homePanel'), breakdown: document.getElementById('breakdown'), serviceStatusPanel: document.getElementById('serviceStatusPanel'), limitsPanel: document.getElementById('limitsPanel'), trendsPanel: document.getElementById('trendsPanel'), viewSwitcher: document.getElementById('viewSwitcher'), pinButton: document.getElementById('pinButton'), utilityActions: document.getElementById('utilityActions'), settingsButton: document.getElementById('settingsButton'), settingsPanel: document.getElementById('settingsPanel'), currencyInput: document.getElementById('currencyInput'), currencyRateRow: document.getElementById('currencyRateRow'), currencyRateModeAuto: document.getElementById('currencyRateModeAuto'), currencyRateModeManual: document.getElementById('currencyRateModeManual'), currencyRateManualField: document.getElementById('currencyRateManualField'), currencyRateOverrideInput: document.getElementById('currencyRateOverrideInput'), currencyRateStatus: document.getElementById('currencyRateStatus'), limitProviderCheckboxes: document.getElementById('limitProviderCheckboxes'), limitsRefreshInput: document.getElementById('limitsRefreshInput'), refreshIntervalInput: document.getElementById('refreshIntervalInput'), showLimitSourceInput: document.getElementById('showLimitSourceInput'), maskLimitAccountEmailsInput: document.getElementById('maskLimitAccountEmailsInput'), showLimitUsedInputs: Array.from(document.querySelectorAll('input[name="showLimitUsed"]')), floatingBubbleContentInput: document.getElementById('floatingBubbleContentInput'), floatingBubbleComposer: document.getElementById('floatingBubbleComposer'), floatingBubbleContent: document.getElementById('floatingBubbleContent'), trayContentInput: document.getElementById('trayContentInput'), trayComposer: document.getElementById('trayComposer'), windowToggleShortcutValue: document.getElementById('windowToggleShortcutValue'), windowToggleShortcutClearButton: document.getElementById('windowToggleShortcutClearButton'), windowToggleShortcutNote: document.getElementById('windowToggleShortcutNote'), clientDisplayList: document.getElementById('clientDisplayList'), refreshButton: document.getElementById('refreshButton'), closeButton: document.getElementById('closeButton'),
+  shell: document.querySelector('.shell'), status: document.getElementById('status'), liveDot: document.getElementById('liveDot'), tokenRateReveal: document.getElementById('tokenRateReveal'), totalTokens: document.getElementById('totalTokens'), totalTokensCompact: document.getElementById('totalTokensCompact'), cost: document.getElementById('cost'), homePanel: document.getElementById('homePanel'), breakdown: document.getElementById('breakdown'), serviceStatusPanel: document.getElementById('serviceStatusPanel'), limitsPanel: document.getElementById('limitsPanel'), trendsPanel: document.getElementById('trendsPanel'), viewSwitcher: document.getElementById('viewSwitcher'), pinButton: document.getElementById('pinButton'), windowBehaviorInput: document.getElementById('windowBehaviorInput'), utilityActions: document.getElementById('utilityActions'), settingsButton: document.getElementById('settingsButton'), settingsPanel: document.getElementById('settingsPanel'), currencyInput: document.getElementById('currencyInput'), currencyRateRow: document.getElementById('currencyRateRow'), currencyRateModeAuto: document.getElementById('currencyRateModeAuto'), currencyRateModeManual: document.getElementById('currencyRateModeManual'), currencyRateManualField: document.getElementById('currencyRateManualField'), currencyRateOverrideInput: document.getElementById('currencyRateOverrideInput'), currencyRateStatus: document.getElementById('currencyRateStatus'), limitProviderCheckboxes: document.getElementById('limitProviderCheckboxes'), limitsRefreshInput: document.getElementById('limitsRefreshInput'), refreshIntervalInput: document.getElementById('refreshIntervalInput'), showLimitSourceInput: document.getElementById('showLimitSourceInput'), maskLimitAccountEmailsInput: document.getElementById('maskLimitAccountEmailsInput'), showLimitUsedInputs: Array.from(document.querySelectorAll('input[name="showLimitUsed"]')), floatingBubbleContentInput: document.getElementById('floatingBubbleContentInput'), floatingBubbleComposer: document.getElementById('floatingBubbleComposer'), floatingBubbleContent: document.getElementById('floatingBubbleContent'), trayContentInput: document.getElementById('trayContentInput'), trayComposer: document.getElementById('trayComposer'), windowToggleShortcutValue: document.getElementById('windowToggleShortcutValue'), windowToggleShortcutClearButton: document.getElementById('windowToggleShortcutClearButton'), windowToggleShortcutNote: document.getElementById('windowToggleShortcutNote'), clientDisplayList: document.getElementById('clientDisplayList'), refreshButton: document.getElementById('refreshButton'), closeButton: document.getElementById('closeButton'),
   subscriptionList: document.getElementById('subscriptionList'), subscriptionAddForm: document.getElementById('subscriptionAddForm'), subscriptionAddToggle: document.getElementById('subscriptionAddToggle'), subscriptionAddDetails: document.getElementById('subscriptionAddDetails'), subscriptionProviderInput: document.getElementById('subscriptionProviderInput'), subscriptionAccountInput: document.getElementById('subscriptionAccountInput'), subscriptionPlanNameInput: document.getElementById('subscriptionPlanNameInput'), subscriptionAmountInput: document.getElementById('subscriptionAmountInput'), subscriptionCurrencyInput: document.getElementById('subscriptionCurrencyInput'), subscriptionIntervalCountInput: document.getElementById('subscriptionIntervalCountInput'), subscriptionIntervalInput: document.getElementById('subscriptionIntervalInput'), subscriptionStartDateInput: document.getElementById('subscriptionStartDateInput'), subscriptionAutoRenewInput: document.getElementById('subscriptionAutoRenewInput'), subscriptionNextRenewalInput: document.getElementById('subscriptionNextRenewalInput'), subscriptionNote: document.getElementById('subscriptionNote'), subscriptionOrphanNotice: document.getElementById('subscriptionOrphanNotice'), subscriptionOrphanText: document.getElementById('subscriptionOrphanText'), subscriptionOrphanAdopt: document.getElementById('subscriptionOrphanAdopt'), subscriptionOrphanDiscard: document.getElementById('subscriptionOrphanDiscard'), subscriptionSyncError: document.getElementById('subscriptionSyncError'), subscriptionNextRenewalLabel: document.getElementById('subscriptionNextRenewalLabel'), subscriptionNextRenewalNote: document.getElementById('subscriptionNextRenewalNote'), subscriptionSubmit: document.getElementById('subscriptionSubmit'), subscriptionCancelEdit: document.getElementById('subscriptionCancelEdit'), subscriptionTotalRow: document.getElementById('subscriptionTotalRow'), subscriptionErrorMessage: document.getElementById('subscriptionErrorMessage'), subscriptionPlanFields: document.getElementById('subscriptionPlanFields'), subscriptionTopUpFields: document.getElementById('subscriptionTopUpFields'), subscriptionTopUpList: document.getElementById('subscriptionTopUpList'), subscriptionTopUpDateInput: document.getElementById('subscriptionTopUpDateInput'), subscriptionTopUpAmountInput: document.getElementById('subscriptionTopUpAmountInput'), subscriptionTopUpAddButton: document.getElementById('subscriptionTopUpAddButton'), subscriptionAmountRow: document.getElementById('subscriptionAmountRow'), subscriptionTopUpHeadingRow: document.getElementById('subscriptionTopUpHeadingRow'), subscriptionKindInputs: [...document.querySelectorAll('input[name="subscriptionKind"]')]
 };
 Object.assign(elsMap, {
@@ -261,12 +261,7 @@ Object.assign(elsMap, {
   mainSettingsSummary: document.getElementById('mainSettingsSummary'),
   subscriptionsSettingsSummary: document.getElementById('subscriptionsSettingsSummary'),
   sessionDetail: document.getElementById('session-detail'),
-  sessionDetailHead: document.getElementById('session-detail-head'),
-  showTrayIconInput: document.getElementById('showTrayIconInput'),
-  trayIconOptions: document.getElementById('trayIconOptions'),
-  trayModeInput: document.getElementById('trayModeInput'),
-  trayOptions: document.getElementById('trayOptions'),
-  showTrayProviderBadgeInput: document.getElementById('showTrayProviderBadgeInput')
+  sessionDetailHead: document.getElementById('session-detail-head')
 });
 
 function toggleAccordionRow(row) {
@@ -6409,10 +6404,35 @@ function applyInitialBreakdownPreference() {
   if (next !== state.breakdown) setBreakdown(next);
 }
 
+function currentWindowBehavior(source = state.settings) {
+  return source?.windowBehavior === 'normal' ? 'normal' : 'floating';
+}
+
+function nextWindowBehavior(mode) {
+  return mode === 'floating' ? 'normal' : 'floating';
+}
+
+function syncWindowBehaviorControls() {
+  const mode = currentWindowBehavior();
+  const pinned = mode === 'floating';
+  if (els.windowBehaviorInput) els.windowBehaviorInput.value = mode;
+  if (els.pinButton) {
+    els.pinButton.textContent = '📌';
+    els.pinButton.classList.toggle('is-pinned', pinned);
+    els.pinButton.classList.toggle('active', pinned);
+    const title = pinned
+      ? (t('dashboard.unpin') || 'Unpin from top')
+      : (t('dashboard.pin') || 'Pin window on top');
+    els.pinButton.title = title;
+    els.pinButton.setAttribute('aria-label', title);
+  }
+}
+
 function syncSettingsForm() {
   applySettingsTranslations();
   applyInitialBreakdownPreference();
   syncPeriodTabs();
+  syncWindowBehaviorControls();
   if (els.currencyInput) els.currencyInput.value = currentCurrency();
   syncCurrencyRateControls();
   els.limitsRefreshInput.value = String(LIMIT_REFRESH_OPTIONS.includes(Number(state.settings.limitsRefreshMs)) ? state.settings.limitsRefreshMs : 300000);
@@ -6423,22 +6443,6 @@ function syncSettingsForm() {
   const showLimitUsed = state.settings.showLimitUsed ? 'used' : 'remaining';
   for (const input of els.showLimitUsedInputs || []) input.checked = input.value === showLimitUsed;
   refreshTrayComposers();
-  const showTrayIcon = state.settings.showTrayIcon !== false;
-  if (els.showTrayIconInput) els.showTrayIconInput.checked = showTrayIcon;
-  if (els.trayModeInput) {
-    els.trayModeInput.disabled = !showTrayIcon;
-    els.trayModeInput.checked = showTrayIcon && Boolean(state.settings.trayMode);
-  }
-  if (els.trayContentInput) {
-    els.trayContentInput.value = ['tokens', 'cost', 'both', 'tokensAll', 'costAll', 'bothAll', 'limitsAllSessions', 'bars', 'barsSession', 'barsWeekly', 'barsAllSessions', 'icon', 'custom'].includes(state.settings.trayContent) ? state.settings.trayContent : 'tokens';
-    els.trayContentInput.disabled = !showTrayIcon;
-  }
-  if (els.showTrayProviderBadgeInput) {
-    els.showTrayProviderBadgeInput.checked = state.settings.showTrayProviderBadge === true;
-    els.showTrayProviderBadgeInput.disabled = !showTrayIcon;
-  }
-  els.trayIconOptions?.classList.toggle('hidden', !showTrayIcon);
-  els.trayOptions?.classList.toggle('hidden', !showTrayIcon || !state.settings.trayMode);
   syncWindowShortcutStatus();
   if (els.startAtLoginInput) {
     els.startAtLoginInput.disabled = !state.appInfo?.loginItemSupported;
@@ -8796,35 +8800,6 @@ window.addEventListener('resize', () => { if (!numberAnimHandle) fitTotalNumber(
 els.windowToggleShortcutValue?.addEventListener('click', startWindowShortcutRecording);
 els.windowToggleShortcutClearButton?.addEventListener('click', () => setWindowToggleShortcut('').catch(() => {}));
 els.startAtLoginInput?.addEventListener('change', () => saveSettings({ startAtLogin: els.startAtLoginInput.checked }));
-els.showTrayIconInput?.addEventListener('change', () => {
-  const showTrayIcon = els.showTrayIconInput.checked;
-  state.settings.showTrayIcon = showTrayIcon;
-  if (els.trayModeInput) {
-    els.trayModeInput.disabled = !showTrayIcon;
-    if (!showTrayIcon) els.trayModeInput.checked = false;
-  }
-  if (els.trayContentInput) els.trayContentInput.disabled = !showTrayIcon;
-  if (els.showTrayProviderBadgeInput) els.showTrayProviderBadgeInput.disabled = !showTrayIcon;
-  els.trayIconOptions?.classList.toggle('hidden', !showTrayIcon);
-  els.trayOptions?.classList.toggle('hidden', !showTrayIcon || !els.trayModeInput?.checked);
-  refreshTrayComposers();
-  saveSettings({ showTrayIcon, trayMode: showTrayIcon ? Boolean(els.trayModeInput?.checked) : false });
-});
-els.trayModeInput?.addEventListener('change', () => {
-  els.trayOptions?.classList.toggle('hidden', !els.showTrayIconInput?.checked || !els.trayModeInput.checked);
-  saveSettings({ trayMode: els.trayModeInput.checked });
-});
-els.trayContentInput?.addEventListener('change', () => {
-  state.settings.trayContent = els.trayContentInput.value;
-  refreshTrayComposers();
-  maybeUpdateBarsIcon();
-  saveSettings({ trayContent: els.trayContentInput.value });
-});
-els.showTrayProviderBadgeInput?.addEventListener('change', () => {
-  state.settings.showTrayProviderBadge = els.showTrayProviderBadgeInput.checked;
-  void maybeUpdateBarsIcon();
-  saveSettings({ showTrayProviderBadge: els.showTrayProviderBadgeInput.checked });
-});
 els.refreshButton.addEventListener('click', () => {
   if (state.breakdown === 'status') refreshStatusViewManually().catch(() => {});
   // Only this button asks for a history rescan and a self-sync: `{ force: true }` is
@@ -8832,6 +8807,12 @@ els.refreshButton.addEventListener('click', () => {
   // the expensive `tokscale graph`, plus the Cursor and Antigravity sync subprocesses,
   // on every one of them.
   else refreshStats({ force: true, forceHistory: true, forceSelfSync: true, refreshPricing: true, feedback: true });
+});
+els.pinButton?.addEventListener('click', () => {
+  saveSettings({ windowBehavior: nextWindowBehavior(currentWindowBehavior()) });
+});
+els.windowBehaviorInput?.addEventListener('change', () => {
+  saveSettings({ windowBehavior: els.windowBehaviorInput.value });
 });
 els.closeButton.addEventListener('click', () => window.tokenMonitor.close());
 els.trendsPanel.addEventListener('click', (event) => {

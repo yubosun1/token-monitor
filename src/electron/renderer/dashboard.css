@@ -39,8 +39,14 @@ body {
   -webkit-app-region: no-drag;
   background: rgba(var(--overlay-rgb), 0.05); color: inherit; border: none; cursor: pointer;
   width: 26px; height: 26px; border-radius: 6px; font-size: 14px; line-height: 1;
+  transition: background 160ms ease, box-shadow 160ms ease;
 }
 .icon-button:hover { background: rgba(var(--overlay-rgb), 0.12); }
+.icon-button.is-pinned,
+.icon-button.active {
+  background: rgba(var(--overlay-rgb), 0.22);
+  box-shadow: 0 0 0 1px rgba(var(--overlay-rgb), 0.25);
+}
 
 .dash-tabs { display: flex; gap: 4px; padding: 10px 14px 0; }
 .dash-tab {

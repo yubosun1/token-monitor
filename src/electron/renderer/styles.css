@@ -348,6 +348,11 @@ html.is-mac-legacy .shell {
   transform: translateY(0);
   transition-delay: 0ms;
 }
+.window-actions #pinButton.is-pinned,
+.window-actions #pinButton.active {
+  background: rgba(var(--overlay-rgb), 0.22);
+  box-shadow: 0 0 0 1px rgba(var(--overlay-rgb), 0.25);
+}
 .title-controls .tabs {
   position: absolute;
   inset: 0;

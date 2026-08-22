@@ -219,7 +219,7 @@ final class BridgeCore {
             // Same contract as the Electron main process: { ok, result: TokscalePricing }.
             // Resolve may spawn a tokscale subprocess, so this case runs on the
             // async dispatch list in Bridge.userContentController (never main).
-            if let pricing = TokscaleRunner.shared.pricing(for: modelId),
+            if let pricing = TokscaleRunner.shared.pricing(for: modelId, policy: .resolve),
                let data = try? JSONEncoder().encode(pricing),
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                 return ["ok": true, "result": json]
@@ -280,13 +280,6 @@ final class BridgeCore {
 
         case "floatingBubble:setCollapsedSize":
             return [String: Any]()
-
-        case "tray:setIcons":
-            let icons = args.first as? [String: Any] ?? [:]
-            DispatchQueue.main.async {
-                (NSApp.delegate as? AppDelegate)?.updateTrayIcons(icons)
-            }
-            return true
 
         // Account/profile surfaces for tools the native app no longer manages.
         case "mimo:accounts", "mimo:addAccount", "mimo:openConsole", "mimo:removeAccount",
