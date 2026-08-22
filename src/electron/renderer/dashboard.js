@@ -13,6 +13,22 @@ const reducedMotionMedia = window.matchMedia?.('(prefers-reduced-motion: reduce)
 // by reference and mutated in place to apply vendor overrides).
 const BRAND_VENDOR_COLORS = { ...charts.clientColors };
 
+const clientLabels = {
+  claude: 'Claude Code',
+  codex: 'Codex',
+  opencode: 'OpenCode',
+  kimi: 'Kimi',
+  antigravity: 'Antigravity',
+  workbuddy: 'WorkBuddy',
+  proma: 'Proma',
+  hanako: 'Hanako',
+  dsh: 'DeepSeek Harness'
+};
+
+function formatClientName(key) {
+  return clientLabels[key] || key;
+}
+
 const els = {
   body: document.body,
   pinBtn: document.getElementById('pinBtn'),
@@ -338,7 +354,6 @@ function colorFor(key) {
   const base = state.stackBy === 'model' ? charts.modelColor(key) : (charts.clientColors[key] || charts.clientColors.default);
   return displayColor(base);
 }
-
 // The app's CSP (style-src 'self') blocks inline style="" attributes, so swatch/dot
 // colors are carried in data-c and applied via the CSSOM (.style, which CSP allows).
 function applySwatchColors(root) {
@@ -353,13 +368,14 @@ function renderLegend(model) {
   const rows = (model.keys || []).map((k) => ({ key: k, value: totals[k] || 0 }))
     .filter((r) => r.value > 0)
     .sort((a, b) => b.value - a.value);
-  els.legend.innerHTML = rows.map((r) =>
-    `<div class="dash-legend-row">`
-    + `<span class="dash-legend-name"><span class="dash-legend-swatch" data-c="${colorFor(r.key)}"></span>${r.key}</span>`
-    + `<span class="dash-legend-val">${formatCompact(r.value)}</span>`
-    + `<span class="dash-legend-pct">${(r.value / grand * 100).toFixed(1)}%</span>`
-    + `</div>`
-  ).join('');
+  els.legend.innerHTML = rows.map((r) => {
+    const name = state.stackBy === 'client' ? formatClientName(r.key) : r.key;
+    return `<div class="dash-legend-row">`
+      + `<span class="dash-legend-name"><span class="dash-legend-swatch" data-c="${colorFor(r.key)}"></span>${name}</span>`
+      + `<span class="dash-legend-val">${formatCompact(r.value)}</span>`
+      + `<span class="dash-legend-pct">${(r.value / grand * 100).toFixed(1)}%</span>`
+      + `</div>`;
+  }).join('');
   applySwatchColors(els.legend);
 }
 
@@ -416,7 +432,7 @@ function renderBreakdown() {
     grandTotal += Number(d.tokens || 0);
   }
   
-  const buildCol = (titleKey, map, colorFn) => {
+  const buildCol = (titleKey, map, colorFn, labelFn) => {
     // macos-native: show every model/client (upstream caps the columns at 5).
     const rows = Object.entries(map).filter(x => x[1] > 0).sort((a, b) => b[1] - a[1]);
     if (rows.length === 0) return '';
@@ -426,8 +442,9 @@ function renderBreakdown() {
       const pctMax = maxVal > 0 ? (val / maxVal * 100).toFixed(1) : '0.0';
       const color = displayColor(colorFn(key));
       const motionKey = `${titleKey}:${encodeURIComponent(key)}`;
+      const label = typeof labelFn === 'function' ? labelFn(key) : key;
       return `<div class="dash-bd-row">
-        <span class="dash-bd-name"><span class="dash-bd-swatch" data-c="${color}"></span>${String(key).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')}</span>
+        <span class="dash-bd-name"><span class="dash-bd-swatch" data-c="${color}"></span>${String(label).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')}</span>
         <div class="dash-bd-bar-bg"><div class="dash-bd-bar-fill" data-motion-key="${motionKey}" data-w="${Number(pctMax) / 100}" data-c="${color}"></div></div>
         <span class="dash-bd-val">${formatCompact(val)}</span>
         <span class="dash-bd-pct">${pctGrand}%</span>
@@ -437,7 +454,7 @@ function renderBreakdown() {
   };
   
   const colModel = buildCol('dashboard.stack.model', modelTotals, charts.modelColor);
-  const colClient = buildCol('dashboard.stack.client', clientTotals, (k) => charts.clientColors[k] || charts.clientColors.default);
+  const colClient = buildCol('dashboard.stack.client', clientTotals, (k) => charts.clientColors[k] || charts.clientColors.default, formatClientName);
   
   elsBreakdown.innerHTML = colModel + colClient;
   applySwatchColors(elsBreakdown);
@@ -594,9 +611,10 @@ function positionTooltip(ev) {
 
 function showBarTooltip(bar, ev) {
   const segs = (bar.segments || []).filter((s) => s.value > 0).sort((a, b) => b.value - a.value);
-  const rows = segs.map((s) =>
-    `<div class="tt-row"><span class="tt-dot" data-c="${colorFor(s.key)}"></span><span class="tt-name">${s.key}</span><span class="tt-val">${formatCompact(s.value)}</span></div>`
-  ).join('');
+  const rows = segs.map((s) => {
+    const name = state.stackBy === 'client' ? formatClientName(s.key) : s.key;
+    return `<div class="tt-row"><span class="tt-dot" data-c="${colorFor(s.key)}"></span><span class="tt-name">${name}</span><span class="tt-val">${formatCompact(s.value)}</span></div>`;
+  }).join('');
   els.tooltip.innerHTML = `<div class="tt-head">${shortDate(bar.label)} · ${formatCompact(bar.total)}</div>${rows}`;
   applySwatchColors(els.tooltip);
   positionTooltip(ev);
