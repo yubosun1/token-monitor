@@ -546,12 +546,10 @@ function formatCompact(value, unitSystem, locale) {
 function updateTotalCompact(value) {
   if (!els.totalTokensCompact) return;
   const num = Math.round(Number(value || 0));
-  const unitSystem = effectiveCompactTokenUnits();
-  const threshold = compactTokenApi.compactTokenUnitThreshold(unitSystem, currentLocale());
-  if (state.settings?.showCompactTotalTokens !== true || Math.abs(num) < threshold) {
+  if (!isCompactTokensEnabled() || Math.abs(num) < 10000) {
     hideTotalCompact();
   } else {
-    els.totalTokensCompact.textContent = `≈ ${formatCompact(num, unitSystem, currentLocale())}`;
+    els.totalTokensCompact.textContent = `≈ ${formatTokenDisplay(num)}`;
     els.totalTokensCompact.classList.remove('hidden');
   }
   fitTotalNumber();
