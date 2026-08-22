@@ -5147,7 +5147,6 @@ function homeLimitRows() {
   const enabled = enabledLimitProviderSet();
   const providerOrder = state.settings?.homeLimitProviderOrder || state.settings?.limitProviderOrder;
   const providerOptions = limitProviderOrderApi.orderedLimitProviders(LIMIT_PROVIDERS, providerOrder);
-  const hasConfiguredOrder = Boolean(state.settings?.homeLimitProviderOrder);
   return homeOverviewApi.homeLimitAccountsForProviders({
     providers: (state.stats?.limits?.providers || []).map((provider) => ({
       ...provider,
@@ -5158,7 +5157,7 @@ function homeLimitRows() {
     hiddenProviderIds: Array.from(hiddenHomeLimitProviderSet()),
     colors: clientColors,
     limit: state.settings?.homeLimitAccountCount ?? 3,
-    sort: hasConfiguredOrder ? 'configured' : 'remaining',
+    sort: 'configured',
     accountName: (provider, index, providerEntries) => {
       const id = String(provider?.provider || '').trim().toLowerCase();
       const option = providerOptions.find((entry) => entry.id === id);
