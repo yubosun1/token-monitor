@@ -37,15 +37,41 @@ body {
 .dash-header-actions { -webkit-app-region: no-drag; display: flex; gap: 6px; }
 .icon-button {
   -webkit-app-region: no-drag;
-  background: rgba(var(--overlay-rgb), 0.05); color: inherit; border: none; cursor: pointer;
-  width: 26px; height: 26px; border-radius: 6px; font-size: 14px; line-height: 1;
-  transition: background 160ms ease, box-shadow 160ms ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(var(--overlay-rgb), 0.05);
+  color: inherit;
+  border: 1px solid var(--line, rgba(var(--line-rgb), 0.14));
+  cursor: pointer;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1;
+  transition: background 160ms ease, box-shadow 160ms ease, border-color 160ms ease, color 160ms ease;
 }
-.icon-button:hover { background: rgba(var(--overlay-rgb), 0.12); }
+.icon-button:hover {
+  background: rgba(var(--overlay-rgb), 0.12);
+}
 .icon-button.is-pinned,
 .icon-button.active {
-  background: rgba(var(--overlay-rgb), 0.22);
-  box-shadow: 0 0 0 1px rgba(var(--overlay-rgb), 0.25);
+  background: rgba(183, 234, 212, 0.18);
+  border-color: rgba(183, 234, 212, 0.58);
+  color: #b7ead4;
+  box-shadow: 0 0 0 1px rgba(183, 234, 212, 0.25);
+}
+.pin-icon {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  vertical-align: middle;
+  transition: transform 160ms cubic-bezier(0.25, 1, 0.5, 1), color 160ms ease;
+}
+.icon-button.is-pinned .pin-icon,
+.icon-button.active .pin-icon {
+  color: #b7ead4;
+  transform: rotate(-45deg);
 }
 
 .dash-tabs { display: flex; gap: 4px; padding: 10px 14px 0; }

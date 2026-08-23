@@ -65,12 +65,12 @@ const HEAT_CELL_MOTION_MS = 280;
 let heatmapMotionGeneration = 0;
 
 function prefersReducedMotion() {
-  return motionPreferenceApi.shouldReduceMotion(state.reduceMotion, reducedMotionMedia?.matches);
+  return Boolean(reducedMotionMedia?.matches);
 }
 
-function applyReduceMotionPreference(value) {
-  state.reduceMotion = motionPreferenceApi.normalize(value);
-  document.documentElement.dataset.reduceMotion = state.reduceMotion;
+function applyReduceMotionPreference() {
+  state.reduceMotion = 'system';
+  document.documentElement.dataset.reduceMotion = 'system';
   if (!prefersReducedMotion()) return;
   heatmapMotionGeneration += 1;
   state.motion = 'none';
@@ -231,29 +231,8 @@ function applyTranslations() {
   document.documentElement.lang = state.locale;
 }
 
-function applyAppearance(settings) {
-  const opacity = Math.min(100, Math.max(0, settings?.glassOpacity ?? 68)) / 100;
-  const depth = Math.min(100, Math.max(0, settings?.glassBlur ?? 32)) / 100;
-  const root = document.documentElement.style;
-  root.setProperty('--glass-alpha', opacity.toFixed(2));
-  root.setProperty('--line-alpha', (0.1 + depth * 0.09).toFixed(3));
-  applyReduceMotionPreference(settings?.reduceMotion);
-  applyThemeColors(settings?.themeColors);
-  applyVendorColorOverrides(settings?.vendorColors);
-}
-
-function applyThemeColors(overrides) {
-  const root = document.documentElement.style;
-  for (const { name, value } of themePresetsApi.themeCssVarEntries(overrides)) {
-    if (value) root.setProperty(name, value);
-    else root.removeProperty(name);
-  }
-  dashboardIsLightCache = null; // theme may have flipped the light/dark strategy
-}
-
-function applyVendorColorOverrides(overrides) {
-  const merged = themePresetsApi.mergeVendorColors(BRAND_VENDOR_COLORS, overrides);
-  for (const key of Object.keys(BRAND_VENDOR_COLORS)) charts.clientColors[key] = merged[key];
+function applyAppearance(_settings) {
+  applyReduceMotionPreference();
 }
 
 function formatCompact(value) {

@@ -64,25 +64,6 @@ const LIMIT_PROVIDER_ACCOUNT_STATUS_IDS = {
   kimi: 'kimiAccountStatus'
 };
 const LIMIT_PROVIDER_CONNECTION_DETAIL_KEYS = {};
-const TRAY_ICON_VARIANTS = [
-  { id: 'claude-brand', label: 'Claude', after: 'claude' },
-  { id: 'chatgpt', label: 'ChatGPT', after: 'codex' }
-];
-const trayIconProviderIds = new Set([
-  ...clientsWithIcon,
-  ...TRAY_ICON_VARIANTS.map((provider) => provider.id)
-]);
-const TRAY_ICON_PROVIDERS = [
-  ...KNOWN_CLIENTS.flatMap((provider) => [
-    provider,
-    ...TRAY_ICON_VARIANTS.filter((variant) => variant.after === provider.id)
-  ]),
-  ...LIMIT_PROVIDERS
-]
-  .filter((provider, index, providers) => (
-    trayIconProviderIds.has(provider.id)
-    && providers.findIndex((entry) => entry.id === provider.id) === index
-  ));
 const DEFAULT_LIMIT_PROVIDER_ORDER = LIMIT_PROVIDERS.map((provider) => provider.id).join(',');
 const limitProviderOrderApi = window.TokenMonitorLimitProviderOrder;
 const limitProviderPresentationApi = window.TokenMonitorLimitProviderPresentation;
@@ -445,11 +426,6 @@ function viewsSummary() {
 
 function settingsSectionSummary(section) {
   if (!state.settings) return '';
-  if (section === 'sync') {
-    if (state.settings.hubMode === 'host') return t('settings.sync.hostHub');
-    if (state.settings.hubMode === 'client') return t('settings.sync.connectHub');
-    return t('settings.sync.localOnly');
-  }
   if (section === 'tools') {
     const counts = clientHealthPresentationApi.clientHealthCountsForTracked(
       localClientHealth(),
@@ -817,7 +793,7 @@ function updateLargeSessionContainment(enabled, { remeasure = false } = {}) {
 }
 
 function prefersReducedMotion() {
-  return motionPreferenceApi.shouldReduceMotion(state.settings?.reduceMotion, reducedMotionMedia?.matches);
+  return Boolean(reducedMotionMedia?.matches);
 }
 
 function settleMotionAnimations() {
@@ -841,11 +817,10 @@ function settleMotionAnimations() {
   rowBarAnimations.clear();
 }
 
-function applyReduceMotionPreference(value) {
-  const preference = motionPreferenceApi.normalize(value);
-  document.documentElement.dataset.reduceMotion = preference;
-  if (motionPreferenceApi.shouldReduceMotion(preference, reducedMotionMedia?.matches)) settleMotionAnimations();
-  return preference;
+function applyReduceMotionPreference() {
+  document.documentElement.dataset.reduceMotion = 'system';
+  if (prefersReducedMotion()) settleMotionAnimations();
+  return 'system';
 }
 
 function captureBreakdownMotion() {
@@ -1700,16 +1675,11 @@ function subscriptionPlanTooltipRows(subscription, provider, today, includeRollu
     value: `≈ ${formatCost(usageCostUsd)}${rollup.count > 1 ? ` · ${t('subscription.tooltip.allAccounts')}` : ''}`,
     title: t('subscription.tooltip.monthUsageNote')
   });
-  rows.push({
-    label: t('subscription.tooltip.valueMultiple'),
-    value: `${multiple.toFixed(1)}×`
-  });
   return rows;
 }
 
 // The group header stands for every account at once, so it summarises rather
-// than picking one of them. Usage and the value multiple are already provider
-// level on the per-account card; here the price is too.
+// than picking one of them.
 function subscriptionGroupTooltipRows(providerId, today) {
   const rollup = subscriptionApi.providerRollup(subscriptionList(), providerId, currencyApi, today);
   const rows = [{
@@ -1728,10 +1698,6 @@ function subscriptionGroupTooltipRows(providerId, today) {
     value: `≈ ${formatCost(usageCostUsd)} · ${t('subscription.tooltip.allAccounts')}`,
     title: t('subscription.tooltip.monthUsageNote')
   });
-  const multiple = subscriptionApi.valueMultiple(rollup.monthlyUsd, usageCostUsd);
-  if (multiple !== null) {
-    rows.push({ label: t('subscription.tooltip.valueMultiple'), value: `${multiple.toFixed(1)}×` });
-  }
   return rows;
 }
 
@@ -1767,25 +1733,11 @@ function topUpTooltipRows(subscription, provider, today, includeRollup) {
 
   const creditsWindow = (provider?.windows || []).find(isCreditsWindow) || null;
   const balance = creditsAmount(provider, creditsWindow);
-  if (balance === null) return topUpRollupRows(rows, subscription, today, includeRollup);
-  const balanceCurrency = String(creditsWindow?.currency || provider?.balance?.currency || subscription.currency);
-  rows.push({ label: t('subscription.tooltip.balance'), value: formatMoney(balance, balanceCurrency) });
-
-  const projection = subscriptionApi.topUpProjection(subscription, balance, today, {
-    currencyApi,
-    balanceCurrency
-  });
-  if (!projection || projection.dailyBurn <= 0) return topUpRollupRows(rows, subscription, today, includeRollup);
-  rows.push({
-    label: t('subscription.tooltip.burnRate'),
-    value: t('subscription.tooltip.perDay', { amount: formatMoney(projection.dailyBurn, balanceCurrency) })
-  });
-  if (projection.exhaustDate) {
-    rows.push({
-      label: t('subscription.tooltip.exhausts'),
-      value: `${subscriptionDateText(projection.exhaustDate)} · ${subscriptionDaysText(projection.daysRemaining)}`
-    });
+  if (balance !== null) {
+    const balanceCurrency = String(creditsWindow?.currency || provider?.balance?.currency || subscription.currency);
+    rows.push({ label: t('subscription.tooltip.balance'), value: formatMoney(balance, balanceCurrency) });
   }
+
   return topUpRollupRows(rows, subscription, today, includeRollup);
 }
 
@@ -1795,16 +1747,12 @@ function topUpRollupRows(rows, subscription, today, includeRollup) {
   if (!includeRollup) return rows;
   const usageCostUsd = subscriptionUsageCostUsd(subscription.provider);
   if (usageCostUsd === null) return rows;
-  const rollup = subscriptionApi.providerRollup(subscriptionList(), subscription.provider, currencyApi, today);
-  const multiple = subscriptionApi.valueMultiple(rollup.monthlyUsd, usageCostUsd);
-  if (multiple === null) return rows;
   rows.push({ separator: true });
   rows.push({
     label: t('subscription.tooltip.monthUsage'),
     value: `≈ ${formatCost(usageCostUsd)}`,
     title: t('subscription.tooltip.monthUsageNote')
   });
-  rows.push({ label: t('subscription.tooltip.valueMultiple'), value: `${multiple.toFixed(1)}×` });
   return rows;
 }
 
@@ -5703,14 +5651,8 @@ function statusTextFor(mode, connected) {
   return 'Starting…';
 }
 
-function liveDotTitle(mode, connected) {
-  if (mode === 'sync') {
-    if (connected) return t('status.hubStreamLive');
-    const reason = streamFailureText(state.streamFailure);
-    return reason ? `${t('status.hubStreamOffline')}: ${reason}` : t('status.hubStreamOffline');
-  }
-  if (mode === 'local') return connected ? 'Local collector running' : 'Local collector starting…';
-  return 'Idle';
+function liveDotTitle(_mode, connected) {
+  return connected ? '本地采集已就绪' : '本地采集中…';
 }
 
 function setLiveDot(connected) {
@@ -5901,26 +5843,7 @@ function applyControlLayout(swapSettingsAndRefresh) {
 }
 
 function applyAppearanceSettings(settings) {
-  const opacity = glassRenderingApi.renderedGlassOpacity(settings, {
-    platform: state.appInfo?.platform,
-    userAgent: navigator.userAgent
-  });
-  const depth = clamp(settings?.glassBlur ?? 32, 0, 100) / 100;
-  const systemGlassDisabled = settings?.systemGlass === false;
-  document.documentElement.style.setProperty('--glass-alpha', opacity.toFixed(2));
-  document.documentElement.style.setProperty('--line-alpha', (0.1 + depth * 0.09).toFixed(3));
-  document.documentElement.style.setProperty('--line-strong-alpha', (0.18 + depth * 0.14).toFixed(3));
-  document.documentElement.style.setProperty('--control-alpha', (0.03 + depth * 0.045).toFixed(3));
-  document.documentElement.classList.toggle('system-glass-disabled', systemGlassDisabled);
-  applyReduceMotionPreference(settings?.reduceMotion);
-  // Only full settings objects carry themeColors; glass/zoom preview patches
-  // omit it, so we must not wipe theme overrides mid-slider-drag.
-  if (settings && 'themeColors' in settings) applyThemeColors(settings.themeColors);
-  // The native build ships dark-only: appearance switching was removed, so the
-  // theme is always pinned to the dark "default" preset regardless of any
-  // legacy appearanceMode value left in stored settings.
-  applyAppearanceMode('dark');
-  els.liveDot.style.display = (settings?.showLiveDot !== false) ? '' : 'none';
+  applyReduceMotionPreference();
   els.shell.classList.toggle('desktop-mode', settings?.windowBehavior === 'desktop');
   els.shell.classList.toggle('title-icon-only', settings?.titleIconOnly === true);
   const trayMode = settings && 'trayMode' in settings
@@ -5932,7 +5855,6 @@ function applyAppearanceSettings(settings) {
   }
   let isMacLegacyRadius = false;
   if (state.appInfo?.platform === 'darwin' && state.appInfo?.osRelease) {
-    // macOS Tahoe (macOS 26) is Darwin 25. Older macOS versions (like 14, 15) use a ~12px native vibrancy radius.
     const major = parseInt(state.appInfo.osRelease.split('.')[0], 10);
     if (major < 25) isMacLegacyRadius = true;
   }
@@ -5943,74 +5865,6 @@ function applyAppearanceSettings(settings) {
   document.documentElement.classList.toggle('is-mac-legacy', isMacLegacyRadius);
   document.body.classList.toggle('is-mac-legacy', isMacLegacyRadius);
   updateTitleFit();
-}
-
-const themePresetsApi = window.TokenMonitorThemePresets;
-let appliedThemeOverrides = {};
-// Snapshot of the canonical brand colours, taken before any override is
-// applied. clientColors is mutated in place (other modules hold the same
-// reference), so this is the source of truth for "reset to brand".
-const BRAND_VENDOR_COLORS = { ...clientColors };
-
-function appearanceSummary() {
-  const theme = themePresetsApi.normalizeOverrides(state.settings?.themeColors, themePresetsApi.INTERFACE_COLOR_KEYS);
-  const vendor = themePresetsApi.normalizeOverrides(state.settings?.vendorColors, Object.keys(BRAND_VENDOR_COLORS));
-  const presetId = matchingThemePresetId(theme);
-  const presetLabel = presetId ? t(`settings.appearance.preset.${presetId}`) : t('settings.appearance.custom');
-  const customVendors = Object.keys(vendor).length;
-  if (customVendors > 0) {
-    return t('settings.summary.appearance', { theme: presetLabel, vendors: customVendors });
-  }
-  return presetLabel;
-}
-
-// Returns the preset id whose colours exactly match the resolved palette, or
-// null when the palette is a custom mix.
-function matchingThemePresetId(overrides) {
-  const resolved = themePresetsApi.mergeThemeColors(overrides);
-  for (const preset of themePresetsApi.THEME_PRESETS) {
-    if (themePresetsApi.INTERFACE_COLOR_KEYS.every((k) => resolved[k] === preset.colors[k])) return preset.id;
-  }
-  return null;
-}
-
-function applyThemeColors(overrides) {
-  appliedThemeOverrides = themePresetsApi.normalizeOverrides(overrides, themePresetsApi.INTERFACE_COLOR_KEYS);
-  const root = document.documentElement.style;
-  for (const { name, value } of themePresetsApi.themeCssVarEntries(appliedThemeOverrides)) {
-    if (value) root.setProperty(name, value);
-    else root.removeProperty(name);
-  }
-}
-
-// Map the appearanceMode setting (dark/light/auto) onto a theme preset.
-// dark  -> the default graphite preset (also the stylesheet's :root values)
-// light -> the porcelain preset (light base; themeCssVarEntries flips the
-//          overlay/border system to dark-on-light)
-// auto  -> follow the system colour scheme via prefers-color-scheme
-function applyAppearanceMode(mode) {
-  const resolved = mode === 'light'
-    ? 'porcelain'
-    : mode === 'auto'
-      ? (window.matchMedia?.('(prefers-color-scheme: light)')?.matches ? 'porcelain' : 'default')
-      : 'default';
-  const preset = themePresetsApi.THEME_PRESETS.find((entry) => entry.id === resolved);
-  if (!preset) return;
-  const next = {};
-  for (const key of themePresetsApi.INTERFACE_COLOR_KEYS) {
-    if (preset.colors[key] !== themePresetsApi.DEFAULT_THEME[key]) next[key] = preset.colors[key];
-  }
-  applyThemeColors(next);
-}
-
-function applyVendorColorOverrides(overrides) {
-  const merged = themePresetsApi.mergeVendorColors(BRAND_VENDOR_COLORS, overrides);
-  for (const key of Object.keys(BRAND_VENDOR_COLORS)) clientColors[key] = merged[key];
-}
-
-// Current resolved palette value for an interface colour key.
-function resolvedThemeColor(key) {
-  return appliedThemeOverrides[key] || themePresetsApi.DEFAULT_THEME[key];
 }
 
 function syncWindowShortcutStatus() {
@@ -6138,12 +5992,11 @@ function syncWindowBehaviorControls() {
   const pinned = state.settings?.windowPinned === true;
   if (els.windowBehaviorInput) els.windowBehaviorInput.value = pinned ? 'floating' : 'normal';
   if (els.pinButton) {
-    els.pinButton.textContent = '📌';
     els.pinButton.classList.toggle('is-pinned', pinned);
     els.pinButton.classList.toggle('active', pinned);
     const title = pinned
-      ? (t('dashboard.unpin') || 'Unpin from top')
-      : (t('dashboard.pin') || 'Pin window on top');
+      ? (t('dashboard.unpin') || '取消置顶')
+      : (t('dashboard.pin') || '固定置顶');
     els.pinButton.title = title;
     els.pinButton.setAttribute('aria-label', title);
   }

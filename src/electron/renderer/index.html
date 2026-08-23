@@ -22,8 +22,12 @@
           </nav>
           <div class="actions-hotspot" title="Window controls"></div>
           <div class="window-actions">
-            <button id="pinButton" class="icon-button" title="Pin window on top">📌</button>
-            <button id="closeButton" class="icon-button" title="Close">×</button>
+            <button id="pinButton" class="icon-button" title="固定置顶" aria-label="固定置顶">
+              <svg class="pin-icon" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path d="M14 3l7 7-3 1-4 4 .5 3-2 2-3-5-5-3 2-2 3 .5 4-4 1-3Z"/>
+              </svg>
+            </button>
+            <button id="closeButton" class="icon-button" title="关闭" aria-label="关闭">×</button>
           </div>
         </div>
       </header>
@@ -334,17 +338,6 @@
           </button>
           <div id="subscriptionsSettingsDetails" class="settings-section-details hidden">
             <p id="subscriptionNote" class="settings-note" data-i18n="settings.subscriptions.note">Record what you actually pay for each AI account. Hover an account's plan label on the AI Tool Limits page to see what you recorded here.</p>
-            <!-- Writes go to the hub when one is configured, so unlike every
-                 other setting in this panel they can be refused. The message
-                 sits outside the add form because a delete can fail too, and
-                 the form is closed at that point. -->
-            <p id="subscriptionSyncError" class="settings-note subscription-sync-error hidden"></p>
-            <!-- Shown once, when this device joined a hub that already had a
-                 list: its own records are not in it, and dropping them silently
-                 is not ours to do. -->
-            <div id="subscriptionOrphanNotice" class="subscription-orphan-notice hidden">
-              <p id="subscriptionOrphanText" class="settings-note"></p>
-            </div>
             <div id="subscriptionList" class="opencode-profile-list"></div>
             <div id="subscriptionAddForm" class="opencode-add-form">
               <button id="subscriptionAddToggle" class="opencode-add-summary" type="button" aria-expanded="false" aria-controls="subscriptionAddDetails">

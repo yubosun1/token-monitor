@@ -28,7 +28,6 @@ final class SettingsStore {
             lock.lock(); defer { lock.unlock() }
             values.merge(json) { _, new in new }
             migrateLegacyDefaultsIfNeeded()
-            normalizeOrphanedSubscriptions()
         }
     }
 
@@ -37,7 +36,7 @@ final class SettingsStore {
     /// from the older native configuration.
     private func migrateLegacyDefaultsIfNeeded() {
         let version = values["settingsSchemaVersion"] as? Int ?? 0
-        guard version < 6 else { return }
+        guard version < 7 else { return }
         if version < 1, (values["heatmapMetric"] as? String) == "cost" {
             values["heatmapMetric"] = "tokens"
         }
@@ -82,7 +81,17 @@ final class SettingsStore {
             values.removeValue(forKey: "serviceProviderDisplayOrder")
             values.removeValue(forKey: "hiddenServiceProviders")
         }
-        values["settingsSchemaVersion"] = 6
+        if version < 7 {
+            values.removeValue(forKey: "trayContent")
+            values.removeValue(forKey: "subscriptionsOrphaned")
+            values.removeValue(forKey: "subscriptionsHub")
+            values.removeValue(forKey: "hubUrl")
+            values.removeValue(forKey: "hubMode")
+            values.removeValue(forKey: "hubSecret")
+            values.removeValue(forKey: "themeColors")
+            values.removeValue(forKey: "vendorColors")
+        }
+        values["settingsSchemaVersion"] = 7
         persist(values)
     }
 
@@ -96,18 +105,6 @@ final class SettingsStore {
     private static func removingCSVValue(_ value: String, value item: String) -> String {
         let entries = value.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty && $0 != item }
         return entries.joined(separator: ",")
-    }
-
-    /// The pre-native format of `subscriptionsOrphaned` was a dict
-    /// (`["hubUrl": "", "records": [...]]`); the renderer reads it as an array
-    /// (`orphans.length`), so a persisted dict made the orphan notice render
-    /// unconditionally. Normalize on every load — unlike the schema-version
-    /// migration this is unconditional, because any pre-fix build can write the
-    /// legacy shape back at any time.
-    private func normalizeOrphanedSubscriptions() {
-        guard let orphaned = values["subscriptionsOrphaned"], !(orphaned is [Any]) else { return }
-        values["subscriptionsOrphaned"] = [Any]()
-        persist(values)
     }
 
     static func defaults() -> [String: Any] {
@@ -156,9 +153,7 @@ final class SettingsStore {
             "opencodeLocalLimitsEnabled": false,
             // Subscriptions
             "subscriptions": [Any](),
-            "subscriptionsOrphaned": [Any](),
             // UI
-            "showLiveDot": true,
             "showToolIcons": true,
             "titleIconOnly": true,
             "showCompactTotalTokens": false,
@@ -182,7 +177,6 @@ final class SettingsStore {
             "windowToggleShortcut": "CommandOrControl+E",
             "windowBounds": NSNull(),
             "zoomFactor": 1,
-            "trayContent": "icon",
             "showTrayIcon": true,
             "trayMode": true,
             "settingsInTitlebar": false

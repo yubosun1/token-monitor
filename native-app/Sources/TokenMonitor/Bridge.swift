@@ -267,8 +267,6 @@ final class BridgeCore {
             return rendererSettingsSnapshot()
 
         case "subscriptions:adoptOrphans", "subscriptions:discardOrphans":
-            // Local mode has no hub: orphans are a hub-join artifact.
-            settings.update(["subscriptionsOrphaned": [Any]()])
             return ["ok": true]
 
         case "opencode:getProfiles":
