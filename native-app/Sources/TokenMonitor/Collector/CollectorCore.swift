@@ -566,62 +566,64 @@ final class Collector {
             syncSpan.end()
         }
         for client in adapterClientIds where clients.contains(client) {
-            let span = PerfDiag.span("source-" + client)
-            let fp = environment.adapterFingerprint(client)
-            let raw: RawSnapshot
-            if let cached = rawSnapshots[client], cached.fingerprint == fp.signature {
-                raw = cached
-            } else if let prior = rawSnapshots[client],
-                      now.timeIntervalSince(lastAdapterReadAt[client] ?? .distantPast) < adapterRecheckInterval(settings) {
-                // Low-CPU mode: the source changed while a session is actively
-                // appending, but a fresh read happened within the cooldown
-                // window — reuse the previous snapshot and let the next tick
-                // pick up the new data. Stats trail the source by at most the
-                // window; re-decompression/parsing is bounded to 1/window.
-                raw = prior
-                PerfDiag.log(String(format: "source %@: changed but within re-read cooldown (%.0fs), reusing previous rows", client, adapterRecheckInterval(settings)))
-            } else {
-                let rows = environment.adapterRows(client)
-                raw = RawSnapshot(
-                    fingerprint: fp.signature,
-                    rows: rows,
-                    models: Self.distinctModelIds(rows)
+            autoreleasepool {
+                let span = PerfDiag.span("source-" + client)
+                let fp = environment.adapterFingerprint(client)
+                let raw: RawSnapshot
+                if let cached = rawSnapshots[client], cached.fingerprint == fp.signature {
+                    raw = cached
+                } else if let prior = rawSnapshots[client],
+                          now.timeIntervalSince(lastAdapterReadAt[client] ?? .distantPast) < adapterRecheckInterval(settings) {
+                    // Low-CPU mode: the source changed while a session is actively
+                    // appending, but a fresh read happened within the cooldown
+                    // window — reuse the previous snapshot and let the next tick
+                    // pick up the new data. Stats trail the source by at most the
+                    // window; re-decompression/parsing is bounded to 1/window.
+                    raw = prior
+                    PerfDiag.log(String(format: "source %@: changed but within re-read cooldown (%.0fs), reusing previous rows", client, adapterRecheckInterval(settings)))
+                } else {
+                    let rows = environment.adapterRows(client)
+                    raw = RawSnapshot(
+                        fingerprint: fp.signature,
+                        rows: rows,
+                        models: Self.distinctModelIds(rows)
+                    )
+                    rawSnapshots[client] = raw
+                    lastAdapterReadAt[client] = now
+                    PerfDiag.log(String(format: "source %@: changed (%d files), re-read", client, fp.files.count))
+                }
+                resolvePricing(
+                    models: raw.models,
+                    policy: pricingPolicy,
+                    now: now,
+                    lookedUpThisTick: &pricingLookedUpThisTick
                 )
-                rawSnapshots[client] = raw
-                lastAdapterReadAt[client] = now
-                PerfDiag.log(String(format: "source %@: changed (%d files), re-read", client, fp.files.count))
+                let pricingMap = pricingMapForDerivation()
+                let key = DerivedKey(
+                    client: client,
+                    fingerprint: raw.fingerprint,
+                    allTimeSinceMs: allTimeSince,
+                    dayKey: dayKey,
+                    monthKey: monthKey,
+                    pricingSignature: pricingSignature(for: raw.models)
+                )
+                if let derived = derivedSnapshots[client], derived.key == key {
+                    adapterContributions[client] = derived
+                } else {
+                    let periods = adapterPeriodsFor(
+                        client: client, rows: raw.rows, pricing: pricingMap,
+                        now: now, allTimeSince: allTimeSince
+                    )
+                    let history = Adapters.historyContributions(
+                        rows: raw.rows, client: client, pricingByModel: pricingMap
+                    )
+                    let derived = DerivedSnapshot(key: key, periods: periods, history: history)
+                    derivedSnapshots[client] = derived
+                    adapterContributions[client] = derived
+                    PerfDiag.log(String(format: "source %@: re-derived periods/history", client))
+                }
+                span.end()
             }
-            resolvePricing(
-                models: raw.models,
-                policy: pricingPolicy,
-                now: now,
-                lookedUpThisTick: &pricingLookedUpThisTick
-            )
-            let pricingMap = pricingMapForDerivation()
-            let key = DerivedKey(
-                client: client,
-                fingerprint: raw.fingerprint,
-                allTimeSinceMs: allTimeSince,
-                dayKey: dayKey,
-                monthKey: monthKey,
-                pricingSignature: pricingSignature(for: raw.models)
-            )
-            if let derived = derivedSnapshots[client], derived.key == key {
-                adapterContributions[client] = derived
-            } else {
-                let periods = adapterPeriodsFor(
-                    client: client, rows: raw.rows, pricing: pricingMap,
-                    now: now, allTimeSince: allTimeSince
-                )
-                let history = Adapters.historyContributions(
-                    rows: raw.rows, client: client, pricingByModel: pricingMap
-                )
-                let derived = DerivedSnapshot(key: key, periods: periods, history: history)
-                derivedSnapshots[client] = derived
-                adapterContributions[client] = derived
-                PerfDiag.log(String(format: "source %@: re-derived periods/history", client))
-            }
-            span.end()
         }
 
         // Tokscale: one source check per collectionIntervalMs; reuse the

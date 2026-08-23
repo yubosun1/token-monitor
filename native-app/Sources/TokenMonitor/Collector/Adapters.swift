@@ -191,8 +191,10 @@ enum Adapters {
         for line in text.split(whereSeparator: \.isNewline) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8) else { continue }
-            if let obj = try? JSONSerialization.jsonObject(with: data) as? JSON {
-                objects.append(obj)
+            autoreleasepool {
+                if let obj = try? JSONSerialization.jsonObject(with: data) as? JSON {
+                    objects.append(obj)
+                }
             }
         }
         return objects
@@ -981,46 +983,48 @@ enum Adapters {
 
     private static func parseDeltaLines(_ text: String, state: inout DshIncrementalState) {
         for line in text.split(whereSeparator: \.isNewline) {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard !trimmed.isEmpty, let lineData = trimmed.data(using: .utf8),
-                  let obj = try? JSONSerialization.jsonObject(with: lineData) as? JSON else { continue }
-            let seq = obj["seq"] as? Int ?? 0
-            let type = obj["type"] as? String ?? ""
-            // The session record carries `seedLength`: a fork's log is seeded
-            // with a byte-for-byte copy of its parent's events, and that
-            // shared prefix is credited to the parent only. seq is 0-indexed,
-            // so the event AT seq == seedLength is the fork's own first new
-            // event — skip strictly `seq < seedLength`. A session record
-            // without the field clears it again, and a torn/absent header
-            // leaves it nil so no event is ever skipped on a guess.
-            if type == "session" {
-                if let createdAt = obj["createdAt"] { state.headerCreatedAt = UsageCore.timestampMs(createdAt) }
-                state.seedLength = obj["seedLength"] as? Int
-                continue
-            }
-            if let seed = state.seedLength, seq < seed { continue }
-            if state.seenSeq.contains(seq) { continue }
-            state.seenSeq.insert(seq)
-            let time = UsageCore.timestampMs(obj["time"])
-            if time > state.lastTime { state.lastTime = time }
-            let data = obj["data"] as? JSON ?? JSON()
-            if type == "request/header" || type == "request/context" {
-                let header = data["header"] as? JSON ?? data
-                let config = header["config"] as? JSON ?? header
-                if let model = config["model"] as? String { state.fallbackModel = model }
-                continue
-            }
-            if type == "assistant/chunk" {
-                let chunk = data["chunk"] as? JSON ?? JSON()
-                let chunkType = chunk["type"] as? String ?? ""
-                let turn = data["turn"] as? Int ?? 0
-                let step = data["step"] as? Int ?? 0
-                if chunkType == "usage", let usage = chunk["usage"] as? JSON {
-                    state.pendingEvents.append(PendingDshEvent(turn: turn, step: step, time: time, usage: usage))
-                    state.totalEvents += 1
-                } else if chunkType == "finish" {
-                    let model = dshFinishModel(from: chunk) ?? state.fallbackModel
-                    resolvePendingDshEvents(&state, turn: turn, step: step, model: model)
+            autoreleasepool {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                guard !trimmed.isEmpty, let lineData = trimmed.data(using: .utf8),
+                      let obj = try? JSONSerialization.jsonObject(with: lineData) as? JSON else { return }
+                let seq = obj["seq"] as? Int ?? 0
+                let type = obj["type"] as? String ?? ""
+                // The session record carries `seedLength`: a fork's log is seeded
+                // with a byte-for-byte copy of its parent's events, and that
+                // shared prefix is credited to the parent only. seq is 0-indexed,
+                // so the event AT seq == seedLength is the fork's own first new
+                // event — skip strictly `seq < seedLength`. A session record
+                // without the field clears it again, and a torn/absent header
+                // leaves it nil so no event is ever skipped on a guess.
+                if type == "session" {
+                    if let createdAt = obj["createdAt"] { state.headerCreatedAt = UsageCore.timestampMs(createdAt) }
+                    state.seedLength = obj["seedLength"] as? Int
+                    return
+                }
+                if let seed = state.seedLength, seq < seed { return }
+                if state.seenSeq.contains(seq) { return }
+                state.seenSeq.insert(seq)
+                let time = UsageCore.timestampMs(obj["time"])
+                if time > state.lastTime { state.lastTime = time }
+                let data = obj["data"] as? JSON ?? JSON()
+                if type == "request/header" || type == "request/context" {
+                    let header = data["header"] as? JSON ?? data
+                    let config = header["config"] as? JSON ?? header
+                    if let model = config["model"] as? String { state.fallbackModel = model }
+                    return
+                }
+                if type == "assistant/chunk" {
+                    let chunk = data["chunk"] as? JSON ?? JSON()
+                    let chunkType = chunk["type"] as? String ?? ""
+                    let turn = data["turn"] as? Int ?? 0
+                    let step = data["step"] as? Int ?? 0
+                    if chunkType == "usage", let usage = chunk["usage"] as? JSON {
+                        state.pendingEvents.append(PendingDshEvent(turn: turn, step: step, time: time, usage: usage))
+                        state.totalEvents += 1
+                    } else if chunkType == "finish" {
+                        let model = dshFinishModel(from: chunk) ?? state.fallbackModel
+                        resolvePendingDshEvents(&state, turn: turn, step: step, model: model)
+                    }
                 }
             }
         }

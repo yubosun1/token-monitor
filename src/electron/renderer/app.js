@@ -1186,12 +1186,16 @@ function applyHomeListMark(mark, iconKind, color) {
   mark.style.background = color;
 }
 
+let breakdownChunkLimit = 50;
+let breakdownAllRows = [];
+
 function renderRows(rows, { incompleteHint = '' } = {}) {
   const largeSessionList = isLargeSessionBreakdown(state.breakdown, rows.length);
   if (rows.length === 0 && !incompleteHint) {
     updateLargeSessionContainment(false);
     els.breakdown.replaceChildren();
     state.rowSignature = '';
+    breakdownAllRows = [];
     return;
   }
   const max = Math.max(1, ...rows.map((row) => row.value));
@@ -1199,13 +1203,17 @@ function renderRows(rows, { incompleteHint = '' } = {}) {
     ? captureBreakdownMotion()
     : null;
   const hintText = incompleteHint ? t(incompleteHint) : '';
-  const signature = JSON.stringify([state.breakdown, hintText, rows.map((row) => row.key)]);
+
+  breakdownAllRows = rows;
+  const visibleRows = largeSessionList ? rows.slice(0, Math.max(50, breakdownChunkLimit)) : rows;
+
+  const signature = JSON.stringify([state.breakdown, hintText, visibleRows.map((row) => row.key)]);
   const children = Array.from(els.breakdown.children);
   const existingHint = children.find((child) => child.classList.contains('breakdown-incomplete-hint'));
-  const existing = new Map(children.filter((child) => child !== existingHint).map((child) => [child.dataset.key, child]));
+  const existing = new Map(children.filter((child) => child !== existingHint && !child.classList.contains('breakdown-sentinel')).map((child) => [child.dataset.key, child]));
   const structureChanged = signature !== state.rowSignature;
   if (structureChanged) {
-    const nodes = rows.map((row) => existing.get(row.key) || rowTemplate(row));
+    const nodes = visibleRows.map((row) => existing.get(row.key) || rowTemplate(row));
     if (incompleteHint) {
       const hint = existingHint || document.createElement('p');
       hint.className = 'breakdown-incomplete-hint';
@@ -1213,12 +1221,18 @@ function renderRows(rows, { incompleteHint = '' } = {}) {
       hint.textContent = hintText;
       nodes.unshift(hint);
     }
+    if (largeSessionList && visibleRows.length < rows.length) {
+      const sentinel = document.createElement('div');
+      sentinel.className = 'breakdown-sentinel';
+      sentinel.style.height = '1px';
+      nodes.push(sentinel);
+    }
     els.breakdown.replaceChildren(...nodes);
     state.rowSignature = signature;
   }
   updateLargeSessionContainment(largeSessionList, { remeasure: structureChanged });
   const current = new Map(Array.from(els.breakdown.children)
-    .filter((child) => !child.classList.contains('breakdown-incomplete-hint'))
+    .filter((child) => !child.classList.contains('breakdown-incomplete-hint') && !child.classList.contains('breakdown-sentinel'))
     .map((child) => [child.dataset.key, child]));
   const renderContext = {
     breakdown: state.breakdown,
@@ -1227,7 +1241,7 @@ function renderRows(rows, { incompleteHint = '' } = {}) {
     locale: currentLocale(),
     showToolIcons: toolIconsEnabled(state.settings?.showToolIcons)
   };
-  for (const rowData of rows) {
+  for (const rowData of visibleRows) {
     const row = current.get(rowData.key);
     if (!row) continue;
     const fingerprint = rowRenderFingerprint(rowData, max, renderContext);
@@ -5793,6 +5807,7 @@ function setBreakdown(breakdown, options = {}) {
   state.homeReturnVisible = options.fromHome === true && state.breakdown === 'home' && next !== 'home';
   state.breakdown = next;
   state.rowSignature = '';
+  breakdownChunkLimit = 50;
   publishViewState();
   return true;
 }
@@ -8064,6 +8079,16 @@ els.breakdown.addEventListener('click', (event) => {
   });
 });
 
+els.breakdown?.addEventListener('scroll', () => {
+  if (!isLargeSessionBreakdown(state.breakdown, breakdownAllRows.length)) return;
+  if (breakdownChunkLimit >= breakdownAllRows.length) return;
+  const { scrollTop, scrollHeight, clientHeight } = els.breakdown;
+  if (scrollHeight - scrollTop - clientHeight < 200) {
+    breakdownChunkLimit += 50;
+    renderRows(breakdownAllRows);
+  }
+}, { passive: true });
+
 els.settingsButton.addEventListener('click', (event) => {
   if (state.viewSwitcherOpen) setViewSwitcherOpen(false);
   els.settingsPanel.classList.toggle('hidden');
@@ -8306,11 +8331,23 @@ document.addEventListener('visibilitychange', () => {
 // one catch-up render instead of replaying the backlog.
 window.tokenMonitor.onVisibility?.(({ visible }) => {
   state.windowVisible = visible;
+  document.documentElement.classList.toggle('window-hibernating', !visible);
   if (!visible) {
     cancelTokenRateBoost();
+    for (const animation of document.getAnimations?.() || []) {
+      try { animation.cancel(); } catch (_) {}
+    }
     if (state.refreshTimer) {
       clearInterval(state.refreshTimer);
       state.refreshTimer = null;
+    }
+    if (state.homeHistoryRetryTimer) {
+      clearTimeout(state.homeHistoryRetryTimer);
+      state.homeHistoryRetryTimer = null;
+    }
+    if (state.refreshFeedbackTimer) {
+      clearTimeout(state.refreshFeedbackTimer);
+      state.refreshFeedbackTimer = null;
     }
   } else {
     restartTimer();

@@ -739,6 +739,7 @@ window.tokenMonitor.onDashboardHistoryChanged?.(() => { void refresh(); });
 
 window.tokenMonitor.onVisibility?.(({ visible }) => {
   state.windowVisible = visible;
+  document.documentElement.classList.toggle('window-hibernating', !visible);
   if (!visible) {
     for (const animation of document.getAnimations?.() || []) {
       try { animation.cancel(); } catch (_) {}

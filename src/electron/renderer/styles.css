@@ -62,6 +62,11 @@ input, textarea, [contenteditable="true"] {
   user-select: text;
   -webkit-user-select: text;
 }
+.window-hibernating,
+.window-hibernating * {
+  animation-play-state: paused !important;
+  transition: none !important;
+}
 .shell {
   position: relative;
   display: flex;

@@ -27,6 +27,11 @@ body {
   flex-direction: column;
   overflow: hidden;
 }
+.window-hibernating,
+.window-hibernating * {
+  animation-play-state: paused !important;
+  transition: none !important;
+}
 
 .dash-header {
   -webkit-app-region: drag;
