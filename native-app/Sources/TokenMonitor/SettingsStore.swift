@@ -37,7 +37,7 @@ final class SettingsStore {
     /// from the older native configuration.
     private func migrateLegacyDefaultsIfNeeded() {
         let version = values["settingsSchemaVersion"] as? Int ?? 0
-        guard version < 4 else { return }
+        guard version < 6 else { return }
         if version < 1, (values["heatmapMetric"] as? String) == "cost" {
             values["heatmapMetric"] = "tokens"
         }
@@ -65,7 +65,24 @@ final class SettingsStore {
                 values[key] = Self.appendingCSVValue(values[key] as? String ?? "", value: "antigravity")
             }
         }
-        values["settingsSchemaVersion"] = 4
+        if version < 5 {
+            for key in ["limitProviders", "limitProviderOrder", "homeLimitProviderOrder", "hiddenHomeLimitProviders"] {
+                if let str = values[key] as? String {
+                    values[key] = Self.removingCSVValue(str, value: "workbuddy")
+                }
+            }
+        }
+        if version < 6 {
+            for key in ["viewDisplayOrder", "hiddenViews"] {
+                if let str = values[key] as? String {
+                    values[key] = Self.removingCSVValue(str, value: "status")
+                }
+            }
+            values.removeValue(forKey: "serviceStatusRefreshMs")
+            values.removeValue(forKey: "serviceProviderDisplayOrder")
+            values.removeValue(forKey: "hiddenServiceProviders")
+        }
+        values["settingsSchemaVersion"] = 6
         persist(values)
     }
 
@@ -73,6 +90,11 @@ final class SettingsStore {
         var entries = value.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         guard !entries.contains(item) else { return entries.joined(separator: ",") }
         entries.append(item)
+        return entries.joined(separator: ",")
+    }
+
+    private static func removingCSVValue(_ value: String, value item: String) -> String {
+        let entries = value.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty && $0 != item }
         return entries.joined(separator: ",")
     }
 
@@ -122,8 +144,8 @@ final class SettingsStore {
             ],
             // Limits
             "limitsEnabled": true,
-            "limitProviders": "deepseek,opencode,kimi,workbuddy",
-            "limitProviderOrder": "deepseek,opencode,kimi,workbuddy",
+            "limitProviders": "deepseek,opencode,kimi",
+            "limitProviderOrder": "deepseek,opencode,kimi",
             "homeLimitProviderOrder": "",
             "hiddenHomeLimitProviders": "",
             "homeLimitAccountCount": 3,
@@ -150,7 +172,7 @@ final class SettingsStore {
             "homeModuleOrder": "limits,tool,model,trends",
             "hiddenHomeModules": "tool",
             "viewDisplayOrder": "",
-            "hiddenViews": "status",
+            "hiddenViews": "",
             // Misc
             "deviceId": "macbook-pro-local",
             "language": "zh-CN",
@@ -158,7 +180,6 @@ final class SettingsStore {
             "currencyRates": [String: Any](),
             "startAtLogin": true,
             "windowToggleShortcut": "CommandOrControl+E",
-            "serviceStatusRefreshMs": 60000,
             "windowBounds": NSNull(),
             "zoomFactor": 1,
             "trayContent": "icon",

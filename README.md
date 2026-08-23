@@ -100,7 +100,7 @@ native-app/
   Sources/TokenMonitor/    AppDelegate（托盘/窗口/主菜单）、Bridge（渲染层 IPC）、
                            Collector/（采集核心：Adapters / UsageCore / HistoryCore /
                            CollectorCore / SourceScanner / TokscaleRunner）、
-                           Limits/（限额/订阅/凭证）、SessionDetail、Status
+                           Limits/（限额/订阅/凭证）、SessionDetail
   Resources/               tokenMonitorBridge.js（替代 Electron preload 的桥）
   Vendor/                  tokscale 二进制 + libzstd 静态库（vendor 化）
   scripts/                 build-app.sh（打包渲染层 + 构建）、check-fixtures.sh 等

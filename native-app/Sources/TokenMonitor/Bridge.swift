@@ -196,13 +196,6 @@ final class BridgeCore {
         case "stream:status", "getStreamStatus":
             return ["connected": true, "mode": "local"]
 
-        case "serviceStatus:get", "getServiceStatus":
-            let options = args.first as? [String: Any] ?? [:]
-            return ServiceStatusRuntime.shared.status(
-                force: options["force"] as? Bool ?? false,
-                providerIds: options["providerIds"] as? [String]
-            )
-
         case "session:getDetail", "getSessionDetail":
             let args = args.first as? [String: Any] ?? [:]
             return SessionDetailCore.read(
@@ -506,7 +499,6 @@ final class Bridge: NSObject, WKScriptMessageHandler {
 
         if let id = body["id"] as? Int {
             if method == "session:getDetail" || method == "getSessionDetail"
-                || method == "serviceStatus:get" || method == "getServiceStatus"
                 || method == "pricing:lookup" {
                 // Heavy or network-bound invokes run off the main thread and
                 // resolve asynchronously (the old Electron app used a worker

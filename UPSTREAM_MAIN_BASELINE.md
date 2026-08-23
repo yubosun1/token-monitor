@@ -18,10 +18,7 @@ upstream change. For the next upstream review, start with:
 Range `bed9fc32..7ad2acce` (v0.47.0) reviewed on 2026-08-22:
 
 - `a0af301e` `feat(workbuddy): add local app credits monitoring (#378)`:
-  Ported to `macos-native`. Implemented `WorkbuddyLimits.swift` in Swift
-  (reads local session from `~/Library/Application Support/CodeBuddyExtension/Data/Public/auth/auth.json`,
-  polls Tencent billing API, handles Personal/Enterprise accounts, and computes spendable credits).
-  Wired into `LimitsRuntime.swift`, `SettingsStore.swift`, and renderer presentation/i18n.
+  Removed per user preference (WorkBuddy credits monitoring disabled/removed).
 - `1519ecf7` `feat(tray): add balance meter percentage option (#470)`:
   Ported to `macos-native`. Updated `trayLayout.js`, `trayComposer.js`, and
   `i18n.js` to support selecting `creditsDisplay: 'percent'` on credits/balance items.

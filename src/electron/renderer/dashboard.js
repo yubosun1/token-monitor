@@ -53,7 +53,7 @@ const els = {
 const RANGES = ['7', '30', '90', '365', 'all'];
 const state = {
   tab: 'activity', range: '30', stackBy: 'client', mode: 'bars', flat: false,
-  locale: 'en', currency: 'USD', compactTokenUnits: 'western', history: null, chartModel: null,
+  locale: 'zh-CN', currency: 'USD', compactTokenUnits: 'western', history: null, chartModel: null,
   chartKind: 'bars', motion: 'none', reduceMotion: 'system',
   heatmapMetric: 'tokens', dashboardPinned: false
 };
@@ -286,15 +286,13 @@ function daysBetween(a, b) {
 }
 function monthLabel(ym) {
   const mo = Number(String(ym).slice(5));
-  if (state.locale.startsWith('zh')) return `${mo}月`;
-  return new Date(Date.UTC(2000, mo - 1, 1)).toLocaleString('en-US', { month: 'short' });
+  return `${mo}月`;
 }
 function longDate(key) {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(key));
   if (!m) return String(key);
   const mo = Number(m[2]), d = Number(m[3]);
-  if (state.locale.startsWith('zh')) return `${mo}月${d}日`;
-  return new Date(Date.UTC(2000, mo - 1, d)).toLocaleString('en-US', { month: 'short', day: 'numeric' });
+  return `${mo}月${d}日`;
 }
 function chartSize() {
   return { w: Math.max(320, els.chart.clientWidth || 800), h: Math.max(200, els.chart.clientHeight || 360) };
@@ -632,8 +630,8 @@ function showCandleTooltip(c, ev) {
 function showHeatTooltip(date, day, ev) {
   const tokens = day ? day.tokens : 0;
   const cost = day ? day.cost : 0;
-  const tokLabel = state.locale.startsWith('zh') ? 'Token' : 'Tokens';
-  const costLabel = state.locale.startsWith('zh') ? '花費' : 'Cost';
+  const tokLabel = 'Token';
+  const costLabel = '花费';
   let html = `<div class="tt-head">${longDate(date)}</div>`;
   html += `<div class="tt-row"><span class="tt-name">${tokLabel}</span><span class="tt-val">${formatCompact(tokens)}</span></div>`;
   if (cost > 0) html += `<div class="tt-row"><span class="tt-name">${costLabel}</span><span class="tt-val">${formatCost(cost)}</span></div>`;
@@ -678,8 +676,8 @@ function syncPinButton() {
   els.pinBtn.classList.toggle('is-pinned', pinned);
   els.pinBtn.classList.toggle('active', pinned);
   const title = pinned
-    ? (i18n.t?.('dashboard.unpin') || 'Unpin from top')
-    : (i18n.t?.('dashboard.pin') || 'Pin window on top');
+    ? (i18n.t?.('dashboard.unpin') || '取消置顶')
+    : (i18n.t?.('dashboard.pin') || '固定置顶');
   els.pinBtn.title = title;
   els.pinBtn.setAttribute('aria-label', title);
 }
@@ -687,7 +685,7 @@ function syncPinButton() {
 async function boot() {
   let settings = {};
   try { settings = await window.tokenMonitor.getSettings(); } catch (_) {}
-  state.locale = i18n.resolveLocale(settings.locale || settings.language, navigator.languages);
+  state.locale = 'zh-CN';
   state.currency = settings.currency || 'USD';
   state.compactTokenUnits = compactTokenApi.normalizeCompactTokenUnits(settings.compactTokenUnits);
   state.dashboardPinned = Boolean(settings.dashboardPinned);
@@ -716,7 +714,7 @@ window.tokenMonitor.onSettingsPush?.((next) => {
     state.dashboardPinned = next.dashboardPinned;
     syncPinButton();
   }
-  const nextLocale = i18n.resolveLocale(next.locale || next.language, navigator.languages);
+  const nextLocale = 'zh-CN';
   if (state.locale !== nextLocale) {
     state.locale = nextLocale;
     applyTranslations();

@@ -28,11 +28,7 @@
     return normalized === 'localized' ? 'localized' : 'western';
   }
 
-  function localizedSuffixes(locale) {
-    const language = normalizedLocale(locale);
-    if (language.startsWith('ko')) return ['만', '억'];
-    if (language.startsWith('ja')) return ['万', '億'];
-    if (language.startsWith('zh-hant') || language.startsWith('zh-tw') || language.startsWith('zh-hk')) return ['萬', '億'];
+  function localizedSuffixes(_locale) {
     return ['万', '亿'];
   }
 

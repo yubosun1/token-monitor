@@ -87,7 +87,6 @@
     getStats: function (options) { return invoke('stats:get', [options]); },
     getSessionDetail: function (args) { return invoke('session:getDetail', [args]); },
     getStreamStatus: function () { return invoke('stream:status'); },
-    getServiceStatus: function (options) { return invoke('serviceStatus:get', [options]); },
     openDashboard: function () { return invoke('dashboard:open'); },
     getDashboardHistory: function () { return invoke('dashboard:getHistory'); },
     onDashboardHistoryChanged: function (callback) { return on('dashboard:historyChanged', callback); },

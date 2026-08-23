@@ -3045,10 +3045,6 @@ html.is-windows .settings-panel select option {
   -webkit-mask-image: url(../../../assets/icons/kimi.svg);
   mask-image: url(../../../assets/icons/kimi.svg);
 }
-.limit-icon-workbuddy {
-  -webkit-mask-image: url(../../../assets/icons/workbuddy.svg);
-  mask-image: url(../../../assets/icons/workbuddy.svg);
-}
 .row-label {
   display: grid;
   min-width: 0;
@@ -3162,103 +3158,6 @@ html.is-windows .settings-panel select option {
 }
 .limits-panel::-webkit-scrollbar { width: 0; height: 0; }
 .limits-panel.hidden { display: none; }
-.service-status-panel {
-  position: relative;
-  z-index: 1;
-  display: grid;
-  flex: 1;
-  min-height: 0;
-  align-content: start;
-  gap: 10px;
-  overflow: hidden auto;
-  padding: 0 2px 0 0;
-  scrollbar-width: none;
-}
-.service-status-panel::-webkit-scrollbar { width: 0; height: 0; }
-.service-status-panel.hidden { display: none; }
-.service-status-row {
-  display: grid;
-  width: 100%;
-  min-width: 0;
-  gap: 5px;
-  padding: 0 0 12px;
-  border: 0;
-  border-bottom: 1px solid rgba(var(--line-rgb), 0.12);
-  background: transparent;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.service-status-row:hover .service-status-description {
-  color: var(--text);
-}
-.service-status-row:focus-visible {
-  outline: 1px solid rgba(var(--accent-rgb), 0.5);
-  outline-offset: 2px;
-}
-.service-status-head {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.service-status-head strong {
-  overflow: hidden;
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 650;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.service-status-title {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 6px;
-}
-.service-status-icon {
-  width: 14px;
-  height: 14px;
-  flex: 0 0 auto;
-}
-.service-status-pill {
-  flex: 0 0 auto;
-  padding: 2px 6px;
-  border: 1px solid rgba(var(--line-rgb), 0.14);
-  border-radius: 6px;
-  color: var(--muted);
-  font-size: 9px;
-  line-height: 1.1;
-}
-.service-status-ok .service-status-pill {
-  border-color: rgba(var(--success-rgb), 0.28);
-  color: var(--success);
-}
-.service-status-degraded .service-status-pill {
-  border-color: rgba(241, 217, 115, 0.32);
-  color: var(--yellow);
-}
-.service-status-outage .service-status-pill {
-  border-color: rgba(244, 119, 136, 0.42);
-  color: var(--red);
-}
-.service-status-description {
-  overflow: hidden;
-  color: var(--fg);
-  font-size: 11px;
-  line-height: 1.25;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.service-status-meta {
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 10px;
-  line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .limit-row {
   display: grid;
   gap: 10px;
@@ -4331,7 +4230,6 @@ html.is-windows .limit-live-badge {
 }
 .view-icon-home { -webkit-mask-image: url("icons/views/home.svg"); mask-image: url("icons/views/home.svg"); }
 .view-icon-tool { -webkit-mask-image: url("icons/views/tool.svg"); mask-image: url("icons/views/tool.svg"); }
-.view-icon-status { -webkit-mask-image: url("icons/views/status.svg"); mask-image: url("icons/views/status.svg"); }
 .view-icon-model { -webkit-mask-image: url("icons/views/model.svg"); mask-image: url("icons/views/model.svg"); }
 .view-icon-session { -webkit-mask-image: url("icons/views/session.svg"); mask-image: url("icons/views/session.svg"); }
 
@@ -4372,7 +4270,6 @@ html.is-windows .limit-live-badge {
   .view-back-row,
   .limits-panel,
   .home-panel,
-  .service-status-panel,
   .trends-panel { display: none; }
 }
 @media (max-height: 200px) {
@@ -4384,8 +4281,7 @@ html.is-windows .limit-live-badge {
   .total-compact { font-size: clamp(11px, 3vw, 16px); }
   .cost { margin-top: clamp(2px, 1vh, 6px); font-size: clamp(12px, 2.8vw, 18px); }
   .breakdown,
-  .home-panel,
-  .service-status-panel { display: none; }
+  .home-panel { display: none; }
 }
 
 #deepseekManualPanel.hidden,
@@ -4498,9 +4394,7 @@ html.is-windows .limit-live-badge {
   border-left: 1px solid rgba(var(--line-rgb), 0.14);
 }
 .settings-panel .settings-nested-list > .checkbox-label,
-.settings-panel .settings-nested-list > .settings-item,
-.settings-panel .settings-nested-list > .status-provider-interval,
-.settings-panel .settings-nested-list > .status-provider-row {
+.settings-panel .settings-nested-list > .settings-item {
   min-height: 24px;
   margin-top: 0;
 }
@@ -4508,11 +4402,6 @@ html.is-windows .limit-live-badge {
    trade it for the compact rhythm. */
 .settings-panel .settings-nested-list > .settings-item {
   padding: 2px 0;
-}
-/* The interval pill is as tall as the base row, so at 24 px it would touch the
-   control above it. Give it the same ~2 px of air the switches and inputs get. */
-.settings-panel .settings-nested-list > .status-provider-interval {
-  min-height: 28px;
 }
 .home-settings-note {
   margin: 0;
@@ -4565,35 +4454,6 @@ html.is-windows .limit-live-badge {
 .home-limit-provider-row {
   grid-template-columns: minmax(0, 1fr) repeat(2, 22px);
 }
-.status-provider-header { margin-bottom: 2px; }
-.status-provider-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.status-provider-row.is-hidden .tool-preference-name { opacity: 0.45; }
-.service-status-empty {
-  padding: 12px 0;
-  color: var(--muted);
-  font-size: 11px;
-}
-.settings-panel .status-provider-interval {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 0;
-  color: var(--text);
-  font-size: 11px;
-}
-.settings-panel .status-provider-interval select {
-  flex: 0 0 auto;
-  width: auto;
-  max-width: 58%;
-  font-size: 11px;
-}
-.status-provider-interval.hidden { display: none; }
 
 .trends-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; padding-right: 2px; overflow: hidden; }
 .trends-panel.hidden { display: none; }
