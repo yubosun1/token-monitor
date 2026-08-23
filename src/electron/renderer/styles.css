@@ -258,6 +258,7 @@ html.is-mac-legacy .shell {
   min-width: 100px;
   width: 148px;
   height: 30px;
+  isolation: isolate;
 }
 .actions-hotspot {
   position: absolute;
@@ -346,11 +347,20 @@ html.is-mac-legacy .shell {
 #footerActionSlot .utility-actions .icon-button,
 #footerActionSlot .utility-actions .refresh-button { height: 30px; font-size: 16px; }
 .shell.tray-mode:not(.settings-open) .actions-hotspot { display: none; }
-.actions-hotspot:hover ~ .window-actions, .window-actions:hover, .window-actions:focus-within, .shell.settings-open .window-actions {
+.actions-hotspot:hover ~ .window-actions, .window-actions:hover, .window-actions:focus-within {
   opacity: 1;
   pointer-events: auto;
   transform: translateY(0);
   transition-delay: 0ms;
+}
+.shell.settings-open .window-actions {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+  transition: none !important;
+}
+.shell:not(.settings-open) .window-actions:not(:hover):not(:focus-within) {
+  transition: none !important;
 }
 .window-actions .icon-button {
   width: 28px;
@@ -359,6 +369,8 @@ html.is-mac-legacy .shell {
   align-items: center;
   justify-content: center;
   font-size: 13px;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 .window-actions #pinButton.is-pinned,
 .window-actions #pinButton.active {
@@ -385,11 +397,21 @@ html.is-mac-legacy .shell {
   width: 100%;
   transition: opacity 160ms ease 280ms, transform 160ms ease 280ms;
 }
-.title-controls:has(.actions-hotspot:hover) .tabs, .title-controls:has(.window-actions:hover) .tabs, .title-controls:has(.window-actions:focus-within) .tabs, .shell.settings-open .title-controls .tabs {
+.title-controls:has(.actions-hotspot:hover) .tabs, .title-controls:has(.window-actions:hover) .tabs, .title-controls:has(.window-actions:focus-within) .tabs {
   opacity: 0;
   transform: translateY(2px);
   pointer-events: none;
   transition-delay: 0ms;
+}
+.shell.settings-open .title-controls .tabs {
+  opacity: 0;
+  pointer-events: none;
+  transform: none;
+  transition: none !important;
+  visibility: hidden;
+}
+.shell:not(.settings-open) .title-controls:not(:has(.window-actions:hover)):not(:has(.actions-hotspot:hover)) .tabs {
+  transition: none !important;
 }
 .icon-button, .refresh-button, .settings-actions button, .shortcut-recorder button, .tab, .mode-button, .home-empty-action, .home-module-empty-action {
   border: 1px solid var(--line);

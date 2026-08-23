@@ -132,7 +132,11 @@ final class SingleInstanceCoordinator {
         if let pidText = try? String(contentsOf: lockURL, encoding: .utf8),
            let pid = pid_t(pidText.trimmingCharacters(in: .whitespacesAndNewlines)),
            let running = NSRunningApplication(processIdentifier: pid) {
-            running.activate(options: [.activateIgnoringOtherApps])
+            if #available(macOS 14.0, *) {
+                running.activate()
+            } else {
+                running.activate(options: [.activateIgnoringOtherApps])
+            }
         }
     }
 

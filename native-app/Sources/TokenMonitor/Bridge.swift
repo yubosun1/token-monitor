@@ -29,21 +29,27 @@ final class BridgeCore {
     let settings = SettingsStore.shared
 
     private let lock = NSLock()
-    private var pushers: [(String, Any) -> Void] = []
+    private var pushers: [UUID: (String, Any) -> Void] = [:]
+
+    var pusherCount: Int {
+        lock.lock(); defer { lock.unlock() }
+        return pushers.count
+    }
 
     func registerPusher(_ pusher: @escaping (String, Any) -> Void) -> () -> Void {
+        let id = UUID()
         lock.lock(); defer { lock.unlock() }
-        pushers.append(pusher)
+        pushers[id] = pusher
         return { [weak self] in
             guard let self else { return }
             self.lock.lock(); defer { self.lock.unlock() }
-            self.pushers.removeAll { $0 as AnyObject === pusher as AnyObject }
+            self.pushers.removeValue(forKey: id)
         }
     }
 
     func push(_ event: String, _ payload: Any) {
         lock.lock()
-        let snapshot = pushers
+        let snapshot = Array(pushers.values)
         lock.unlock()
         for pusher in snapshot { pusher(event, payload) }
     }

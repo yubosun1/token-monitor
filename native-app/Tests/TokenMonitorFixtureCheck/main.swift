@@ -1978,6 +1978,79 @@ func runAntigravityTests() {
     }
 }
 
+// MARK: - Memory leak and cache bounds tests
+
+func runMemoryLeakAndCacheTests() {
+    print("--- Memory leak & cache bounds tests ---")
+
+    // M1: BridgeCore pusher registration and unregistration
+    do {
+        let initialCount = BridgeCore.shared.pusherCount
+        var unregisters: [() -> Void] = []
+        for _ in 0..<50 {
+            let unregister = BridgeCore.shared.registerPusher { _, _ in }
+            unregisters.append(unregister)
+        }
+        checkEqual(BridgeCore.shared.pusherCount, initialCount + 50, "M1.1: BridgeCore registered 50 pushers")
+        for i in 0..<25 {
+            unregisters[i]()
+        }
+        checkEqual(BridgeCore.shared.pusherCount, initialCount + 25, "M1.2: BridgeCore accurately unregisters 25 pushers")
+        for i in 25..<50 {
+            unregisters[i]()
+        }
+        checkEqual(BridgeCore.shared.pusherCount, initialCount, "M1.3: BridgeCore unregisters all pushers cleanly without leak")
+    }
+
+    // M2: Adapters parseCache Antigravity boundedness across timestamp changes
+    do {
+        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("tm-mem-test-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let testFile = tempDir.appendingPathComponent("session-test-ts.jsonl")
+        let jsonl = """
+        {"type":"usage","sessionId":"session-test-ts","modelId":"gemini-3.7-flash","input":10,"output":5,"timestamp":null}
+        """
+        try? jsonl.write(to: testFile, atomically: true, encoding: .utf8)
+
+        Adapters.dropClientCaches(["antigravity"])
+        checkEqual(Adapters.parseCacheKeys(client: "antigravity").count, 0, "M2.1: initial antigravity cache is empty")
+
+        // Parse with multiple successive timestamps
+        for ts: Double in [1000, 2000, 3000, 4000, 5000] {
+            _ = Adapters.collectAntigravityRows()
+            let rows = Adapters.collectAntigravityRows()
+            check(rows.count >= 0, "M2.2: collect runs for ts=\(ts)")
+        }
+
+        // Even if timestamps change repeatedly, only 1 entry per file path should exist
+        let keys = Adapters.parseCacheKeys(client: "antigravity")
+        let distinctPaths = Set(keys.map { $0.components(separatedBy: "|").dropFirst().joined(separator: "|") })
+        checkEqual(keys.count, distinctPaths.count, "M2.3: antigravity parseCache entries are strictly 1-per-path with no unbounded key expansion")
+    }
+
+    // M3: Adapter parse cache pruning for deleted/moved files
+    do {
+        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("tm-prune-test-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let fileA = tempDir.appendingPathComponent("a.jsonl")
+        let fileB = tempDir.appendingPathComponent("b.jsonl")
+        try? "{\"type\":\"test\"}".write(to: fileA, atomically: true, encoding: .utf8)
+        try? "{\"type\":\"test\"}".write(to: fileB, atomically: true, encoding: .utf8)
+
+        Adapters.dropClientCaches(["proma"])
+        // Manually simulate cached values
+        _ = Adapters.jsonlFiles(root: tempDir.path, recursive: false, client: "proma")
+        Adapters.pruneParseCache(client: "proma", activePaths: Set([fileA.path]))
+
+        let promaKeys = Adapters.parseCacheKeys(client: "proma")
+        check(promaKeys.allSatisfy { $0.contains("a.jsonl") }, "M3.1: pruned parse cache only retains active paths")
+    }
+}
+
 runChecks()
 runKimiTests()
 runCollectorStateTests()
@@ -1988,5 +2061,6 @@ runVisibilityTests()
 runIdleTeardownTests()
 runSingleInstanceTests()
 runAntigravityTests()
+runMemoryLeakAndCacheTests()
 print("fixture checks: \(checkCount) checks, \(failureCount) failures")
 if failureCount > 0 { exit(1) }

@@ -21,17 +21,19 @@
 
 ## 特性
 
-- **界面**：原版渲染层跑在 WKWebView 中，外观与 Electron 版一致；外壳为原生 Swift。
-- **用量采集**：只追踪本机 7 个客户端 —— Claude Code、Codex、OpenCode、Kimi、WorkBuddy（经 tokscale 引擎）+ Proma、Hanako、DeepSeek Harness（原生 Swift 解析器）。
+- **界面**：原版渲染层跑在 WKWebView 中，外观与 Electron 版一致；外壳为原生 Swift，支持暗色玻璃拟物材质与流畅过渡。
+- **用量采集**：追踪本机 8 个客户端 —— Claude Code、Codex、OpenCode、Kimi、WorkBuddy（经 tokscale 引擎）+ Proma、Hanako、Antigravity、DeepSeek Harness（原生 Swift 解析器与跨工作区会话同步）。
 - **AI 限额**：DeepSeek 余额 + OpenCode 配额 + Kimi 会员额度（保留原版界面与订阅记录功能）。
 - **统计口径**：今日/本月/全部按**本地时区自然日/自然月**划分，用量按**消息/事件自身时间戳**归日（跨午夜的会话会正确拆到两天），与 tokscale 的 `bucketTimezone` 配置保持一致。
-- **性能**：
-  - 隐藏 30 秒后自动回收窗口的 WebView（WebContent 进程退出，省约 60MB），重开重建仅 ~0.2s；
-  - 本地解析带 (path, mtime, size) 指纹缓存，文件未变不重复解压/解析，追加写入的会话增量重读；
+- **性能与内存控制**：
+  - 隐藏 30 秒后自动回收窗口的 WebView（WebContent 进程完全退出，后台常驻仅 ~15MB），重开重建仅 ~0.2s；
+  - 自适应轮询（前台 15s / 5m，后台休眠 180s / 600s，370 天历史图谱懒计算）；
+  - 本地解析带 (path, mtime, size) 指纹缓存与自动淘汰（Pruning），文件未变不重复解压/解析，追加写入的会话增量重读；
+  - Bridge 通信桥精准 Token 注销，消除闭包常驻与内存泄漏；
   - stats 推送带变更签名门控，数据未变不推；
   - tokscale 指纹不变时不起子进程，定价查询 6 小时 TTL + 磁盘缓存。
 - **已内置 k3-256k 定价**：tokscale 价格目录中该条目为零价（Models.dev 数据缺失），本版按 **k3 定价的一半**内置覆盖（可在「设置 → 采集 → 自定义模型定价」中查看或修改）。
-- **已移除**：多设备同步 / Cloudflare Worker、Discord、桌面小组件、自动更新、外观切换、浮动气泡、导出、WSL/Windows/Linux 支持及 18 个用不到的客户端采集。
+- **已移除**：多设备同步 / Cloudflare Worker、Discord、桌面小组件、自动更新、外观切换、浮动气泡、导出、WSL/Windows/Linux 支持及冗余客户端采集。
 
 ## 快捷键
 
@@ -60,7 +62,7 @@
 
 ```bash
 ./native-app/scripts/build-app.sh                      # 构建 .app
-./native-app/scripts/check-fixtures.sh                 # 采集/聚合逻辑 fixture 检查
+./native-app/scripts/check-fixtures.sh                 # 采集/聚合逻辑 fixture 检查 (333 项测试)
 TOKEN_MONITOR_DIAG=1 ./dist/Token\ Monitor.app/Contents/MacOS/TokenMonitor   # 带诊断日志运行
 ```
 
@@ -74,7 +76,8 @@ TOKEN_MONITOR_DIAG=1 ./dist/Token\ Monitor.app/Contents/MacOS/TokenMonitor   # �
 | Kimi | `~/.kimi/sessions`、kimi-code sessions | tokscale 引擎 |
 | WorkBuddy | `~/.workbuddy/projects`、`~/.workbuddy/sessions` | tokscale 引擎 |
 | Proma | `~/.proma/agent-sessions` | 原生 Swift 解析器（按消息时间戳归日） |
-| Hanako | `~/.hanako/agents/hanako/sessions`、`.../activity` | 原生 Swift 解析器（按消息时间戳归日，跨文件消息去重） |
+| Hanako | `~/.hanako/agents/*/{sessions,activity}` | 原生 Swift 解析器（多 Agent 递归扫描，跨文件消息去重） |
+| Antigravity | `~/.gemini/antigravity/`、`~/.config/tokscale/antigravity-cache/` | 原生 Swift 解析器（多工作区会话扫描与增量时间戳校验） |
 | DeepSeek Harness | `~/.dsh/sessions/**/session.jsonl.zstd` | 原生 Swift 解析器（vendored libzstd 流式解压，按 usage 事件时间戳归日） |
 
 - tokscale 为 vendor 的 `@tokscale/cli-darwin-arm64 4.13.0`（Rust），其日/月分桶遵循 `~/.config/tokscale/settings.json` 中的 `scanner.bucketTimezone`（建议设为你的本地时区，如 `Asia/Shanghai`）。

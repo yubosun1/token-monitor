@@ -70,6 +70,19 @@ enum Adapters {
         return Set(parseCache.keys.filter { $0.hasPrefix("dsh|") }.map { String($0.dropFirst(4)) })
     }
 
+    /// Total number of entries in the parse cache (test seam).
+    static var parseCacheCount: Int {
+        fileCacheLock.lock(); defer { fileCacheLock.unlock() }
+        return parseCache.count
+    }
+
+    /// Keys currently memoized in the parse cache for a specific client (test seam).
+    static func parseCacheKeys(client: String) -> [String] {
+        fileCacheLock.lock(); defer { fileCacheLock.unlock() }
+        let prefix = client + "|"
+        return parseCache.keys.filter { $0.hasPrefix(prefix) }
+    }
+
     /// Number of files currently holding incremental streaming state
     /// (fixture seam: dropped after idle verification or pruning).
     static var dshIncrementalStateCount: Int {
@@ -77,14 +90,21 @@ enum Adapters {
         return dshIncrementalStates.count
     }
 
+    /// Prune parse cache entries for any client whose files are no longer in the active set.
+    static func pruneParseCache(client: String, activePaths: Set<String>) {
+        fileCacheLock.lock(); defer { fileCacheLock.unlock() }
+        let prefix = client + "|"
+        parseCache = parseCache.filter { key, _ in
+            !key.hasPrefix(prefix) || activePaths.contains(String(key.dropFirst(prefix.count)))
+        }
+    }
+
     /// Drop dsh parse entries whose file is no longer in the active set
     /// (deleted sessions), so the cache stays bounded by live files. The
     /// incremental streaming states are pruned the same way (streams freed).
     static func pruneDshParseCache(activeFiles: Set<String>) {
+        pruneParseCache(client: "dsh", activePaths: activeFiles)
         fileCacheLock.lock(); defer { fileCacheLock.unlock() }
-        parseCache = parseCache.filter { key, _ in
-            !key.hasPrefix("dsh|") || activeFiles.contains(String(key.dropFirst(4)))
-        }
         for path in dshIncrementalStates.keys where !activeFiles.contains(path) {
             if var state = dshIncrementalStates.removeValue(forKey: path) {
                 freeDshStream(&state)
@@ -348,8 +368,10 @@ enum Adapters {
 
     static func collectPromaRows() -> [UsageCore.UsageRow] {
         let sourceId = sourceNamespace(promaRoot)
+        let files = jsonlFiles(root: promaRoot, recursive: false, client: "proma")
+        pruneParseCache(client: "proma", activePaths: Set(files.map { $0.path }))
         var rows: [UsageCore.UsageRow] = []
-        for file in jsonlFiles(root: promaRoot, recursive: false, client: "proma") {
+        for file in files {
             autoreleasepool {
                 rows.append(contentsOf: promaFileRows(file, sourceId: sourceId))
             }
@@ -457,6 +479,11 @@ enum Adapters {
     }
 
     static func collectHanakoRows() -> [UsageCore.UsageRow] {
+        var allFiles: [URL] = []
+        for root in hanakoRoots {
+            allFiles.append(contentsOf: jsonlFiles(root: root, recursive: true, client: "hanako"))
+        }
+        pruneParseCache(client: "hanako", activePaths: Set(allFiles.map { $0.path }))
         var rows: [UsageCore.UsageRow] = []
         var seenMessageIds = Set<String>()
         for root in hanakoRoots {
@@ -562,6 +589,12 @@ enum Adapters {
         let defaultRoot = antigravitySessionsRoot
         let candidateRoots = antigravitySessionsRoots.isEmpty ? [defaultRoot] : antigravitySessionsRoots
 
+        var allFiles: [URL] = []
+        for sessionsRoot in candidateRoots {
+            allFiles.append(contentsOf: jsonlFiles(root: sessionsRoot, recursive: false, client: "antigravity"))
+        }
+        pruneParseCache(client: "antigravity", activePaths: Set(allFiles.map { $0.path }))
+
         for sessionsRoot in candidateRoots {
             let sourceId = sourceNamespace(sessionsRoot)
             for file in jsonlFiles(root: sessionsRoot, recursive: false, client: "antigravity") {
@@ -605,14 +638,28 @@ enum Adapters {
         return map
     }
 
+    private struct AntigravityCachedFile {
+        let manifestTs: Double
+        let rows: [UsageCore.UsageRow]
+    }
+
     private static func antigravityFileRows(_ file: URL, sourceId: String, sessionTimestamps: [String: Double]) -> [UsageCore.UsageRow] {
         let sid = file.deletingPathExtension().lastPathComponent
         let manifestTs = sessionTimestamps[sid] ?? 0
         if let stamp = fileStamp(file) {
-            let cacheKey = "antigravity|\(file.path)|\(manifestTs)"
-            return cachedValue(cacheKey, stamp: stamp) {
-                parseAntigravityFile(file, sourceId: sourceId, sessionTimestamps: sessionTimestamps)
+            let key = "antigravity|\(file.path)"
+            fileCacheLock.lock()
+            if let cached = parseCache[key], cached.stamp.0 == stamp.mtime, cached.stamp.1 == stamp.size,
+               let entry = cached.value as? AntigravityCachedFile, entry.manifestTs == manifestTs {
+                fileCacheLock.unlock()
+                return entry.rows
             }
+            fileCacheLock.unlock()
+            let rows = parseAntigravityFile(file, sourceId: sourceId, sessionTimestamps: sessionTimestamps)
+            fileCacheLock.lock()
+            parseCache[key] = (stamp, AntigravityCachedFile(manifestTs: manifestTs, rows: rows))
+            fileCacheLock.unlock()
+            return rows
         }
         return parseAntigravityFile(file, sourceId: sourceId, sessionTimestamps: sessionTimestamps)
     }

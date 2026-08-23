@@ -4567,7 +4567,6 @@ function openHomeSettings() {
   if (!els.settingsPanel) return;
   els.settingsPanel.classList.remove('hidden');
   els.shell.classList.add('settings-open');
-  els.shell.style.transform = 'translateZ(0)';
   setSettingsSectionExpanded('main', true);
   state.homeSettingsExpanded = true;
   syncSettingsForm();
@@ -4580,7 +4579,6 @@ function openTrendSettings() {
   if (!els.settingsPanel) return;
   els.settingsPanel.classList.remove('hidden');
   els.shell.classList.add('settings-open');
-  els.shell.style.transform = 'translateZ(0)';
   setSettingsSectionExpanded('main', true);
   state.trendSettingsExpanded = true;
   syncSettingsForm();
@@ -4594,8 +4592,6 @@ function openSettingsPanel() {
   if (state.viewSwitcherOpen) setViewSwitcherOpen(false);
   els.settingsPanel.classList.remove('hidden');
   els.shell.classList.add('settings-open');
-  els.shell.style.transform = 'translateZ(0)';
-  requestAnimationFrame(() => { els.shell.style.transform = ''; });
 }
 
 const HOME_HISTORY_MAX_RETRIES = 3;
@@ -8096,8 +8092,6 @@ els.settingsButton.addEventListener('click', (event) => {
   if (!settingsOpen) stopWindowShortcutRecording();
   els.shell.classList.toggle('settings-open', settingsOpen);
   if (!settingsOpen && event.detail > 0) els.settingsButton.blur();
-  els.shell.style.transform = 'translateZ(0)';
-  requestAnimationFrame(() => { els.shell.style.transform = ''; });
 });
 
 // Both, not just the mark: either one reveals the reading on hover, so a click or hold that

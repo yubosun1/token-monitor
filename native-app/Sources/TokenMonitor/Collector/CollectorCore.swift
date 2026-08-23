@@ -132,7 +132,17 @@ final class Collector {
 
     private var timer: Timer?
     private var settingsObserver: NSObjectProtocol?
-    private var hasActiveWindows = true
+    private var _hasActiveWindows = true
+    var hasActiveWindows: Bool {
+        get {
+            coordLock.lock(); defer { coordLock.unlock() }
+            return _hasActiveWindows
+        }
+        set {
+            coordLock.lock(); defer { coordLock.unlock() }
+            _hasActiveWindows = newValue
+        }
+    }
 
     // Worker-owned results (read by the UI through stateLock).
     private var statsCache: [String: Any]?
