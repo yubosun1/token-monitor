@@ -2459,7 +2459,73 @@ func runHistoryLedgerTests() {
         migrated.recordTokscaleDays([cleanDay])
         let rebuilt = migrated.fetchHistoryDays(clients: nil)
         checkEqual(rebuilt.first?.tokens ?? 0, 10, "L9.2: rebuilt history accumulates after migration")
-        checkEqual(migrated.currentUserVersion(), 2, "L9.3: user_version advanced to 2")
+        checkEqual(migrated.currentUserVersion(), 3, "L9.3: user_version advanced to the current schema")
+    }
+
+    // L10: v2 → v3 migration purges the v1-era tokscale session rows that a
+    // v2 upgrade left frozen in session_ledger (they would win the max merge
+    // forever), while adapter rows survive.
+    do {
+        let legacy = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("tm-ledger-v2-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: legacy) }
+        let dbPath = legacy.appendingPathComponent("ledger.db")
+        var raw: OpaquePointer?
+        let openRC = sqlite3_open_v2(dbPath.path, &raw, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nil)
+        let v2SQL = """
+        CREATE TABLE IF NOT EXISTS session_ledger (
+            session_id TEXT NOT NULL,
+            client TEXT NOT NULL,
+            date TEXT NOT NULL,
+            model_id TEXT NOT NULL,
+            provider TEXT NOT NULL DEFAULT '',
+            input_tokens REAL NOT NULL DEFAULT 0,
+            output_tokens REAL NOT NULL DEFAULT 0,
+            cache_read_tokens REAL NOT NULL DEFAULT 0,
+            cache_write_tokens REAL NOT NULL DEFAULT 0,
+            reasoning_tokens REAL NOT NULL DEFAULT 0,
+            message_count REAL NOT NULL DEFAULT 0,
+            cost_usd REAL NOT NULL DEFAULT 0.0,
+            started_at_ms REAL NOT NULL DEFAULT 0.0,
+            last_used_at_ms REAL NOT NULL DEFAULT 0.0,
+            project_id TEXT NOT NULL DEFAULT '',
+            project_label TEXT NOT NULL DEFAULT '',
+            timed_tokens REAL NOT NULL DEFAULT 0,
+            timed_duration_ms REAL NOT NULL DEFAULT 0,
+            updated_at_ms REAL NOT NULL DEFAULT 0,
+            PRIMARY KEY (session_id, client, date, model_id)
+        );
+        CREATE TABLE IF NOT EXISTS daily_history_ledger (
+            date TEXT NOT NULL,
+            client TEXT NOT NULL,
+            model_id TEXT NOT NULL,
+            tokens REAL NOT NULL DEFAULT 0,
+            cost_usd REAL NOT NULL DEFAULT 0.0,
+            messages REAL NOT NULL DEFAULT 0.0,
+            active_time_ms REAL NOT NULL DEFAULT 0.0,
+            updated_at_ms REAL NOT NULL DEFAULT 0,
+            PRIMARY KEY (date, client, model_id)
+        );
+        INSERT INTO session_ledger (session_id, client, date, model_id, input_tokens, output_tokens, updated_at_ms)
+        VALUES ('s-codex-1','codex','2026-08-01','gpt-5',900000,0,1787600000000);
+        INSERT INTO session_ledger (session_id, client, date, model_id, input_tokens, output_tokens, updated_at_ms)
+        VALUES ('s-proma-1','proma','2026-08-01','gpt-4o',500,200,1787700000000);
+        """
+        let execRC = raw.map { sqlite3_exec($0, v2SQL, nil, nil, nil) } ?? -1
+        XCTAssertSQLITE(openRC == SQLITE_OK && execRC == SQLITE_OK)
+        XCTAssertSQLITE(sqlite3_exec(raw, "PRAGMA user_version = 2;", nil, nil, nil) == SQLITE_OK)
+        sqlite3_close(raw)
+
+        let migrated = HistoryLedger(dbURL: dbPath)
+        let tokscaleRows = migrated.querySessionRows(clients: ["codex"])
+        checkEqual(tokscaleRows.count, 0, "L10.1: legacy tokscale session rows purged by v3 migration")
+        let adapterRows = migrated.querySessionRows(clients: ["proma"])
+        checkEqual(adapterRows.count, 1, "L10.2: adapter rows survive the v3 migration")
+        checkEqual(adapterRows.first?.input ?? 0, 500, "L10.3: adapter row values intact")
+        checkEqual(migrated.currentUserVersion(), 3, "L10.4: user_version advanced to 3")
+        // Periods no longer include the frozen tokscale snapshot.
+        let periods = migrated.fetchPeriods(clients: ["codex", "proma"], now: Date(timeIntervalSince1970: 1787700000), allTimeSince: 0)
+        checkEqual(UsageCore.intValue(periods.allTime["totalTokens"]), 700, "L10.5: allTime reflects only adapter rows after purge")
     }
 }
 

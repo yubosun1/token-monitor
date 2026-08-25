@@ -41,14 +41,23 @@ final class HistoryLedger {
     }
 
     /// Schema version of the ledger data, tracked via `PRAGMA user_version`.
+    ///
     /// v1 (pre-fix): `daily_history_ledger` was written with a client×model
     /// cartesian product for tokscale graph days (tokens/costs multiplied by
     /// the number of clients) and per-message MAX updates for adapter days
-    /// (undercount). Neither can be corrected in place, so v2 clears the
-    /// daily table once and lets the corrected writers rebuild it from the
-    /// live scans. `session_ledger` needs no wipe: the corrected writer
-    /// overwrites the same primary keys with aggregated snapshots.
-    private static let ledgerSchemaVersion: Int32 = 2
+    /// (undercount); `session_ledger` held tokscale session-level cumulative
+    /// rows attributed by lastUsedAt.
+    ///
+    /// v2: daily table cleared once; corrected writers rebuild it from live
+    /// scans; tokscale rows are no longer recorded into session_ledger.
+    ///
+    /// v3: removes the v1-era tokscale rows that a v2 upgrade left behind in
+    /// session_ledger. Because v2 no longer writes those keys, they were never
+    /// overwritten: their frozen full-session cumulative snapshots kept
+    /// winning the component-wise max merge forever, inflating today/month/
+    /// allTime totals. Adapter rows survive (they are re-overwritten with the
+    /// corrected aggregates on the next derive).
+    private static let ledgerSchemaVersion: Int32 = 3
 
     /// Internal (not private) so the fixture checker can assert the migration
     /// advanced the schema version.
@@ -64,18 +73,47 @@ final class HistoryLedger {
         return version
     }
 
+    /// Tokscale clients whose v1 session rows must be purged on upgrade.
+    /// Mirrors the v1 collector's tokscale client set (claude/codex/opencode/
+    /// workbuddy); kimi and antigravity were always adapter-collected and are
+    /// preserved.
+    private static let legacyTokscaleClients = ["claude", "codex", "opencode", "workbuddy"]
+
     private func migrateLegacyData() {
         lock.lock()
         defer { lock.unlock() }
         guard let db else { return }
         let version = currentUserVersion()
         guard version < Self.ledgerSchemaVersion else { return }
-        if sqlite3_exec(db, "DELETE FROM daily_history_ledger;", nil, nil, nil) != SQLITE_OK {
-            NSLog("[HistoryLedger] migration: failed to clear daily_history_ledger: %s", sqlite3_errmsg(db))
-        } else if PerfDiag.enabled {
-            PerfDiag.log("ledger schema migrated v\(version) → v\(Self.ledgerSchemaVersion): daily history cleared for rebuild")
+        var succeeded = true
+        if version < 2 {
+            // v1 → v2: the daily table mixes cartesian-inflated tokscale days
+            // and per-message-MAX adapter days; neither can be corrected in
+            // place, so clear it once and rebuild from live scans.
+            if sqlite3_exec(db, "DELETE FROM daily_history_ledger;", nil, nil, nil) != SQLITE_OK {
+                NSLog("[HistoryLedger] migration v1: failed to clear daily_history_ledger: %s", sqlite3_errmsg(db))
+                succeeded = false
+            }
         }
+        if version < 3 {
+            // v2 → v3: purge the v1-era tokscale session rows. They carry
+            // full-session cumulative snapshots frozen at the v1 write time,
+            // are attributed by lastUsedAt, and (since v2 stopped writing
+            // them) can never be refreshed or removed by normal operation —
+            // they would win the max merge forever.
+            let clients = Self.legacyTokscaleClients.map { "'\($0)'" }.joined(separator: ",")
+            if sqlite3_exec(db, "DELETE FROM session_ledger WHERE client IN (\(clients));", nil, nil, nil) != SQLITE_OK {
+                NSLog("[HistoryLedger] migration v2: failed to clear legacy tokscale rows: %s", sqlite3_errmsg(db))
+                succeeded = false
+            }
+        }
+        // Only advance the version when every step completed: a failed
+        // migration retries on the next launch instead of being skipped.
+        guard succeeded else { return }
         sqlite3_exec(db, "PRAGMA user_version = \(Self.ledgerSchemaVersion);", nil, nil, nil)
+        if PerfDiag.enabled {
+            PerfDiag.log("ledger schema migrated v\(version) → v\(Self.ledgerSchemaVersion)")
+        }
     }
 
     deinit {
