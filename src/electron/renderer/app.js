@@ -150,7 +150,17 @@ const VIEW_DISPLAY_OPTIONS = [
   { id: 'limits', labelKey: 'views.limits' },
   { id: 'trends', labelKey: 'views.trends' }
 ];
-const viewPeriodValues = new Set(['today', 'month', 'allTime']);
+const fixedPeriodRangesApi = window.TokenMonitorFixedPeriodRanges || {
+  MONTH_MODES: ['month', 'week', 'last7', 'last30', 'custom'],
+  slotForSelection: (v) => v === 'today' ? 'today' : v === 'allTime' ? 'allTime' : 'month',
+  isDerived: (v) => v === 'week' || v === 'last7' || v === 'last30' || v === 'custom',
+  normalizeMonthMode: (v) => ['month', 'week', 'last7', 'last30', 'custom'].includes(v) ? v : 'month',
+  displayLabel: (v) => ({ today: 'DAY', month: 'MONTH', allTime: 'TOTAL', week: 'WEEK', last7: '7D', last30: '30D', custom: 'CUSTOM' }[v] || 'MONTH'),
+  rangeForSelection: () => null,
+  derivePeriod: () => null,
+  fixedPeriodSnapshot: () => ({ status: 'unavailable', period: null })
+};
+const viewPeriodValues = new Set(['today', 'month', 'week', 'last7', 'last30', 'custom', 'allTime']);
 const viewBreakdownValues = new Set(['home', ...baseBreakdownOrder, 'limits', 'trends']);
 const HOME_MODULE_OPTIONS = [
   { id: 'limits', labelKey: 'home.limits', viewId: 'limits' },
@@ -179,7 +189,7 @@ function normalizeInitialViewValue(value, allowed, fallback) {
   return allowed.has(raw) ? raw : fallback;
 }
 
-const state = { period: normalizeInitialViewValue(initialViewState.period, viewPeriodValues, 'today'), breakdown: normalizeInitialViewValue(initialViewState.breakdown, viewBreakdownValues, 'home'), viewSwitcherOpen: false, viewSwitcherHasOpened: false, limitDetailTooltipHasOpened: false, limitDetailTooltipActive: false, limitDetailTooltipRenderPending: false, settings: null, stats: null, homeHistory: null, homeHistoryBusy: false, homeHistoryRequested: false, homeHistorySignature: '', homeHistoryRetries: 0, homeHistoryRetryTimer: null, homeActivityScrollLeft: null, homeActivityFollowEnd: true, homeActivityResizeObserver: null, trendSettingsExpanded: false, trendsActivating: false, homeSettingsExpanded: false, homeLimitSettingsExpanded: false, limitProviderSettingsExpanded: '', clientHealthExpanded: '', clientSources: clientSourceCacheApi.createClientSourceCache(), clientSourcesKey: '', clientSourcesRequest: 0, subscriptionEditingId: '', subscriptionTopUps: [], subscriptionFormBase: null, subscriptionEditorTransitionId: 0, refreshTimer: null, refreshBusy: false, refreshFeedbackTimer: null, currentTotal: 0, rowSignature: '', streamConnected: false, streamFailure: null, mode: 'idle', appInfo: null, hubInfo: null, cursorAccount: { status: null, error: '' }, cursorAccountExpanded: false, codexAccountExpanded: false, codexAccountError: '', codexSignInBusy: false, codexSignInFlowId: '', codexLoginUrl: '', codexLoginStatus: '', codexLoginOutput: '', codexWorkspaceChoices: [], codexWorkspaceId: '', codexActiveAccount: null, codexPendingActiveAccount: null, codexPendingActiveAccountUntil: 0, codexPendingActiveAccountTimer: null, codexSystemSwitchingAccountId: '', codexSystemSwitchErrorAccountId: '', codexSystemSwitchError: '', codexSwitchPopoverHasOpened: false, codexSwitchPopoverActive: false, codexSwitchPopoverRenderPending: false, customPricingExpanded: false, claudeAccountExpanded: false, claudePendingCheckSince: 0, opencodeProfileCount: 0, opencodeCookieExpanded: false, openrouterProfileCount: 0, openrouterAccountExpanded: false, thirdPartyProfileCount: 0, thirdPartyAccountExpanded: false, deepseekAccountExpanded: false, deepseekPendingCheckSince: 0, minimaxAccountExpanded: false, minimaxPendingCheckSince: 0, zaiAccountExpanded: false, zaiPendingCheckSince: 0, zaiteamAccountExpanded: false, zaiteamPendingCheckSince: 0, volcengineAccountExpanded: false, volcenginePendingCheckSince: 0, qoderAccountExpanded: false, qoderPendingCheckSince: 0, kimiAccountExpanded: false, kimiPendingCheckSince: 0, ollamaAccountExpanded: false, ollamaPendingCheckSince: 0, mimoAccountExpanded: false, mimoAccountError: '', copilotAccountExpanded: false, copilotManualExpanded: false, copilotPendingCheckSince: 0, copilotSignInBusy: false, copilotSignInCancelable: false, copilotSignInFlowId: '', copilotAuthorizeMessage: '', copilotLoginStatus: '', copilotErrorMessage: '', suppressInitialNumberAnimation: window.__TOKEN_MONITOR_SUPPRESS_INITIAL_NUMBER_ANIMATION__ === true, openSession: null, detailSort: 'time', recordingWindowShortcut: false, windowShortcutInvalid: false };
+const state = { period: normalizeInitialViewValue(initialViewState.period, viewPeriodValues, 'today'), breakdown: normalizeInitialViewValue(initialViewState.breakdown, viewBreakdownValues, 'home'), periodMenuOpen: false, viewSwitcherOpen: false, viewSwitcherHasOpened: false, limitDetailTooltipHasOpened: false, limitDetailTooltipActive: false, limitDetailTooltipRenderPending: false, settings: null, stats: null, homeHistory: null, homeHistoryBusy: false, homeHistoryRequested: false, homeHistorySignature: '', homeHistoryRetries: 0, homeHistoryRetryTimer: null, homeActivityScrollLeft: null, homeActivityFollowEnd: true, homeActivityResizeObserver: null, trendSettingsExpanded: false, trendsActivating: false, homeSettingsExpanded: false, homeLimitSettingsExpanded: false, limitProviderSettingsExpanded: '', clientHealthExpanded: '', clientSources: clientSourceCacheApi.createClientSourceCache(), clientSourcesKey: '', clientSourcesRequest: 0, subscriptionEditingId: '', subscriptionTopUps: [], subscriptionFormBase: null, subscriptionEditorTransitionId: 0, refreshTimer: null, refreshBusy: false, refreshFeedbackTimer: null, currentTotal: 0, rowSignature: '', streamConnected: false, streamFailure: null, mode: 'idle', appInfo: null, hubInfo: null, cursorAccount: { status: null, error: '' }, cursorAccountExpanded: false, codexAccountExpanded: false, codexAccountError: '', codexSignInBusy: false, codexSignInFlowId: '', codexLoginUrl: '', codexLoginStatus: '', codexLoginOutput: '', codexWorkspaceChoices: [], codexWorkspaceId: '', codexActiveAccount: null, codexPendingActiveAccount: null, codexPendingActiveAccountUntil: 0, codexPendingActiveAccountTimer: null, codexSystemSwitchingAccountId: '', codexSystemSwitchErrorAccountId: '', codexSystemSwitchError: '', codexSwitchPopoverHasOpened: false, codexSwitchPopoverActive: false, codexSwitchPopoverRenderPending: false, customPricingExpanded: false, claudeAccountExpanded: false, claudePendingCheckSince: 0, opencodeProfileCount: 0, opencodeCookieExpanded: false, openrouterProfileCount: 0, openrouterAccountExpanded: false, thirdPartyProfileCount: 0, thirdPartyAccountExpanded: false, deepseekAccountExpanded: false, deepseekPendingCheckSince: 0, minimaxAccountExpanded: false, minimaxPendingCheckSince: 0, zaiAccountExpanded: false, zaiPendingCheckSince: 0, zaiteamAccountExpanded: false, zaiteamPendingCheckSince: 0, volcengineAccountExpanded: false, volcenginePendingCheckSince: 0, qoderAccountExpanded: false, qoderPendingCheckSince: 0, kimiAccountExpanded: false, kimiPendingCheckSince: 0, ollamaAccountExpanded: false, ollamaPendingCheckSince: 0, mimoAccountExpanded: false, mimoAccountError: '', copilotAccountExpanded: false, copilotManualExpanded: false, copilotPendingCheckSince: 0, copilotSignInBusy: false, copilotSignInCancelable: false, copilotSignInFlowId: '', copilotAuthorizeMessage: '', copilotLoginStatus: '', copilotErrorMessage: '', suppressInitialNumberAnimation: window.__TOKEN_MONITOR_SUPPRESS_INITIAL_NUMBER_ANIMATION__ === true, openSession: null, detailSort: 'time', recordingWindowShortcut: false, windowShortcutInvalid: false };
 state.clientRescans = clientRescanStateApi.createClientRescanState({
   onChange: (clientId) => {
     if (state.clientHealthExpanded === clientId) refillOpenClientHealthPanel();
@@ -227,7 +237,15 @@ Object.assign(elsMap, {
   mainSettingsSummary: document.getElementById('mainSettingsSummary'),
   subscriptionsSettingsSummary: document.getElementById('subscriptionsSettingsSummary'),
   sessionDetail: document.getElementById('session-detail'),
-  sessionDetailHead: document.getElementById('session-detail-head')
+  sessionDetailHead: document.getElementById('session-detail-head'),
+  todayPeriodTab: document.getElementById('todayPeriodTab'),
+  monthPeriodTab: document.getElementById('monthPeriodTab'),
+  monthPeriodMenu: document.getElementById('monthPeriodMenu'),
+  allTimePeriodTab: document.getElementById('allTimePeriodTab'),
+  periodMonthModeInput: document.getElementById('periodMonthModeInput'),
+  customPeriodDatesRow: document.getElementById('customPeriodDatesRow'),
+  customPeriodStartInput: document.getElementById('customPeriodStartInput'),
+  customPeriodEndInput: document.getElementById('customPeriodEndInput')
 });
 
 function toggleAccordionRow(row) {
@@ -522,7 +540,7 @@ function hideTotalCompact() {
   els.totalTokensCompact.classList.add('hidden');
 }
 function currentTokenRateValue() {
-  const period = state.stats?.periods?.[state.period];
+  const period = currentPeriodData();
   const burn = state.settings?.tokenRateMode === 'burn';
   return {
     burn,
@@ -5498,7 +5516,7 @@ function renderHome() {
   hideHomeActivityTooltip({ preserveHover: true });
   state.homeActivityResizeObserver?.disconnect();
   state.homeActivityResizeObserver = null;
-  const period = state.stats.periods?.[state.period] || { totalTokens: 0, costUsd: 0, clients: {} };
+  const period = currentPeriodData();
   const moduleIds = homeModuleIds();
   if (moduleIds.includes('trends')) void loadHomeHistory();
   if (moduleIds.length === 0) {
@@ -5546,7 +5564,7 @@ function render() {
   renderViewSwitcher();
   if (state.openSession && state.breakdown !== 'session') { state.openSession = null; els.sessionDetail.classList.add('hidden'); els.sessionDetail.replaceChildren(); els.sessionDetailHead.classList.add('hidden'); els.sessionDetailHead.replaceChildren(); }
   if (state.openSession) { els.sessionDetail.classList.remove('hidden'); els.sessionDetailHead.classList.remove('hidden'); } else { els.sessionDetail.classList.add('hidden'); els.sessionDetailHead.classList.add('hidden'); }
-  const period = state.stats.periods?.[state.period] || { totalTokens: 0, costUsd: 0, clients: {} };
+  const period = currentPeriodData();
   const nextTotal = Number(period.totalTokens || 0);
   const totalChanged = nextTotal !== state.currentTotal;
   if (state.suppressInitialNumberAnimation) {
@@ -5966,15 +5984,51 @@ async function copyToClipboard(text, button) {
   }
 }
 
+function currentPeriodData() {
+  if (!state.stats) return { totalTokens: 0, costUsd: 0, clients: {}, models: {}, sessions: {} };
+  if (state.stats.periods?.[state.period]) {
+    return state.stats.periods[state.period];
+  }
+  if (fixedPeriodRangesApi.isDerived(state.period)) {
+    const snap = fixedPeriodRangesApi.fixedPeriodSnapshot(state.period, {
+      daily: state.stats.history?.daily || state.homeHistory?.daily || [],
+      now: new Date(),
+      customStart: state.settings?.customPeriodStart,
+      customEnd: state.settings?.customPeriodEnd
+    });
+    if (snap.period) return snap.period;
+  }
+  return state.stats.periods?.today || { totalTokens: 0, costUsd: 0, clients: {}, models: {}, sessions: {} };
+}
+
+function syncPeriodMenu() {
+  if (!els.monthPeriodMenu) return;
+  els.monthPeriodMenu.classList.toggle('hidden', !state.periodMenuOpen);
+  const currentMode = fixedPeriodRangesApi.normalizeMonthMode(state.period);
+  for (const item of els.monthPeriodMenu.querySelectorAll('[data-fixed-period]')) {
+    item.classList.toggle('active', item.dataset.fixedPeriod === currentMode);
+  }
+}
+
 function syncPeriodTabs() {
   const tabs = Array.from(document.querySelectorAll('.tab'));
-  const activeIndex = Math.max(0, tabs.findIndex((tab) => tab.dataset.period === state.period));
+  const activeSlot = fixedPeriodRangesApi.slotForSelection(state.period);
+  const activeIndex = activeSlot === 'today' ? 0 : activeSlot === 'allTime' ? 2 : 1;
   document.querySelector('.tabs')?.style.setProperty('--period-index', String(activeIndex));
   for (const tab of tabs) {
-    const active = tab.dataset.period === state.period;
+    const slot = tab.dataset.periodSlot || tab.dataset.period;
+    const active = slot === activeSlot;
     tab.classList.toggle('active', active);
     tab.setAttribute('aria-pressed', String(active));
   }
+  if (els.monthPeriodTab) {
+    const mode = activeSlot === 'month'
+      ? fixedPeriodRangesApi.normalizeMonthMode(state.period)
+      : fixedPeriodRangesApi.normalizeMonthMode(state.settings?.periodMonthMode);
+    els.monthPeriodTab.textContent = fixedPeriodRangesApi.displayLabel(mode);
+    els.monthPeriodTab.dataset.period = mode;
+  }
+  syncPeriodMenu();
 }
 
 function applyInitialBreakdownPreference() {
@@ -6018,6 +6072,19 @@ function syncSettingsForm() {
   applyInitialBreakdownPreference();
   syncPeriodTabs();
   syncWindowBehaviorControls();
+  if (els.periodMonthModeInput) {
+    els.periodMonthModeInput.value = fixedPeriodRangesApi.normalizeMonthMode(state.settings?.periodMonthMode);
+  }
+  if (els.customPeriodDatesRow) {
+    const isCustom = state.settings?.periodMonthMode === 'custom' || state.period === 'custom';
+    els.customPeriodDatesRow.classList.toggle('hidden', !isCustom);
+  }
+  if (els.customPeriodStartInput && state.settings?.customPeriodStart) {
+    els.customPeriodStartInput.value = state.settings.customPeriodStart;
+  }
+  if (els.customPeriodEndInput && state.settings?.customPeriodEnd) {
+    els.customPeriodEndInput.value = state.settings.customPeriodEnd;
+  }
   if (els.currencyInput) els.currencyInput.value = currentCurrency();
   if (els.compactTokensInput) els.compactTokensInput.checked = Boolean(state.settings?.compactTokens !== false);
   syncCurrencyRateControls();
@@ -8039,9 +8106,22 @@ async function init() {
 }
 
 for (const tab of document.querySelectorAll('.tab')) {
-  tab.addEventListener('click', () => {
+  tab.addEventListener('click', (event) => {
+    const slot = tab.dataset.periodSlot || tab.dataset.period;
+    const activeSlot = fixedPeriodRangesApi.slotForSelection(state.period);
+    if (slot === 'month' && activeSlot === 'month') {
+      event.stopPropagation();
+      state.periodMenuOpen = !state.periodMenuOpen;
+      syncPeriodMenu();
+      return;
+    }
+    state.periodMenuOpen = false;
+    syncPeriodMenu();
+    const targetPeriod = slot === 'month'
+      ? fixedPeriodRangesApi.normalizeMonthMode(state.settings?.periodMonthMode)
+      : tab.dataset.period;
     const snapshot = captureBreakdownMotion();
-    if (!setPeriod(tab.dataset.period)) return;
+    if (!setPeriod(targetPeriod)) return;
     syncPeriodTabs();
     if (state.openSession) openSessionDetail(state.openSession);
     state.rowSignature = '';
@@ -8051,6 +8131,74 @@ for (const tab of document.querySelectorAll('.tab')) {
     animateBreakdownFrom(snapshot, { duration: 800 });
   });
 }
+
+for (const button of els.monthPeriodMenu?.querySelectorAll('[data-fixed-period]') || []) {
+  button.addEventListener('click', async (event) => {
+    event.stopPropagation();
+    const selection = fixedPeriodRangesApi.normalizeMonthMode(button.dataset.fixedPeriod);
+    state.periodMenuOpen = false;
+    syncPeriodMenu();
+    if (selection === 'custom' && (!state.settings?.customPeriodStart || !state.settings?.customPeriodEnd)) {
+      setSettingsOpen(true);
+      if (els.periodMonthModeInput) {
+        els.periodMonthModeInput.value = 'custom';
+        els.periodMonthModeInput.dispatchEvent(new Event('change'));
+      }
+      return;
+    }
+    const changed = setPeriod(selection);
+    if (state.settings) state.settings.periodMonthMode = selection;
+    syncPeriodTabs();
+    if (changed) {
+      state.rowSignature = '';
+      state.periodMotionActive = true;
+      render();
+      state.periodMotionActive = false;
+    }
+    await saveSettings({ periodMonthMode: selection });
+  });
+}
+
+els.periodMonthModeInput?.addEventListener('change', async () => {
+  const selection = fixedPeriodRangesApi.normalizeMonthMode(els.periodMonthModeInput.value);
+  if (state.settings) state.settings.periodMonthMode = selection;
+  if (els.customPeriodDatesRow) {
+    els.customPeriodDatesRow.classList.toggle('hidden', selection !== 'custom');
+  }
+  if (fixedPeriodRangesApi.slotForSelection(state.period) === 'month') {
+    setPeriod(selection);
+  }
+  syncPeriodTabs();
+  render();
+  await saveSettings({ periodMonthMode: selection });
+});
+
+els.customPeriodStartInput?.addEventListener('change', async () => {
+  const start = els.customPeriodStartInput.value;
+  if (state.settings) state.settings.customPeriodStart = start;
+  if (state.period === 'custom') {
+    state.rowSignature = '';
+    render();
+  }
+  await saveSettings({ customPeriodStart: start });
+});
+
+els.customPeriodEndInput?.addEventListener('change', async () => {
+  const end = els.customPeriodEndInput.value;
+  if (state.settings) state.settings.customPeriodEnd = end;
+  if (state.period === 'custom') {
+    state.rowSignature = '';
+    render();
+  }
+  await saveSettings({ customPeriodEnd: end });
+});
+
+document.addEventListener('click', (event) => {
+  if (!state.periodMenuOpen) return;
+  if (els.monthPeriodMenu?.contains(event.target) || els.monthPeriodTab?.contains(event.target)) return;
+  state.periodMenuOpen = false;
+  syncPeriodMenu();
+});
 
 els.breakdown.addEventListener('click', (event) => {
   if (state.breakdown !== 'session') return;

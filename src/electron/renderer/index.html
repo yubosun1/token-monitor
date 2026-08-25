@@ -16,9 +16,18 @@
         <div class="title-controls">
           <nav class="tabs" aria-label="Period tabs">
             <span class="tab-indicator" aria-hidden="true"></span>
-            <button class="tab active" data-period="today">DAY</button>
-            <button class="tab" data-period="month">MONTH</button>
-            <button class="tab" data-period="allTime">TOTAL</button>
+            <button id="todayPeriodTab" class="tab active" data-period="today" data-period-slot="today">DAY</button>
+            <div class="period-tab-wrapper">
+              <button id="monthPeriodTab" class="tab" data-period="month" data-period-slot="month">MONTH</button>
+              <div id="monthPeriodMenu" class="period-menu hidden" role="menu" aria-label="Usage range menu">
+                <button type="button" class="period-menu-item" data-fixed-period="month">本月 (This Month)</button>
+                <button type="button" class="period-menu-item" data-fixed-period="week">本周 (This Week)</button>
+                <button type="button" class="period-menu-item" data-fixed-period="last7">近 7 天 (Last 7 Days)</button>
+                <button type="button" class="period-menu-item" data-fixed-period="last30">近 30 天 (Last 30 Days)</button>
+                <button type="button" class="period-menu-item" data-fixed-period="custom">自定义区间 (Custom)...</button>
+              </div>
+            </div>
+            <button id="allTimePeriodTab" class="tab" data-period="allTime" data-period-slot="allTime">TOTAL</button>
           </nav>
           <div class="actions-hotspot" title="Window controls"></div>
           <div class="window-actions">
@@ -79,6 +88,26 @@
           </button>
           <div id="mainSettingsDetails" class="settings-section-details hidden">
             <div class="settings-subgroup settings-main-screen-group">
+              <label class="settings-item period-default-setting">
+                <span class="settings-item-text">
+                  <span class="settings-item-title">默认统计区间</span>
+                </span>
+                <select id="periodMonthModeInput">
+                  <option value="month">本月 (This Month)</option>
+                  <option value="week">本周 (This Week)</option>
+                  <option value="last7">最近 7 天 (Last 7 Days)</option>
+                  <option value="last30">最近 30 天 (Last 30 Days)</option>
+                  <option value="custom">自定义区间 (Custom Range)</option>
+                </select>
+              </label>
+              <div id="customPeriodDatesRow" class="settings-row custom-period-dates-row hidden">
+                <label>自定义起止日期</label>
+                <div class="custom-date-inputs">
+                  <input id="customPeriodStartInput" type="date" aria-label="Start Date">
+                  <span class="date-sep">至</span>
+                  <input id="customPeriodEndInput" type="date" aria-label="End Date">
+                </div>
+              </div>
               <div class="settings-note-row">
                 <p class="settings-note" data-i18n="settings.views.note">Choose which main views appear and the order of the mode button.</p>
                 <div class="tool-header-actions">
@@ -503,6 +532,7 @@
     <script src="tokenRatePresentation.js"></script>
     <script src="../motionPreference.js"></script>
     <script src="glassRendering.js"></script>
+    <script src="fixedPeriodRanges.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

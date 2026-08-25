@@ -211,6 +211,13 @@ final class BridgeCore {
                 sessionCost: UsageCore.doubleValue(args["sessionCost"])
             )
 
+        case "usage:getCustomPeriod", "getCustomPeriod":
+            let args = args.first as? [String: Any] ?? [:]
+            let start = args["startDate"] as? String ?? ""
+            let end = args["endDate"] as? String ?? ""
+            let clients = args["clients"] as? [String]
+            return HistoryLedger.shared.fetchCustomPeriod(clients: clients, startDate: start, endDate: end)
+
         case "pricing:lookup":
             guard let modelId = args.first as? String, !modelId.isEmpty else {
                 return ["ok": false, "error": "missing model id"]

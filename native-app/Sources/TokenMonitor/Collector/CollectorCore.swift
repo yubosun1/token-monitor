@@ -43,8 +43,41 @@ struct CollectorEnvironment {
     var tokscaleGraph: ([String]) -> (days: [HistoryCore.Day], activeTimeMs: Double?)?
     var push: (String, Any) -> Void
     var customPricingSync: ([String: Any]) -> Void
+    var historyLedger: HistoryLedger?
     /// Test hook: observes every executed tick without touching caches.
     var tickObserver: (RefreshKind, RefreshReason) -> Void
+
+    init(
+        now: @escaping () -> Date,
+        settings: @escaping () -> [String: Any],
+        adapterFingerprint: @escaping (String) -> SourceScanner.Fingerprint,
+        adapterRows: @escaping (String) -> [UsageCore.UsageRow],
+        pricingLookup: @escaping (String, PricingPolicy) -> TokscalePricing?,
+        tokscaleFingerprint: @escaping ([String]) -> SourceScanner.Fingerprint,
+        tokscaleAntigravitySync: @escaping () -> Bool,
+        tokscalePricingRefresh: @escaping ([String]) -> Bool,
+        tokscalePeriods: @escaping ([String], [String: Any], Date) -> [String: [String: Any]]?,
+        tokscaleGraph: @escaping ([String]) -> (days: [HistoryCore.Day], activeTimeMs: Double?)?,
+        push: @escaping (String, Any) -> Void,
+        customPricingSync: @escaping ([String: Any]) -> Void,
+        historyLedger: HistoryLedger? = nil,
+        tickObserver: @escaping (RefreshKind, RefreshReason) -> Void = { _, _ in }
+    ) {
+        self.now = now
+        self.settings = settings
+        self.adapterFingerprint = adapterFingerprint
+        self.adapterRows = adapterRows
+        self.pricingLookup = pricingLookup
+        self.tokscaleFingerprint = tokscaleFingerprint
+        self.tokscaleAntigravitySync = tokscaleAntigravitySync
+        self.tokscalePricingRefresh = tokscalePricingRefresh
+        self.tokscalePeriods = tokscalePeriods
+        self.tokscaleGraph = tokscaleGraph
+        self.push = push
+        self.customPricingSync = customPricingSync
+        self.historyLedger = historyLedger
+        self.tickObserver = tickObserver
+    }
 
     static func live() -> CollectorEnvironment {
         return CollectorEnvironment(
@@ -90,6 +123,7 @@ struct CollectorEnvironment {
                     settingsFileURL: SettingsStore.shared.fileURL
                 )
             },
+            historyLedger: HistoryLedger.shared,
             tickObserver: { _, _ in }
         )
     }
@@ -627,6 +661,15 @@ final class Collector {
                     let history = Adapters.historyContributions(
                         rows: raw.rows, client: client, pricingByModel: pricingMap
                     )
+                    if let ledger = environment.historyLedger {
+                        let pricedRows: [UsageCore.UsageRow] = raw.rows.map { row in
+                            var r = row
+                            r.cost = Adapters.estimatedRowCost(row: row, pricingByModel: pricingMap) ?? 0
+                            return r
+                        }
+                        ledger.recordUsageRows(pricedRows, defaultClient: client, now: now)
+                        ledger.recordHistoryContributions(history, now: now)
+                    }
                     let derived = DerivedSnapshot(key: key, periods: periods, history: history)
                     derivedSnapshots[client] = derived
                     adapterContributions[client] = derived
@@ -785,9 +828,23 @@ final class Collector {
             merged["month"] = UsageCore.mergePeriods(contributions.map { $0["month"] ?? UsageCore.emptyPeriod() })
             merged["allTime"] = UsageCore.mergePeriods(contributions.map { $0["allTime"] ?? UsageCore.emptyPeriod() })
             mergedAdapterPeriods = merged
-            let today = UsageCore.mergePeriods([tokscalePeriods["today"] ?? UsageCore.emptyPeriod(), merged["today"] ?? UsageCore.emptyPeriod()])
-            let month = UsageCore.mergePeriods([tokscalePeriods["month"] ?? UsageCore.emptyPeriod(), merged["month"] ?? UsageCore.emptyPeriod()])
-            let allTime = UsageCore.mergePeriods([tokscalePeriods["allTime"] ?? UsageCore.emptyPeriod(), merged["allTime"] ?? UsageCore.emptyPeriod()])
+            var today = UsageCore.mergePeriods([tokscalePeriods["today"] ?? UsageCore.emptyPeriod(), merged["today"] ?? UsageCore.emptyPeriod()])
+            var month = UsageCore.mergePeriods([tokscalePeriods["month"] ?? UsageCore.emptyPeriod(), merged["month"] ?? UsageCore.emptyPeriod()])
+            var allTime = UsageCore.mergePeriods([tokscalePeriods["allTime"] ?? UsageCore.emptyPeriod(), merged["allTime"] ?? UsageCore.emptyPeriod()])
+
+            if let ledger = environment.historyLedger {
+                let ledgerPeriods = ledger.fetchPeriods(clients: clients, now: now, allTimeSince: allTimeSince)
+                if UsageCore.intValue(ledgerPeriods.today["totalTokens"]) > UsageCore.intValue(today["totalTokens"]) {
+                    today = ledgerPeriods.today
+                }
+                if UsageCore.intValue(ledgerPeriods.month["totalTokens"]) > UsageCore.intValue(month["totalTokens"]) {
+                    month = ledgerPeriods.month
+                }
+                if UsageCore.intValue(ledgerPeriods.allTime["totalTokens"]) > UsageCore.intValue(allTime["totalTokens"]) {
+                    allTime = ledgerPeriods.allTime
+                }
+            }
+
             cachedPeriods = (today, month, allTime)
             mergeContext = context
             mergeSpan.end()
@@ -808,6 +865,12 @@ final class Collector {
                 }
             }
             HistoryCore.mergeAdapterContributions(historyContributions, into: &days)
+            if let ledger = environment.historyLedger {
+                let ledgerDays = ledger.fetchHistoryDays(clients: clients)
+                if !ledgerDays.isEmpty {
+                    days = HistoryLedger.mergeDays(liveDays: days, ledgerDays: ledgerDays)
+                }
+            }
             let built = HistoryCore.normalizeHistory(
                 days: days, todayKey: nil,
                 totalActiveTimeMsOverride: tokscaleSnapshot?.graphActiveTime
@@ -1037,7 +1100,7 @@ final class Collector {
         return ["today": UsageCore.emptyPeriod(), "month": UsageCore.emptyPeriod(), "allTime": UsageCore.emptyPeriod()]
     }
 
-    static func scanTokscalePeriods(clients: [String], settings: [String: Any], now: Date) -> [String: [String: Any]]? {
+    static func scanTokscalePeriods(clients: [String], settings: [String: Any], now: Date, ledger: HistoryLedger? = HistoryLedger.shared) -> [String: [String: Any]]? {
         guard !clients.isEmpty else { return emptyTokscalePeriods() }
         let since = settings["allTimeSince"] as? String ?? "2024-01-01"
         let periods = ["today", "month", "allTime"]
@@ -1056,6 +1119,9 @@ final class Collector {
                 do {
                     let entries = try TokscaleRunner.shared.usage(clients: clients, period: period, allTimeSince: since)
                     let rows = entries.map(UsageCore.rowFromTokscaleEntry)
+                    if period == "allTime" {
+                        ledger?.recordUsageRows(rows, now: now)
+                    }
                     let periodResult = UsageCore.extractPeriod(entries: rows)
                     lock.lock()
                     results[period] = periodResult
@@ -1077,10 +1143,12 @@ final class Collector {
         return results
     }
 
-    static func scanTokscaleGraph(clients: [String]) -> (days: [HistoryCore.Day], activeTimeMs: Double?)? {
+    static func scanTokscaleGraph(clients: [String], ledger: HistoryLedger? = HistoryLedger.shared) -> (days: [HistoryCore.Day], activeTimeMs: Double?)? {
         guard !clients.isEmpty else { return ([], nil) }
         guard let graph = try? TokscaleRunner.shared.graph(clients: clients) else { return nil }
-        return (HistoryCore.parseTokscaleGraph(graph), graph.timeMetrics?.totalActiveTimeMs)
+        let days = HistoryCore.parseTokscaleGraph(graph)
+        ledger?.recordTokscaleDays(days, now: Date())
+        return (days, graph.timeMetrics?.totalActiveTimeMs)
     }
 
     /// Single-client period contributions (today/month/allTime) with costs

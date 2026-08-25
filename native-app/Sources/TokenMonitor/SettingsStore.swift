@@ -133,6 +133,9 @@ final class SettingsStore {
             "historyIntervalMs": 900000,
             "sessionUsageArchiveEnabled": true,
             "allTimeSince": "2024-01-01",
+            "periodMonthMode": "month",
+            "customPeriodStart": "",
+            "customPeriodEnd": "",
             "customModelPricing": [
                 // k3-256k (Kimi K3 short-context) has a broken all-zero
                 // entry in tokscale's pricing catalog; its real price is

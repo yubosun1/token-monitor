@@ -2400,6 +2400,79 @@ html.is-windows .settings-panel select option {
   background: transparent;
   box-shadow: none;
 }
+.period-tab-wrapper {
+  position: relative;
+  display: flex;
+  width: 100%;
+}
+.period-tab-wrapper .tab {
+  width: 100%;
+}
+.period-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 145px;
+  background: var(--glass-strong, rgba(20, 24, 30, 0.95));
+  border: 1px solid rgba(var(--line-rgb), 0.2);
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(20px);
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.period-menu.hidden {
+  display: none !important;
+}
+.period-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 5px 8px;
+  font-size: 11px;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+}
+.period-menu-item:hover, .period-menu-item.active {
+  background: rgba(var(--accent-rgb), 0.15);
+  color: var(--accent);
+}
+.custom-period-dates-row {
+  margin-top: 6px;
+  padding: 4px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.custom-date-inputs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.custom-date-inputs input[type="date"] {
+  flex: 1;
+  height: 26px;
+  padding: 2px 6px;
+  font-size: 11px;
+  background: rgba(var(--overlay-rgb), 0.05);
+  border: 1px solid rgba(var(--line-rgb), 0.15);
+  border-radius: 6px;
+  color: var(--text);
+}
+.date-sep {
+  font-size: 11px;
+  color: var(--muted);
+}
 .total-panel {
   position: relative;
   z-index: 1;

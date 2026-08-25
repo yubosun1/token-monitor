@@ -2051,6 +2051,170 @@ func runMemoryLeakAndCacheTests() {
     }
 }
 
+func runHistoryLedgerTests() {
+    print("--- HistoryLedger persistent SQLite tests ---")
+    let tempDir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("tm-ledger-test-\(UUID().uuidString)")
+    try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tempDir) }
+
+    let dbURL = tempDir.appendingPathComponent("test-ledger.db")
+    let ledger = HistoryLedger(dbURL: dbURL)
+
+    // L1: Basic upsert and deduplication
+    do {
+        let row1 = UsageCore.UsageRow(
+            client: "claude",
+            sessionId: "session-1",
+            model: "claude-3-5-sonnet",
+            provider: "anthropic",
+            input: 100,
+            output: 50,
+            cacheRead: 20,
+            cacheWrite: 10,
+            reasoning: 0,
+            messageCount: 2,
+            cost: 0.05,
+            startedAt: 1723700000000,
+            lastUsedAt: 1723700000000,
+            projectId: "proj-1",
+            projectLabel: "Project 1",
+            performance: nil
+        )
+        ledger.recordUsageRows([row1], defaultClient: "claude")
+
+        let rows = ledger.querySessionRows(clients: ["claude"])
+        checkEqual(rows.count, 1, "L1.1: 1 session row recorded")
+        checkEqual(rows.first?.input ?? 0, 100, "L1.2: input tokens recorded correctly")
+        checkEqual(rows.first?.output ?? 0, 50, "L1.3: output tokens recorded correctly")
+
+        // Append to existing session (live growth)
+        let row1Updated = UsageCore.UsageRow(
+            client: "claude",
+            sessionId: "session-1",
+            model: "claude-3-5-sonnet",
+            provider: "anthropic",
+            input: 200,
+            output: 100,
+            cacheRead: 40,
+            cacheWrite: 20,
+            reasoning: 0,
+            messageCount: 4,
+            cost: 0.10,
+            startedAt: 1723700000000,
+            lastUsedAt: 1723701000000,
+            projectId: "proj-1",
+            projectLabel: "Project 1",
+            performance: nil
+        )
+        ledger.recordUsageRows([row1Updated], defaultClient: "claude")
+
+        let rowsAfterUpdate = ledger.querySessionRows(clients: ["claude"])
+        checkEqual(rowsAfterUpdate.count, 1, "L1.4: row count remains 1 on upsert (no double counting)")
+        checkEqual(rowsAfterUpdate.first?.input ?? 0, 200, "L1.5: input tokens updated to latest max")
+        checkEqual(rowsAfterUpdate.first?.output ?? 0, 100, "L1.6: output tokens updated to latest max")
+        checkClose(rowsAfterUpdate.first?.cost ?? 0, 0.10, "L1.7: cost updated correctly")
+    }
+
+    // L2: Preserving deleted session data
+    do {
+        let row2 = UsageCore.UsageRow(
+            client: "workbuddy",
+            sessionId: "session-deleted-tool",
+            model: "deepseek-chat",
+            provider: "deepseek",
+            input: 1000,
+            output: 500,
+            cacheRead: 0,
+            cacheWrite: 0,
+            reasoning: 0,
+            messageCount: 5,
+            cost: 0.02,
+            startedAt: 1723700000000,
+            lastUsedAt: 1723700000000,
+            projectId: "workbuddy-proj",
+            projectLabel: "Workbuddy Proj",
+            performance: nil
+        )
+        ledger.recordUsageRows([row2], defaultClient: "workbuddy")
+
+        // Active scan now simulates tool uninstall (workbuddy files deleted from disk)
+        let liveRowsOnlyClaude = ledger.querySessionRows(clients: ["claude"])
+        checkEqual(liveRowsOnlyClaude.count, 1, "L2.1: live scan only sees claude")
+
+        // Querying all clients or fetching all periods includes the deleted workbuddy session!
+        let allSessions = ledger.querySessionRows(clients: ["claude", "workbuddy"])
+        checkEqual(allSessions.count, 2, "L2.2: ledger retains both claude and uninstalled workbuddy session")
+        let totalTokens = allSessions.reduce(0) { $0 + Int($1.input + $1.output + $1.cacheRead + $1.cacheWrite) }
+        checkEqual(totalTokens, 360 + 1500, "L2.3: total tokens preserved across deleted session")
+    }
+
+    // L3: Custom date range queries
+    do {
+        let rowMar10 = UsageCore.UsageRow(
+            client: "proma",
+            sessionId: "session-mar10",
+            model: "gpt-4o",
+            provider: "openai",
+            input: 300,
+            output: 100,
+            cacheRead: 0,
+            cacheWrite: 0,
+            reasoning: 0,
+            messageCount: 1,
+            cost: 0.01,
+            startedAt: 1773120000000, // 2026-03-10
+            lastUsedAt: 1773120000000,
+            projectId: "",
+            projectLabel: "",
+            performance: nil
+        )
+        let rowMar25 = UsageCore.UsageRow(
+            client: "proma",
+            sessionId: "session-mar25",
+            model: "gpt-4o",
+            provider: "openai",
+            input: 700,
+            output: 300,
+            cacheRead: 0,
+            cacheWrite: 0,
+            reasoning: 0,
+            messageCount: 1,
+            cost: 0.03,
+            startedAt: 1774416000000, // 2026-03-25
+            lastUsedAt: 1774416000000,
+            projectId: "",
+            projectLabel: "",
+            performance: nil
+        )
+        ledger.recordUsageRows([rowMar10, rowMar25], defaultClient: "proma")
+
+        let dayMar10 = DateFormatUtil.dayKey(Date(timeIntervalSince1970: 1773120000000 / 1000))
+        let customPeriod = ledger.fetchCustomPeriod(clients: ["proma"], startDate: dayMar10, endDate: dayMar10)
+        checkEqual(UsageCore.intValue(customPeriod["totalTokens"]), 400, "L3.1: custom period fetches exact date range tokens")
+        checkClose(UsageCore.doubleValue(customPeriod["costUsd"]), 0.01, "L3.2: custom period fetches exact date range cost")
+    }
+
+    // L4: History days and mergeDays
+    do {
+        let day1 = HistoryCore.Day(date: "2026-08-10", tokens: 500, cost: 0.5, messages: 10, activeTimeMs: 1000)
+        let day2 = HistoryCore.Day(date: "2026-08-11", tokens: 800, cost: 0.8, messages: 15, activeTimeMs: 2000)
+        ledger.recordTokscaleDays([day1, day2])
+
+        let fetchedDays = ledger.fetchHistoryDays(clients: nil)
+        check(fetchedDays.count >= 2, "L4.1: history days recorded and fetched")
+
+        // Live days only has day2 with newer tokens (1000 instead of 800), day1 deleted from disk
+        var liveDay2 = HistoryCore.Day(date: "2026-08-11", tokens: 1000, cost: 1.0, messages: 20, activeTimeMs: 2500)
+        liveDay2.perClient["claude"] = (tokens: 1000, cost: 1.0, messages: 20)
+        liveDay2.perModel["claude-3-5-sonnet"] = (tokens: 1000, cost: 1.0)
+
+        let merged = HistoryLedger.mergeDays(liveDays: [liveDay2], ledgerDays: fetchedDays)
+        check(merged.contains { $0.date == "2026-08-10" }, "L4.2: deleted day1 preserved in merged history")
+        let mDay2 = merged.first { $0.date == "2026-08-11" }
+        checkEqual(mDay2?.tokens ?? 0, 1000, "L4.3: live growth merged to latest max tokens")
+    }
+}
+
 runChecks()
 runKimiTests()
 runCollectorStateTests()
@@ -2062,5 +2226,7 @@ runIdleTeardownTests()
 runSingleInstanceTests()
 runAntigravityTests()
 runMemoryLeakAndCacheTests()
+runHistoryLedgerTests()
 print("fixture checks: \(checkCount) checks, \(failureCount) failures")
 if failureCount > 0 { exit(1) }
+
