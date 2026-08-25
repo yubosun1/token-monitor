@@ -14,8 +14,15 @@ final class HistoryLedger {
     static let shared = HistoryLedger()
 
     private var db: OpaquePointer?
-    private let lock = NSLock()
+    private let lock = NSRecursiveLock()
     private let dbURL: URL
+
+    // In-memory query caches to prevent repeated full-table allocations on every tick
+    private var isDirty = true
+    private var cachedPeriods: (today: [String: Any], month: [String: Any], allTime: [String: Any])?
+    private var cachedPeriodsKey = ""
+    private var cachedHistoryDays: [HistoryCore.Day]?
+    private var cachedHistoryDaysKey = ""
 
     // MARK: - Lifecycle
 
@@ -54,6 +61,8 @@ final class HistoryLedger {
         sqlite3_exec(db, "PRAGMA journal_mode = WAL;", nil, nil, nil)
         sqlite3_exec(db, "PRAGMA synchronous = NORMAL;", nil, nil, nil)
         sqlite3_exec(db, "PRAGMA busy_timeout = 5000;", nil, nil, nil)
+        sqlite3_exec(db, "PRAGMA cache_size = -2000;", nil, nil, nil) // Bound SQLite page cache to 2MB
+        sqlite3_exec(db, "PRAGMA temp_store = MEMORY;", nil, nil, nil)
     }
 
     private func createTablesIfNeeded() {
@@ -122,6 +131,7 @@ final class HistoryLedger {
         defer { lock.unlock() }
         guard let db else { return }
 
+        isDirty = true
         let nowMs = now.timeIntervalSince1970 * 1000
         let sql = """
         INSERT INTO session_ledger (
@@ -157,42 +167,44 @@ final class HistoryLedger {
 
         sqlite3_exec(db, "BEGIN TRANSACTION;", nil, nil, nil)
         for row in rows {
-            let client = UsageCore.normalizeClientName(row.client ?? defaultClient ?? "") ?? defaultClient ?? "unknown"
-            let sessionId = (row.sessionId?.trimmingCharacters(in: .whitespaces).isEmpty == false) ? row.sessionId! : "unnamed-session"
-            let modelId = UsageCore.normalizeModelName(row.model ?? "") ?? "unknown"
-            let provider = UsageCore.normalizeProviderName(row.provider ?? "") ?? ""
+            autoreleasepool {
+                let client = UsageCore.normalizeClientName(row.client ?? defaultClient ?? "") ?? defaultClient ?? "unknown"
+                let sessionId = (row.sessionId?.trimmingCharacters(in: .whitespaces).isEmpty == false) ? row.sessionId! : "unnamed-session"
+                let modelId = UsageCore.normalizeModelName(row.model ?? "") ?? "unknown"
+                let provider = UsageCore.normalizeProviderName(row.provider ?? "") ?? ""
 
-            let dateKey: String
-            if row.lastUsedAt > 0 {
-                dateKey = DateFormatUtil.dayKey(Date(timeIntervalSince1970: row.lastUsedAt / 1000))
-            } else if row.startedAt > 0 {
-                dateKey = DateFormatUtil.dayKey(Date(timeIntervalSince1970: row.startedAt / 1000))
-            } else {
-                dateKey = ""
+                let dateKey: String
+                if row.lastUsedAt > 0 {
+                    dateKey = DateFormatUtil.dayKey(Date(timeIntervalSince1970: row.lastUsedAt / 1000))
+                } else if row.startedAt > 0 {
+                    dateKey = DateFormatUtil.dayKey(Date(timeIntervalSince1970: row.startedAt / 1000))
+                } else {
+                    dateKey = ""
+                }
+
+                sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 2, (client as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 3, (dateKey as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 4, (modelId as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 5, (provider as NSString).utf8String, -1, nil)
+                sqlite3_bind_double(stmt, 6, row.input)
+                sqlite3_bind_double(stmt, 7, row.output)
+                sqlite3_bind_double(stmt, 8, row.cacheRead)
+                sqlite3_bind_double(stmt, 9, row.cacheWrite)
+                sqlite3_bind_double(stmt, 10, row.reasoning)
+                sqlite3_bind_double(stmt, 11, row.messageCount)
+                sqlite3_bind_double(stmt, 12, row.cost)
+                sqlite3_bind_double(stmt, 13, row.startedAt)
+                sqlite3_bind_double(stmt, 14, row.lastUsedAt)
+                sqlite3_bind_text(stmt, 15, (row.projectId as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 16, (row.projectLabel as NSString).utf8String, -1, nil)
+                sqlite3_bind_double(stmt, 17, row.performance?.timedTokens ?? 0)
+                sqlite3_bind_double(stmt, 18, row.performance?.totalDurationMs ?? 0)
+                sqlite3_bind_double(stmt, 19, nowMs)
+
+                sqlite3_step(stmt)
+                sqlite3_reset(stmt)
             }
-
-            sqlite3_bind_text(stmt, 1, (sessionId as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 2, (client as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 3, (dateKey as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 4, (modelId as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 5, (provider as NSString).utf8String, -1, nil)
-            sqlite3_bind_double(stmt, 6, row.input)
-            sqlite3_bind_double(stmt, 7, row.output)
-            sqlite3_bind_double(stmt, 8, row.cacheRead)
-            sqlite3_bind_double(stmt, 9, row.cacheWrite)
-            sqlite3_bind_double(stmt, 10, row.reasoning)
-            sqlite3_bind_double(stmt, 11, row.messageCount)
-            sqlite3_bind_double(stmt, 12, row.cost)
-            sqlite3_bind_double(stmt, 13, row.startedAt)
-            sqlite3_bind_double(stmt, 14, row.lastUsedAt)
-            sqlite3_bind_text(stmt, 15, (row.projectId as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 16, (row.projectLabel as NSString).utf8String, -1, nil)
-            sqlite3_bind_double(stmt, 17, row.performance?.timedTokens ?? 0)
-            sqlite3_bind_double(stmt, 18, row.performance?.totalDurationMs ?? 0)
-            sqlite3_bind_double(stmt, 19, nowMs)
-
-            sqlite3_step(stmt)
-            sqlite3_reset(stmt)
         }
         sqlite3_exec(db, "COMMIT;", nil, nil, nil)
     }
@@ -204,6 +216,7 @@ final class HistoryLedger {
         defer { lock.unlock() }
         guard let db else { return }
 
+        isDirty = true
         let nowMs = now.timeIntervalSince1970 * 1000
         let sql = """
         INSERT INTO daily_history_ledger (
@@ -226,21 +239,23 @@ final class HistoryLedger {
 
         sqlite3_exec(db, "BEGIN TRANSACTION;", nil, nil, nil)
         for c in contributions {
-            let client = UsageCore.normalizeClientName(c.client) ?? c.client
-            let modelId = UsageCore.normalizeModelName(c.modelId) ?? c.modelId
-            let tokens = Double(c.input + c.output + c.cacheRead + c.cacheWrite)
+            autoreleasepool {
+                let client = UsageCore.normalizeClientName(c.client) ?? c.client
+                let modelId = UsageCore.normalizeModelName(c.modelId) ?? c.modelId
+                let tokens = Double(c.input + c.output + c.cacheRead + c.cacheWrite)
 
-            sqlite3_bind_text(stmt, 1, (c.date as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 2, (client as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 3, (modelId as NSString).utf8String, -1, nil)
-            sqlite3_bind_double(stmt, 4, tokens)
-            sqlite3_bind_double(stmt, 5, c.cost)
-            sqlite3_bind_double(stmt, 6, Double(c.messages))
-            sqlite3_bind_double(stmt, 7, c.activeTimeMs)
-            sqlite3_bind_double(stmt, 8, nowMs)
+                sqlite3_bind_text(stmt, 1, (c.date as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 2, (client as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, 3, (modelId as NSString).utf8String, -1, nil)
+                sqlite3_bind_double(stmt, 4, tokens)
+                sqlite3_bind_double(stmt, 5, c.cost)
+                sqlite3_bind_double(stmt, 6, Double(c.messages))
+                sqlite3_bind_double(stmt, 7, c.activeTimeMs)
+                sqlite3_bind_double(stmt, 8, nowMs)
 
-            sqlite3_step(stmt)
-            sqlite3_reset(stmt)
+                sqlite3_step(stmt)
+                sqlite3_reset(stmt)
+            }
         }
         sqlite3_exec(db, "COMMIT;", nil, nil, nil)
     }
@@ -252,6 +267,7 @@ final class HistoryLedger {
         defer { lock.unlock() }
         guard let db else { return }
 
+        isDirty = true
         let nowMs = now.timeIntervalSince1970 * 1000
         let sql = """
         INSERT INTO daily_history_ledger (
@@ -274,62 +290,64 @@ final class HistoryLedger {
 
         sqlite3_exec(db, "BEGIN TRANSACTION;", nil, nil, nil)
         for day in days {
-            if day.perClient.isEmpty && day.perModel.isEmpty {
-                sqlite3_bind_text(stmt, 1, (day.date as NSString).utf8String, -1, nil)
-                sqlite3_bind_text(stmt, 2, ("unknown" as NSString).utf8String, -1, nil)
-                sqlite3_bind_text(stmt, 3, ("unknown" as NSString).utf8String, -1, nil)
-                sqlite3_bind_double(stmt, 4, day.tokens)
-                sqlite3_bind_double(stmt, 5, day.cost)
-                sqlite3_bind_double(stmt, 6, day.messages)
-                sqlite3_bind_double(stmt, 7, day.activeTimeMs)
-                sqlite3_bind_double(stmt, 8, nowMs)
-                sqlite3_step(stmt)
-                sqlite3_reset(stmt)
-            } else if day.perClient.isEmpty {
-                for (model, mStats) in day.perModel {
+            autoreleasepool {
+                if day.perClient.isEmpty && day.perModel.isEmpty {
                     sqlite3_bind_text(stmt, 1, (day.date as NSString).utf8String, -1, nil)
                     sqlite3_bind_text(stmt, 2, ("unknown" as NSString).utf8String, -1, nil)
-                    sqlite3_bind_text(stmt, 3, (model as NSString).utf8String, -1, nil)
-                    sqlite3_bind_double(stmt, 4, mStats.tokens)
-                    sqlite3_bind_double(stmt, 5, mStats.cost)
+                    sqlite3_bind_text(stmt, 3, ("unknown" as NSString).utf8String, -1, nil)
+                    sqlite3_bind_double(stmt, 4, day.tokens)
+                    sqlite3_bind_double(stmt, 5, day.cost)
                     sqlite3_bind_double(stmt, 6, day.messages)
                     sqlite3_bind_double(stmt, 7, day.activeTimeMs)
                     sqlite3_bind_double(stmt, 8, nowMs)
                     sqlite3_step(stmt)
                     sqlite3_reset(stmt)
-                }
-            } else if day.perModel.isEmpty {
-                for (client, cStats) in day.perClient {
-                    sqlite3_bind_text(stmt, 1, (day.date as NSString).utf8String, -1, nil)
-                    sqlite3_bind_text(stmt, 2, (client as NSString).utf8String, -1, nil)
-                    sqlite3_bind_text(stmt, 3, ("unknown" as NSString).utf8String, -1, nil)
-                    sqlite3_bind_double(stmt, 4, cStats.tokens)
-                    sqlite3_bind_double(stmt, 5, cStats.cost)
-                    sqlite3_bind_double(stmt, 6, cStats.messages)
-                    sqlite3_bind_double(stmt, 7, day.activeTimeMs)
-                    sqlite3_bind_double(stmt, 8, nowMs)
-                    sqlite3_step(stmt)
-                    sqlite3_reset(stmt)
-                }
-            } else {
-                let activePerModel = day.activeTimeMs / Double(day.perModel.count)
-                for (client, cStats) in day.perClient {
+                } else if day.perClient.isEmpty {
                     for (model, mStats) in day.perModel {
-                        let tokens = mStats.tokens > 0 ? mStats.tokens : cStats.tokens
-                        let cost = mStats.cost > 0 ? mStats.cost : cStats.cost
-                        let messages = cStats.messages
-
                         sqlite3_bind_text(stmt, 1, (day.date as NSString).utf8String, -1, nil)
-                        sqlite3_bind_text(stmt, 2, (client as NSString).utf8String, -1, nil)
+                        sqlite3_bind_text(stmt, 2, ("unknown" as NSString).utf8String, -1, nil)
                         sqlite3_bind_text(stmt, 3, (model as NSString).utf8String, -1, nil)
-                        sqlite3_bind_double(stmt, 4, tokens)
-                        sqlite3_bind_double(stmt, 5, cost)
-                        sqlite3_bind_double(stmt, 6, messages)
-                        sqlite3_bind_double(stmt, 7, activePerModel)
+                        sqlite3_bind_double(stmt, 4, mStats.tokens)
+                        sqlite3_bind_double(stmt, 5, mStats.cost)
+                        sqlite3_bind_double(stmt, 6, day.messages)
+                        sqlite3_bind_double(stmt, 7, day.activeTimeMs)
                         sqlite3_bind_double(stmt, 8, nowMs)
-
                         sqlite3_step(stmt)
                         sqlite3_reset(stmt)
+                    }
+                } else if day.perModel.isEmpty {
+                    for (client, cStats) in day.perClient {
+                        sqlite3_bind_text(stmt, 1, (day.date as NSString).utf8String, -1, nil)
+                        sqlite3_bind_text(stmt, 2, (client as NSString).utf8String, -1, nil)
+                        sqlite3_bind_text(stmt, 3, ("unknown" as NSString).utf8String, -1, nil)
+                        sqlite3_bind_double(stmt, 4, cStats.tokens)
+                        sqlite3_bind_double(stmt, 5, cStats.cost)
+                        sqlite3_bind_double(stmt, 6, cStats.messages)
+                        sqlite3_bind_double(stmt, 7, day.activeTimeMs)
+                        sqlite3_bind_double(stmt, 8, nowMs)
+                        sqlite3_step(stmt)
+                        sqlite3_reset(stmt)
+                    }
+                } else {
+                    let activePerModel = day.activeTimeMs / Double(day.perModel.count)
+                    for (client, cStats) in day.perClient {
+                        for (model, mStats) in day.perModel {
+                            let tokens = mStats.tokens > 0 ? mStats.tokens : cStats.tokens
+                            let cost = mStats.cost > 0 ? mStats.cost : cStats.cost
+                            let messages = cStats.messages
+
+                            sqlite3_bind_text(stmt, 1, (day.date as NSString).utf8String, -1, nil)
+                            sqlite3_bind_text(stmt, 2, (client as NSString).utf8String, -1, nil)
+                            sqlite3_bind_text(stmt, 3, (model as NSString).utf8String, -1, nil)
+                            sqlite3_bind_double(stmt, 4, tokens)
+                            sqlite3_bind_double(stmt, 5, cost)
+                            sqlite3_bind_double(stmt, 6, messages)
+                            sqlite3_bind_double(stmt, 7, activePerModel)
+                            sqlite3_bind_double(stmt, 8, nowMs)
+
+                            sqlite3_step(stmt)
+                            sqlite3_reset(stmt)
+                        }
                     }
                 }
             }
@@ -388,50 +406,52 @@ final class HistoryLedger {
 
         var results: [UsageCore.UsageRow] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
-            let sessionId = String(cString: sqlite3_column_text(stmt, 0))
-            let client = String(cString: sqlite3_column_text(stmt, 1))
-            let modelId = String(cString: sqlite3_column_text(stmt, 3))
-            let provider = String(cString: sqlite3_column_text(stmt, 4))
-            let input = sqlite3_column_double(stmt, 5)
-            let output = sqlite3_column_double(stmt, 6)
-            let cacheRead = sqlite3_column_double(stmt, 7)
-            let cacheWrite = sqlite3_column_double(stmt, 8)
-            let reasoning = sqlite3_column_double(stmt, 9)
-            let messageCount = sqlite3_column_double(stmt, 10)
-            let cost = sqlite3_column_double(stmt, 11)
-            let startedAt = sqlite3_column_double(stmt, 12)
-            let lastUsedAt = sqlite3_column_double(stmt, 13)
-            let projectId = String(cString: sqlite3_column_text(stmt, 14))
-            let projectLabel = String(cString: sqlite3_column_text(stmt, 15))
-            let timedTokens = sqlite3_column_double(stmt, 16)
-            let timedDurationMs = sqlite3_column_double(stmt, 17)
+            autoreleasepool {
+                let sessionId = String(cString: sqlite3_column_text(stmt, 0))
+                let client = String(cString: sqlite3_column_text(stmt, 1))
+                let modelId = String(cString: sqlite3_column_text(stmt, 3))
+                let provider = String(cString: sqlite3_column_text(stmt, 4))
+                let input = sqlite3_column_double(stmt, 5)
+                let output = sqlite3_column_double(stmt, 6)
+                let cacheRead = sqlite3_column_double(stmt, 7)
+                let cacheWrite = sqlite3_column_double(stmt, 8)
+                let reasoning = sqlite3_column_double(stmt, 9)
+                let messageCount = sqlite3_column_double(stmt, 10)
+                let cost = sqlite3_column_double(stmt, 11)
+                let startedAt = sqlite3_column_double(stmt, 12)
+                let lastUsedAt = sqlite3_column_double(stmt, 13)
+                let projectId = String(cString: sqlite3_column_text(stmt, 14))
+                let projectLabel = String(cString: sqlite3_column_text(stmt, 15))
+                let timedTokens = sqlite3_column_double(stmt, 16)
+                let timedDurationMs = sqlite3_column_double(stmt, 17)
 
-            let performance: TokscalePerformance? = timedDurationMs > 0 ? TokscalePerformance(
-                msPer1KTokens: timedTokens > 0 ? (timedDurationMs / (timedTokens / 1000.0)) : nil,
-                totalDurationMs: timedDurationMs,
-                timedTokens: timedTokens,
-                sampleCount: nil,
-                tokenCoverage: nil
-            ) : nil
+                let performance: TokscalePerformance? = timedDurationMs > 0 ? TokscalePerformance(
+                    msPer1KTokens: timedTokens > 0 ? (timedDurationMs / (timedTokens / 1000.0)) : nil,
+                    totalDurationMs: timedDurationMs,
+                    timedTokens: timedTokens,
+                    sampleCount: nil,
+                    tokenCoverage: nil
+                ) : nil
 
-            results.append(UsageCore.UsageRow(
-                client: client,
-                sessionId: sessionId,
-                model: modelId,
-                provider: provider,
-                input: input,
-                output: output,
-                cacheRead: cacheRead,
-                cacheWrite: cacheWrite,
-                reasoning: reasoning,
-                messageCount: messageCount,
-                cost: cost,
-                startedAt: startedAt,
-                lastUsedAt: lastUsedAt,
-                projectId: projectId,
-                projectLabel: projectLabel,
-                performance: performance
-            ))
+                results.append(UsageCore.UsageRow(
+                    client: client,
+                    sessionId: sessionId,
+                    model: modelId,
+                    provider: provider,
+                    input: input,
+                    output: output,
+                    cacheRead: cacheRead,
+                    cacheWrite: cacheWrite,
+                    reasoning: reasoning,
+                    messageCount: messageCount,
+                    cost: cost,
+                    startedAt: startedAt,
+                    lastUsedAt: lastUsedAt,
+                    projectId: projectId,
+                    projectLabel: projectLabel,
+                    performance: performance
+                ))
+            }
         }
         return results
     }
@@ -441,6 +461,14 @@ final class HistoryLedger {
         let dayKey = DateFormatUtil.dayKey(now)
         let monthKey = DateFormatUtil.monthKey(now)
         let allTimeSinceKey = DateFormatUtil.dayKey(Date(timeIntervalSince1970: allTimeSince / 1000))
+        let cacheKey = "\(clients.sorted().joined(separator: ","))|\(dayKey)|\(monthKey)|\(allTimeSinceKey)"
+
+        lock.lock()
+        if !isDirty, cachedPeriodsKey == cacheKey, let cached = cachedPeriods {
+            lock.unlock()
+            return cached
+        }
+        lock.unlock()
 
         let todayRows = querySessionRows(clients: clients, dateExact: dayKey, includeUndated: false)
         let monthRows = querySessionRows(clients: clients, datePrefix: monthKey, includeUndated: false)
@@ -450,7 +478,15 @@ final class HistoryLedger {
         let monthPeriod = UsageCore.extractPeriod(entries: monthRows)
         let allTimePeriod = UsageCore.extractPeriod(entries: allTimeRows)
 
-        return (today: todayPeriod, month: monthPeriod, allTime: allTimePeriod)
+        let result = (today: todayPeriod, month: monthPeriod, allTime: allTimePeriod)
+
+        lock.lock()
+        cachedPeriods = result
+        cachedPeriodsKey = cacheKey
+        isDirty = false
+        lock.unlock()
+
+        return result
     }
 
     /// Fetches usage for any arbitrary custom time range (e.g. startDate to endDate).
@@ -484,59 +520,69 @@ final class HistoryLedger {
 
         var rows: [UsageCore.UsageRow] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
-            let sessionId = String(cString: sqlite3_column_text(stmt, 0))
-            let client = String(cString: sqlite3_column_text(stmt, 1))
-            let modelId = String(cString: sqlite3_column_text(stmt, 3))
-            let provider = String(cString: sqlite3_column_text(stmt, 4))
-            let input = sqlite3_column_double(stmt, 5)
-            let output = sqlite3_column_double(stmt, 6)
-            let cacheRead = sqlite3_column_double(stmt, 7)
-            let cacheWrite = sqlite3_column_double(stmt, 8)
-            let reasoning = sqlite3_column_double(stmt, 9)
-            let messageCount = sqlite3_column_double(stmt, 10)
-            let cost = sqlite3_column_double(stmt, 11)
-            let startedAt = sqlite3_column_double(stmt, 12)
-            let lastUsedAt = sqlite3_column_double(stmt, 13)
-            let projectId = String(cString: sqlite3_column_text(stmt, 14))
-            let projectLabel = String(cString: sqlite3_column_text(stmt, 15))
-            let timedTokens = sqlite3_column_double(stmt, 16)
-            let timedDurationMs = sqlite3_column_double(stmt, 17)
+            autoreleasepool {
+                let sessionId = String(cString: sqlite3_column_text(stmt, 0))
+                let client = String(cString: sqlite3_column_text(stmt, 1))
+                let modelId = String(cString: sqlite3_column_text(stmt, 3))
+                let provider = String(cString: sqlite3_column_text(stmt, 4))
+                let input = sqlite3_column_double(stmt, 5)
+                let output = sqlite3_column_double(stmt, 6)
+                let cacheRead = sqlite3_column_double(stmt, 7)
+                let cacheWrite = sqlite3_column_double(stmt, 8)
+                let reasoning = sqlite3_column_double(stmt, 9)
+                let messageCount = sqlite3_column_double(stmt, 10)
+                let cost = sqlite3_column_double(stmt, 11)
+                let startedAt = sqlite3_column_double(stmt, 12)
+                let lastUsedAt = sqlite3_column_double(stmt, 13)
+                let projectId = String(cString: sqlite3_column_text(stmt, 14))
+                let projectLabel = String(cString: sqlite3_column_text(stmt, 15))
+                let timedTokens = sqlite3_column_double(stmt, 16)
+                let timedDurationMs = sqlite3_column_double(stmt, 17)
 
-            let performance: TokscalePerformance? = timedDurationMs > 0 ? TokscalePerformance(
-                msPer1KTokens: timedTokens > 0 ? (timedDurationMs / (timedTokens / 1000.0)) : nil,
-                totalDurationMs: timedDurationMs,
-                timedTokens: timedTokens,
-                sampleCount: nil,
-                tokenCoverage: nil
-            ) : nil
+                let performance: TokscalePerformance? = timedDurationMs > 0 ? TokscalePerformance(
+                    msPer1KTokens: timedTokens > 0 ? (timedDurationMs / (timedTokens / 1000.0)) : nil,
+                    totalDurationMs: timedDurationMs,
+                    timedTokens: timedTokens,
+                    sampleCount: nil,
+                    tokenCoverage: nil
+                ) : nil
 
-            rows.append(UsageCore.UsageRow(
-                client: client,
-                sessionId: sessionId,
-                model: modelId,
-                provider: provider,
-                input: input,
-                output: output,
-                cacheRead: cacheRead,
-                cacheWrite: cacheWrite,
-                reasoning: reasoning,
-                messageCount: messageCount,
-                cost: cost,
-                startedAt: startedAt,
-                lastUsedAt: lastUsedAt,
-                projectId: projectId,
-                projectLabel: projectLabel,
-                performance: performance
-            ))
+                rows.append(UsageCore.UsageRow(
+                    client: client,
+                    sessionId: sessionId,
+                    model: modelId,
+                    provider: provider,
+                    input: input,
+                    output: output,
+                    cacheRead: cacheRead,
+                    cacheWrite: cacheWrite,
+                    reasoning: reasoning,
+                    messageCount: messageCount,
+                    cost: cost,
+                    startedAt: startedAt,
+                    lastUsedAt: lastUsedAt,
+                    projectId: projectId,
+                    projectLabel: projectLabel,
+                    performance: performance
+                ))
+            }
         }
         return UsageCore.extractPeriod(entries: rows)
     }
 
     /// Fetches all historical days for trends and activity heatmaps.
     func fetchHistoryDays(clients: [String]? = nil) -> [HistoryCore.Day] {
+        let cacheKey = clients?.sorted().joined(separator: ",") ?? "*"
+
         lock.lock()
-        defer { lock.unlock() }
-        guard let db else { return [] }
+        if !isDirty, cachedHistoryDaysKey == cacheKey, let cached = cachedHistoryDays {
+            lock.unlock()
+            return cached
+        }
+        guard let db else {
+            lock.unlock()
+            return []
+        }
 
         var whereSQL = ""
         if let clients, !clients.isEmpty {
@@ -552,40 +598,49 @@ final class HistoryLedger {
         """
 
         var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            lock.unlock()
+            return []
+        }
         defer { sqlite3_finalize(stmt) }
 
         var dayMap: [String: HistoryCore.Day] = [:]
         while sqlite3_step(stmt) == SQLITE_ROW {
-            let date = String(cString: sqlite3_column_text(stmt, 0))
-            let client = String(cString: sqlite3_column_text(stmt, 1))
-            let modelId = String(cString: sqlite3_column_text(stmt, 2))
-            let tokens = sqlite3_column_double(stmt, 3)
-            let cost = sqlite3_column_double(stmt, 4)
-            let messages = sqlite3_column_double(stmt, 5)
-            let activeTimeMs = sqlite3_column_double(stmt, 6)
+            autoreleasepool {
+                let date = String(cString: sqlite3_column_text(stmt, 0))
+                let client = String(cString: sqlite3_column_text(stmt, 1))
+                let modelId = String(cString: sqlite3_column_text(stmt, 2))
+                let tokens = sqlite3_column_double(stmt, 3)
+                let cost = sqlite3_column_double(stmt, 4)
+                let messages = sqlite3_column_double(stmt, 5)
+                let activeTimeMs = sqlite3_column_double(stmt, 6)
 
-            var day = dayMap[date] ?? HistoryCore.Day(date: date)
-            day.tokens += tokens
-            day.cost += cost
-            day.messages += messages
-            day.activeTimeMs = max(day.activeTimeMs, activeTimeMs)
+                var day = dayMap[date] ?? HistoryCore.Day(date: date)
+                day.tokens += tokens
+                day.cost += cost
+                day.messages += messages
+                day.activeTimeMs = max(day.activeTimeMs, activeTimeMs)
 
-            var pc = day.perClient[client] ?? (0, 0, 0)
-            pc.tokens += tokens
-            pc.cost += cost
-            pc.messages += messages
-            day.perClient[client] = pc
+                var pc = day.perClient[client] ?? (0, 0, 0)
+                pc.tokens += tokens
+                pc.cost += cost
+                pc.messages += messages
+                day.perClient[client] = pc
 
-            var pm = day.perModel[modelId] ?? (0, 0)
-            pm.tokens += tokens
-            pm.cost += cost
-            day.perModel[modelId] = pm
+                var pm = day.perModel[modelId] ?? (0, 0)
+                pm.tokens += tokens
+                pm.cost += cost
+                day.perModel[modelId] = pm
 
-            dayMap[date] = day
+                dayMap[date] = day
+            }
         }
 
-        return dayMap.values.sorted { $0.date < $1.date }
+        let result = dayMap.values.sorted { $0.date < $1.date }
+        cachedHistoryDays = result
+        cachedHistoryDaysKey = cacheKey
+        lock.unlock()
+        return result
     }
 
     /// Merges live scanned days with persisted ledger days (taking the max per client/model to ensure deleted sessions are preserved and live growth is captured).

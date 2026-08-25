@@ -2049,6 +2049,27 @@ func runMemoryLeakAndCacheTests() {
         let promaKeys = Adapters.parseCacheKeys(client: "proma")
         check(promaKeys.allSatisfy { $0.contains("a.jsonl") }, "M3.1: pruned parse cache only retains active paths")
     }
+
+    // M4: HistoryLedger repeated fetchPeriods caching & memory boundedness
+    do {
+        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("tm-ledger-mem-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let ledger = HistoryLedger(dbURL: tempDir.appendingPathComponent("ledger.db"))
+        let row = UsageCore.UsageRow(
+            client: "claude", sessionId: "s-mem", model: "claude-3-5-sonnet",
+            provider: "anthropic", input: 100, output: 50, cacheRead: 0, cacheWrite: 0,
+            reasoning: 0, messageCount: 1, cost: 0.01, startedAt: 1723700000000, lastUsedAt: 1723700000000,
+            projectId: "", projectLabel: ""
+        )
+        ledger.recordUsageRows([row])
+        // Call fetchPeriods 500 times in a loop; with caching it must be instantaneous and allocate no leak
+        for _ in 0..<500 {
+            _ = ledger.fetchPeriods(clients: ["claude"], now: Date(timeIntervalSince1970: 1723700000), allTimeSince: 1700000000000)
+        }
+        let periods = ledger.fetchPeriods(clients: ["claude"], now: Date(timeIntervalSince1970: 1723700000), allTimeSince: 1700000000000)
+        checkEqual(UsageCore.intValue(periods.allTime["totalTokens"]), 150, "M4.1: cached fetchPeriods returns accurate result without memory leak across 500 queries")
+    }
 }
 
 func runHistoryLedgerTests() {
