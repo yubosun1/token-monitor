@@ -86,18 +86,42 @@ enum OpencodeLimits {
             // Only this entry's own key, never the ambient one as a stand-in.
             // The ambient key is its own entry above; reaching for it here
             // would pair it with a cookie whose account nothing can prove it
-            // shares, publishing one account's quota under the other's identity.
+            // shares, publishing one account's quota under the other's
+            // identity. An empty apiKey therefore probes nothing (the key
+            // must be EXPLICITLY configured on this account before the API
+            // is consulted) — passing nil would silently fall back to the
+            // ambient key inside collectGoApi.
             let primaryApiKey = primary?.apiKey ?? ""
             var goApi: (status: String, windows: [Window], identity: String, entitled: Bool)?
             var goWeb: (status: String, windows: [Window], workspaceId: String)? = nil
             var zen: (status: String, windows: [Window], balanceUsd: Double?, workspaceId: String)? = nil
             if !cookie.isEmpty || !primaryApiKey.isEmpty {
-                async let api = collectGoApi(env: env, apiKey: primaryApiKey.isEmpty ? nil : primaryApiKey, nowMs: now)
-                async let gw = cookie.isEmpty ? nil : fetchGoWeb(cookie: cookie, nowMs: now)
-                async let zn = cookie.isEmpty ? nil : fetchZen(cookie: cookie, nowMs: now)
-                goApi = await api
-                goWeb = await gw
-                zen = await zn
+                // Race the three probes against a 15s deadline like the
+                // multi-account path: single-account refreshes must not block
+                // the limits queue for URLSession's default 60s timeout when
+                // opencode.ai hangs.
+                do {
+                    let resolved = try await Self.withTimeout(15) {
+                        async let api = collectGoApi(env: env, apiKey: primaryApiKey, nowMs: now)
+                        async let gw = cookie.isEmpty ? nil : fetchGoWeb(cookie: cookie, nowMs: now)
+                        async let zn = cookie.isEmpty ? nil : fetchZen(cookie: cookie, nowMs: now)
+                        let (g, z, a) = await (gw, zn, api)
+                        return (
+                            goWeb: g,
+                            zen: z,
+                            goApi: a
+                        )
+                    }
+                    goWeb = resolved.goWeb
+                    zen = resolved.zen
+                    goApi = resolved.goApi
+                } catch {
+                    // Deadline hit: report nothing rather than stale/partial
+                    // windows; the callers below surface the failure status.
+                    goWeb = nil
+                    zen = nil
+                    goApi = nil
+                }
             }
 
             let identity = openCodeWebIdentity(goWeb: goWeb, zen: zen, cookie: cookie.isEmpty ? nil : cookie)
@@ -709,6 +733,22 @@ enum OpencodeLimits {
     // MARK: - fetchServerText / resolveWorkspaceId / fetchZen / fetchGoWeb
 
     private enum FetchError: Error { case timeout }
+
+    /// Races `body` against a deadline; the first completion wins and the
+    /// losing tasks are cancelled. URLSession requests honour the
+    /// cancellation, so a hung probe cannot outlive the race.
+    private static func withTimeout<T>(_ seconds: TimeInterval, _ body: @escaping () async throws -> T) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await body() }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                throw FetchError.timeout
+            }
+            guard let first = try await group.next() else { throw FetchError.timeout }
+            group.cancelAll()
+            return first
+        }
+    }
 
     private static func fetchServerText(
         serverId: String, args: [String]?, method: String, cookieHeader: String, referer: String

@@ -328,6 +328,37 @@ enum UsageCore {
             for (k, v) in other.providers { providers[k, default: 0] += v }
         }
 
+        /// Per-field max merge for the persistent-ledger fallback: a source
+        /// deleted from disk may leave the ledger holding the larger historical
+        /// snapshot, while the live scan holds the fresher number — take the
+        /// larger per component so the fallback never shrinks the totals and a
+        /// live row with data always wins over a stale ledger row.
+        mutating func maxWith(_ other: TypedSession) {
+            inputTokens = max(inputTokens, other.inputTokens)
+            outputTokens = max(outputTokens, other.outputTokens)
+            cacheReadTokens = max(cacheReadTokens, other.cacheReadTokens)
+            cacheWriteTokens = max(cacheWriteTokens, other.cacheWriteTokens)
+            reasoningTokens = max(reasoningTokens, other.reasoningTokens)
+            messageCount = max(messageCount, other.messageCount)
+            costUsd = max(costUsd, other.costUsd)
+            if other.startedAtMs > 0 && (startedAtMs == 0 || other.startedAtMs < startedAtMs) {
+                startedAtMs = other.startedAtMs
+            }
+            if other.lastUsedAtMs > lastUsedAtMs {
+                lastUsedAtMs = other.lastUsedAtMs
+            }
+            if projectId.isEmpty && !other.projectId.isEmpty {
+                projectId = other.projectId
+                projectLabel = other.projectLabel
+            }
+            for (k, v) in other.models { models[k] = max(models[k] ?? 0, v) }
+            for (k, v) in other.modelCosts { modelCosts[k] = max(modelCosts[k] ?? 0, v) }
+            for (k, v) in other.providers { providers[k] = max(providers[k] ?? 0, v) }
+            // totalTokens is defined as input+output+cacheRead+cacheWrite; keep
+            // it self-consistent after the component-wise max.
+            totalTokens = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens
+        }
+
         func toJSON() -> JSON {
             return [
                 "client": client,
@@ -499,6 +530,54 @@ enum UsageCore {
                     sessions[key] = s
                 }
             }
+        }
+
+        /// Per-field max merge (persistent-ledger fallback): the ledger holds
+        /// last-known-good snapshots for sources that were deleted from disk,
+        /// while live scans hold the freshest data. Taking the max preserves
+        /// both — history that only the ledger still has, and growth the live
+        /// scan just saw. Totals are recomputed from the per-client buckets so
+        /// `totalTokens == Σ clients` stays true after the merge.
+        mutating func maxWith(_ other: TypedPeriod) {
+            for (k, v) in other.clients { clients[k] = max(clients[k] ?? 0, v) }
+            for (k, v) in other.clientCosts { clientCosts[k] = max(clientCosts[k] ?? 0, v) }
+            for (k, v) in other.clientCacheReads { clientCacheReads[k] = max(clientCacheReads[k] ?? 0, v) }
+            for (k, v) in other.clientCacheWrites { clientCacheWrites[k] = max(clientCacheWrites[k] ?? 0, v) }
+            for (k, v) in other.clientOutputs { clientOutputs[k] = max(clientOutputs[k] ?? 0, v) }
+            for (k, v) in other.models { models[k] = max(models[k] ?? 0, v) }
+            for (k, v) in other.modelCosts { modelCosts[k] = max(modelCosts[k] ?? 0, v) }
+            for (k, v) in other.modelCacheReads { modelCacheReads[k] = max(modelCacheReads[k] ?? 0, v) }
+            for (k, v) in other.modelCacheWrites { modelCacheWrites[k] = max(modelCacheWrites[k] ?? 0, v) }
+            for (k, v) in other.modelOutputs { modelOutputs[k] = max(modelOutputs[k] ?? 0, v) }
+            for (client, sub) in other.clientModels {
+                var mine = clientModels[client] ?? [:]
+                for (model, v) in sub { mine[model] = max(mine[model] ?? 0, v) }
+                clientModels[client] = mine
+            }
+            for (client, sub) in other.clientModelCosts {
+                var mine = clientModelCosts[client] ?? [:]
+                for (model, v) in sub { mine[model] = max(mine[model] ?? 0, v) }
+                clientModelCosts[client] = mine
+            }
+            for (key, s) in other.sessions {
+                if var existing = sessions[key] {
+                    existing.maxWith(s)
+                    sessions[key] = existing
+                } else {
+                    sessions[key] = s
+                }
+            }
+            timedTokens = max(timedTokens, other.timedTokens)
+            timedOutputTokens = max(timedOutputTokens, other.timedOutputTokens)
+            timedDurationMs = max(timedDurationMs, other.timedDurationMs)
+            // Recompute totals from the maxed buckets so they stay consistent
+            // with the client breakdown (a component-wise max of two sources
+            // cannot preserve the original totals invariant).
+            totalTokens = clients.values.reduce(0, +)
+            costUsd = clientCosts.values.reduce(0, +)
+            cacheReadTokens = clientCacheReads.values.reduce(0, +)
+            cacheWriteTokens = clientCacheWrites.values.reduce(0, +)
+            outputTokens = clientOutputs.values.reduce(0, +)
         }
 
         func toJSON() -> JSON {
@@ -809,6 +888,16 @@ enum UsageCore {
         for period in periods {
             typed.merge(TypedPeriod(from: period))
         }
+        return typed.toJSON()
+    }
+
+    /// Component-wise max of two periods (live scan vs persistent ledger).
+    /// Unlike mergePeriods it never sums — a deleted source must not inflate
+    /// the totals when the ledger happens to hold a larger historical value
+    /// AND the live scan holds a different (fresher but smaller) one.
+    static func maxPeriods(_ a: JSON, _ b: JSON) -> JSON {
+        var typed = TypedPeriod(from: a)
+        typed.maxWith(TypedPeriod(from: b))
         return typed.toJSON()
     }
 }

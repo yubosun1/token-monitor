@@ -486,6 +486,12 @@ enum Adapters {
         pruneParseCache(client: "hanako", activePaths: Set(allFiles.map { $0.path }))
         var rows: [UsageCore.UsageRow] = []
         var seenMessageIds = Set<String>()
+        // Messages without an id cannot be deduped across the sessions and
+        // activity roots by message id. Mirror files carry the same content
+        // under the same base name, so a content fingerprint (session base
+        // name + timestamp + token components) closes the last duplicate
+        // path without risking false merges of distinct messages.
+        var seenFallbackKeys = Set<String>()
         for root in hanakoRoots {
             let sourceId = sourceNamespace(root)
             for file in jsonlFiles(root: root, recursive: true, client: "hanako") {
@@ -496,6 +502,18 @@ enum Adapters {
                     if !messageId.isEmpty {
                         if seenMessageIds.contains(messageId) { continue }
                         seenMessageIds.insert(messageId)
+                    } else {
+                        let row = parsed.rows[i]
+                        let base = (row.sessionId ?? "").split(separator: "@").first.map(String.init) ?? row.sessionId ?? ""
+                        let fallbackKey = [
+                            base,
+                            String(format: "%.0f", row.startedAt),
+                            String(format: "%.1f", row.input),
+                            String(format: "%.1f", row.output),
+                            String(format: "%.1f", row.cacheRead),
+                            String(format: "%.1f", row.cacheWrite)
+                        ].joined(separator: "|")
+                        if !seenFallbackKeys.insert(fallbackKey).inserted { continue }
                     }
                     rows.append(parsed.rows[i])
                 }

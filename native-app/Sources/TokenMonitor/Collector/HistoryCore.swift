@@ -14,6 +14,12 @@ enum HistoryCore {
         var activeTimeMs: Double = 0
         var perClient: [String: (tokens: Double, cost: Double, messages: Double)] = [:]
         var perModel: [String: (tokens: Double, cost: Double)] = [:]
+        /// Per (client, model) breakdown, same granularity as the source rows
+        /// (tokscale graph contributions, adapter history contributions).
+        /// Persisting a day from this map is exact; persisting from the two
+        /// aggregated maps above would require a cartesian client×model guess
+        /// that multiplies tokens/costs by the number of clients.
+        var perClientModel: [String: [String: (tokens: Double, cost: Double, messages: Double)]] = [:]
     }
 
     static func parseTokscaleGraph(_ graph: TokscaleGraph) -> [Day] {
@@ -40,6 +46,10 @@ enum HistoryCore {
                 var pm = day.perModel[model] ?? (0, 0)
                 pm.tokens += tokens; pm.cost += cost
                 day.perModel[model] = pm
+                var pcm = day.perClientModel[clientId] ?? [:]
+                let cell = pcm[model] ?? (0, 0, 0)
+                pcm[model] = (cell.tokens + tokens, cell.cost + cost, cell.messages + messages)
+                day.perClientModel[clientId] = pcm
             }
             days.append(day)
         }
@@ -72,6 +82,10 @@ enum HistoryCore {
             var pm = days[i].perModel[c.modelId] ?? (0, 0)
             pm.tokens += tokens; pm.cost += c.cost
             days[i].perModel[c.modelId] = pm
+            var pcm = days[i].perClientModel[c.client] ?? [:]
+            let cell = pcm[c.modelId] ?? (0, 0, 0)
+            pcm[c.modelId] = (cell.tokens + tokens, cell.cost + c.cost, cell.messages + Double(c.messages))
+            days[i].perClientModel[c.client] = pcm
         }
     }
 

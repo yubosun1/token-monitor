@@ -108,6 +108,9 @@ enum DeepseekBalance {
         }
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard status < 400 else {
+            // 429 surfaces as rateLimited (not a generic failure) so the UI
+            // can distinguish throttling from a real outage.
+            if status == 429 { throw statusError("rateLimited") }
             throw statusError(status == 401 || status == 403 ? "unauthorized" : "unavailable")
         }
         guard let data,

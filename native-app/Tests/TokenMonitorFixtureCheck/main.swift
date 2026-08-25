@@ -1,5 +1,6 @@
 import Foundation
 import CZstd
+import SQLite3
 @testable import TokenMonitorCore
 
 // TokenMonitorFixtureCheck: fixed-input aggregation fixture checker
@@ -2335,6 +2336,135 @@ func runHistoryLedgerTests() {
         checkEqual(totals["cacheReadTokens"] as? Int, 200800, "L5.14: total cache read tokens 200,800")
         checkEqual(totals["cacheHitRate"] as? Double, 84.1, "L5.15: total cache hit rate 84.1%")
     }
+
+    // L6: Multi-message batches are pre-aggregated per (session, date, model)
+    // — the overwrite upsert must not collapse a multi-message day down to
+    // the last message (regression for the per-message adapter rows).
+    do {
+        let msg = UsageCore.UsageRow(
+            client: "dsh", sessionId: "s-agg", model: "deepseek-v4-flash",
+            provider: "dsh", input: 100, output: 50, cacheRead: 0, cacheWrite: 0,
+            reasoning: 0, messageCount: 1, cost: 0.01,
+            startedAt: 1773200000000, lastUsedAt: 1773200000000, // 2026-03-11
+            projectId: "", projectLabel: "", performance: nil
+        )
+        func row(_ input: Double, _ output: Double) -> UsageCore.UsageRow {
+            var r = msg
+            r.input = input
+            r.output = output
+            r.cost = input * 0.0001
+            return r
+        }
+        // First batch: 3 messages of the same session+model+day.
+        ledger.recordUsageRows([row(100, 50), row(200, 80), row(150, 70)])
+        var rows = ledger.querySessionRows(clients: ["dsh"])
+        checkEqual(rows.count, 1, "L6.1: multi-message batch aggregates to one ledger row")
+        checkEqual(rows.first?.input ?? 0, 450, "L6.2: input tokens summed across messages")
+        checkEqual(rows.first?.output ?? 0, 200, "L6.3: output tokens summed across messages")
+        checkEqual(rows.first?.messageCount ?? 0, 3, "L6.4: message count summed across messages")
+        // Full-snapshot replay (the same 3 messages re-parsed next tick) must
+        // NOT double the totals.
+        ledger.recordUsageRows([row(100, 50), row(200, 80), row(150, 70)])
+        rows = ledger.querySessionRows(clients: ["dsh"])
+        checkEqual(rows.first?.input ?? 0, 450, "L6.5: re-recorded snapshot does not double count")
+        // Growth: one more message appended.
+        ledger.recordUsageRows([row(100, 50), row(200, 80), row(150, 70), row(50, 20)])
+        rows = ledger.querySessionRows(clients: ["dsh"])
+        checkEqual(rows.first?.input ?? 0, 500, "L6.6: appended message grows the aggregate")
+        checkEqual(rows.first?.messageCount ?? 0, 4, "L6.7: appended message grows the message count")
+    }
+
+    // L7: Tokscale graph days persist per (client, model) combination — the
+    // old client×model cartesian product inflated totals by the number of
+    // clients. A day with 2 clients and 2 models must come back exactly.
+    do {
+        var day = HistoryCore.Day(date: "2026-08-20", tokens: 1200, cost: 4.0, messages: 6, activeTimeMs: 3000)
+        day.perClient["claude"] = (tokens: 300, cost: 1.0, messages: 2)
+        day.perClient["codex"] = (tokens: 900, cost: 3.0, messages: 4)
+        day.perModel["model-t1"] = (tokens: 300, cost: 1.0)
+        day.perModel["model-t2"] = (tokens: 900, cost: 3.0)
+        day.perClientModel["claude"] = ["model-t1": (tokens: 300, cost: 1.0, messages: 2)]
+        day.perClientModel["codex"] = ["model-t2": (tokens: 900, cost: 3.0, messages: 4)]
+        ledger.recordTokscaleDays([day])
+
+        let fetched = ledger.fetchHistoryDays(clients: nil).first { $0.date == "2026-08-20" }
+        check(fetched != nil, "L7.1: multi-client day found in history")
+        checkEqual(fetched?.tokens ?? 0, 1200, "L7.2: day tokens not inflated by client count")
+        checkEqual(fetched?.cost ?? 0, 4.0, "L7.3: day cost not inflated by client count")
+        checkEqual(fetched?.messages ?? 0, 6, "L7.4: day messages not inflated by client count")
+        checkEqual(fetched?.perClient["claude"]?.tokens ?? 0, 300, "L7.5: per-client attribution correct")
+        checkEqual(fetched?.perClient["codex"]?.tokens ?? 0, 900, "L7.6: second client attribution correct")
+        checkEqual(fetched?.perModel["model-t2"]?.tokens ?? 0, 900, "L7.7: per-model attribution correct")
+        checkEqual(fetched?.activeTimeMs ?? 0, 3000, "L7.8: active time preserved")
+    }
+
+    // L8: maxPeriods — component-wise max of live and ledger periods keeps
+    // the freshest live values while the ledger backfills deleted sources.
+    do {
+        let live: [String: Any] = [
+            "totalTokens": 500, "costUsd": 0.1,
+            "clients": ["claude": 500], "clientCosts": ["claude": 0.1],
+            "clientCacheReads": [String: Any](), "clientCacheWrites": [String: Any](), "clientOutputs": ["claude": 100]
+        ] as [String: Any]
+        let ledgerPeriod: [String: Any] = [
+            "totalTokens": 1200, "costUsd": 0.5,
+            "clients": ["claude": 300, "codex": 700], "clientCosts": ["claude": 0.5, "codex": 0.4],
+            "clientCacheReads": [String: Any](), "clientCacheWrites": [String: Any](), "clientOutputs": [String: Any](),
+            "models": [String: Any](), "modelCosts": [String: Any](), "modelCacheReads": [String: Any](),
+            "modelCacheWrites": [String: Any](), "modelOutputs": [String: Any](),
+            "clientModels": [String: Any](), "clientModelCosts": [String: Any](),
+            "sessions": [String: Any](), "projects": [String: Any]()
+        ] as [String: Any]
+        let merged = UsageCore.maxPeriods(live, ledgerPeriod)
+        let clients = merged["clients"] as? [String: Any] ?? [:]
+        checkEqual(clients["claude"] as? Int, 500, "L8.1: live claude tokens win over stale ledger")
+        checkEqual(clients["codex"] as? Int, 700, "L8.2: deleted-source codex tokens backfilled from ledger")
+        checkEqual(UsageCore.intValue(merged["totalTokens"]), 1200, "L8.3: total equals sum of per-client buckets")
+        let outputs = merged["clientOutputs"] as? [String: Any] ?? [:]
+        checkEqual(outputs["claude"] as? Int, 100, "L8.4: live per-client detail preserved")
+    }
+
+    // L9: Schema migration clears the polluted v1 daily table once and flags
+    // user_version=2, so the rebuilt history starts clean.
+    do {
+        let legacy = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("tm-ledger-legacy-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: legacy) }
+        let dbPath = legacy.appendingPathComponent("ledger.db")
+        // Create a v1-shaped database with polluted daily rows.
+        var raw: OpaquePointer?
+        let openRC = sqlite3_open_v2(dbPath.path, &raw, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nil)
+        let legacySQL = """
+        CREATE TABLE IF NOT EXISTS daily_history_ledger (
+            date TEXT NOT NULL, client TEXT NOT NULL, model_id TEXT NOT NULL,
+            tokens REAL NOT NULL DEFAULT 0, cost_usd REAL NOT NULL DEFAULT 0.0,
+            messages REAL NOT NULL DEFAULT 0.0, active_time_ms REAL NOT NULL DEFAULT 0.0,
+            updated_at_ms REAL NOT NULL DEFAULT 0,
+            PRIMARY KEY (date, client, model_id)
+        );
+        INSERT INTO daily_history_ledger (date, client, model_id, tokens, cost_usd, messages, active_time_ms, updated_at_ms)
+        VALUES ('2026-08-01','claude','model-t1',1200,3,4,1000,1000);
+        """
+        let execRC = raw.map { sqlite3_exec($0, legacySQL, nil, nil, nil) } ?? -1
+        XCTAssertSQLITE(openRC == SQLITE_OK && execRC == SQLITE_OK)
+        XCTAssertSQLITE(sqlite3_exec(raw, "PRAGMA user_version = 1;", nil, nil, nil) == SQLITE_OK)
+        sqlite3_close(raw)
+
+        let migrated = HistoryLedger(dbURL: dbPath)
+        let days = migrated.fetchHistoryDays(clients: nil)
+        checkEqual(days.count, 0, "L9.1: v1 polluted daily rows cleared by migration")
+        // The rebuilt writer populates the same table afterwards.
+        var cleanDay = HistoryCore.Day(date: "2026-08-02", tokens: 10, cost: 0.1, messages: 1)
+        cleanDay.perClientModel["claude"] = ["model-t1": (tokens: 10, cost: 0.1, messages: 1)]
+        migrated.recordTokscaleDays([cleanDay])
+        let rebuilt = migrated.fetchHistoryDays(clients: nil)
+        checkEqual(rebuilt.first?.tokens ?? 0, 10, "L9.2: rebuilt history accumulates after migration")
+        checkEqual(migrated.currentUserVersion(), 2, "L9.3: user_version advanced to 2")
+    }
+}
+
+func XCTAssertSQLITE(_ condition: Bool) {
+    check(condition, "sqlite operation succeeded")
 }
 
 runChecks()

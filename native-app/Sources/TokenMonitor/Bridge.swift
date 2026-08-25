@@ -509,11 +509,18 @@ final class Bridge: NSObject, WKScriptMessageHandler {
         }
 
         if let id = body["id"] as? Int {
+            // Heavy, SQLite-bound or network-bound invokes run off the main
+            // thread and resolve asynchronously (the old Electron app used a
+            // worker for session detail and a background fetch for status).
+            // stats:get serializes the full stats dictionary (all sessions),
+            // dashboard:getHistory builds the trends payload, and
+            // usage:getCustomPeriod runs a SQLite query — none of them
+            // should block the WKScriptMessageHandler main-thread callback.
             if method == "session:getDetail" || method == "getSessionDetail"
-                || method == "pricing:lookup" {
-                // Heavy or network-bound invokes run off the main thread and
-                // resolve asynchronously (the old Electron app used a worker
-                // for session detail and a background fetch for status).
+                || method == "pricing:lookup"
+                || method == "stats:get"
+                || method == "dashboard:getHistory" || method == "getDashboardHistory"
+                || method == "usage:getCustomPeriod" || method == "getCustomPeriod" {
                 guard let webView = self.webView else { return }
                 DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                     let result = self?.core.handleInvoke(method, args: args) ?? NSNull()

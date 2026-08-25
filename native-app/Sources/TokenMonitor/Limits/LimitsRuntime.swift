@@ -138,10 +138,13 @@ final class LimitsRuntime {
         }
 
         let updatedAt = ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: Double(nowMs) / 1000))
+        // Tolerant numeric read (Int/Double/String), same reason as the
+        // collector timer: in-process settings updates may store Swift Ints.
+        let rawRefreshMs = UsageCore.doubleValue(settings["limitsRefreshMs"])
         let next: JSON = [
             "providers": providers,
             "updatedAt": updatedAt,
-            "refreshMs": settings["limitsRefreshMs"] as? Double ?? 300000
+            "refreshMs": rawRefreshMs > 0 ? rawRefreshMs : 300000
         ]
         lock.lock()
         currentSummary = next

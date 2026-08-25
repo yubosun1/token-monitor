@@ -131,16 +131,35 @@ final class TokscaleRunner {
             runningProcesses.removeAll { $0 === process }
             lock.unlock()
         }
-        let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-        let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-        try? outPipe.fileHandleForReading.close()
-        try? errPipe.fileHandleForReading.close()
+        // Drain stdout and stderr concurrently. Reading them sequentially can
+        // deadlock: if the child fills the stderr pipe buffer (~64KB) while
+        // stdout is still being read, it blocks writing and never closes
+        // stdout, so the sequential reader waits until the timeout kills it.
+        let outHandle = outPipe.fileHandleForReading
+        let errHandle = errPipe.fileHandleForReading
+        final class PipeBox { var data = Data() }
+        let outBox = PipeBox()
+        let errBox = PipeBox()
+        let drainGroup = DispatchGroup()
+        drainGroup.enter()
+        DispatchQueue.global(qos: .utility).async {
+            outBox.data = outHandle.readDataToEndOfFile()
+            drainGroup.leave()
+        }
+        drainGroup.enter()
+        DispatchQueue.global(qos: .utility).async {
+            errBox.data = errHandle.readDataToEndOfFile()
+            drainGroup.leave()
+        }
+        drainGroup.wait()
+        try? outHandle.close()
+        try? errHandle.close()
         process.waitUntilExit()
         timeoutWorkItem.cancel()
         let elapsedMs = Date().timeIntervalSince(started) * 1000
 
-        let stdout = String(data: outData, encoding: .utf8) ?? ""
-        let stderr = String(data: errData, encoding: .utf8) ?? ""
+        let stdout = String(data: outBox.data, encoding: .utf8) ?? ""
+        let stderr = String(data: errBox.data, encoding: .utf8) ?? ""
 
         if PerfDiag.enabled {
             lock.lock()

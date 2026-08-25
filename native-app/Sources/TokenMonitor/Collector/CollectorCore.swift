@@ -834,16 +834,19 @@ final class Collector {
             var allTime = UsageCore.mergePeriods([tokscalePeriods["allTime"] ?? UsageCore.emptyPeriod(), merged["allTime"] ?? UsageCore.emptyPeriod()])
 
             if let ledger = environment.historyLedger {
+                // Persistent-ledger fallback: adapter sources deleted from disk
+                // survive here. Component-wise max (never whole-period
+                // replacement): the ledger only holds adapter rows — tokscale
+                // rows are deliberately not recorded (their session-level
+                // cumulative values cannot be attributed to a day the way the
+                // live event-level scan does, and replacing the whole period
+                // with ledger values would fold cross-midnight session history
+                // into today/month). Max also keeps the freshest live value
+                // when both sides have data.
                 let ledgerPeriods = ledger.fetchPeriods(clients: clients, now: now, allTimeSince: allTimeSince)
-                if UsageCore.intValue(ledgerPeriods.today["totalTokens"]) > UsageCore.intValue(today["totalTokens"]) {
-                    today = ledgerPeriods.today
-                }
-                if UsageCore.intValue(ledgerPeriods.month["totalTokens"]) > UsageCore.intValue(month["totalTokens"]) {
-                    month = ledgerPeriods.month
-                }
-                if UsageCore.intValue(ledgerPeriods.allTime["totalTokens"]) > UsageCore.intValue(allTime["totalTokens"]) {
-                    allTime = ledgerPeriods.allTime
-                }
+                today = UsageCore.maxPeriods(today, ledgerPeriods.today)
+                month = UsageCore.maxPeriods(month, ledgerPeriods.month)
+                allTime = UsageCore.maxPeriods(allTime, ledgerPeriods.allTime)
             }
 
             cachedPeriods = (today, month, allTime)
@@ -1120,9 +1123,15 @@ final class Collector {
                 do {
                     let entries = try TokscaleRunner.shared.usage(clients: clients, period: period, allTimeSince: since)
                     let rows = entries.map(UsageCore.rowFromTokscaleEntry)
-                    if period == "allTime" {
-                        ledger?.recordUsageRows(rows, now: now)
-                    }
+                    // Tokscale rows are deliberately NOT recorded into the
+                    // session ledger: the entries are session-level
+                    // cumulative values whose lastUsedAt cannot be split
+                    // across days, so recording them would (a) fold
+                    // cross-midnight session history into the ledger's
+                    // last-active day and (b) let the whole-period fallback
+                    // replace event-level live totals with session totals.
+                    // Tokscale history is preserved through the graph days
+                    // (daily_history_ledger) instead.
                     let periodResult = UsageCore.extractPeriod(entries: rows)
                     lock.lock()
                     results[period] = periodResult
