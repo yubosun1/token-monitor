@@ -143,19 +143,21 @@ final class BridgeCore {
                 CredentialStore.shared.setKimiWebAccessToken(token)
                 limitsCredentialChanged = true
             }
+            if let key = patch.removeValue(forKey: "opencodeApiKey") as? String, !key.isEmpty {
+                CredentialStore.shared.saveOpencodeProfile(name: "default", apiKey: key)
+                limitsCredentialChanged = true
+            }
             if let cookie = patch.removeValue(forKey: "opencodeCookie") as? String, !cookie.isEmpty {
-                CredentialStore.shared.saveOpencodeProfile(name: "default", cookie: cookie)
+                CredentialStore.shared.saveOpencodeProfile(name: "default", apiKey: cookie)
+                limitsCredentialChanged = true
             }
             if let profiles = patch.removeValue(forKey: "opencodeProfiles") as? [[String: Any]] {
                 for profile in profiles {
                     guard let name = profile["name"] as? String else { continue }
-                    let cookie = profile["cookie"] as? String ?? ""
-                    let apiKey = profile["apiKey"] as? String ?? ""
-                    if !cookie.isEmpty {
-                        CredentialStore.shared.saveOpencodeProfile(name: name, cookie: cookie)
-                    }
+                    let apiKey = (profile["apiKey"] as? String ?? profile["cookie"] as? String ?? "").trimmingCharacters(in: .whitespaces)
                     if !apiKey.isEmpty {
-                        CredentialStore.shared.setOpencodeProfileApiKey(name: name, apiKey: apiKey)
+                        CredentialStore.shared.saveOpencodeProfile(name: name, apiKey: apiKey)
+                        limitsCredentialChanged = true
                     }
                 }
             }
@@ -288,15 +290,15 @@ final class BridgeCore {
                 safe[profile.name] = [
                     "enabled": profile.enabled,
                     "hasApiKey": !profile.apiKey.isEmpty,
-                    "hasCookie": !profile.cookie.isEmpty,
+                    "hasCookie": !profile.apiKey.isEmpty,
                     "usesAmbientKey": false
                 ]
             }
             return ["profiles": safe, "hasEnvVar": false, "hasAmbientKey": false]
         case "opencode:saveProfile":
             let name = args.first as? String ?? ""
-            let cookie = args.count > 1 ? (args[1] as? String ?? "") : ""
-            CredentialStore.shared.saveOpencodeProfile(name: name, cookie: cookie)
+            let apiKey = args.count > 1 ? (args[1] as? String ?? "") : ""
+            CredentialStore.shared.saveOpencodeProfile(name: name, apiKey: apiKey)
             LimitsRuntime.shared.refreshNow()
             return ["ok": true]
         case "opencode:deleteProfile":
@@ -312,7 +314,8 @@ final class BridgeCore {
             LimitsRuntime.shared.refreshNow()
             return ["ok": true]
         case "opencode:saveCookie":
-            CredentialStore.shared.saveOpencodeProfile(name: "default", cookie: args.first as? String ?? "")
+            let apiKey = args.first as? String ?? ""
+            CredentialStore.shared.saveOpencodeProfile(name: "default", apiKey: apiKey)
             LimitsRuntime.shared.refreshNow()
             return ["ok": true]
         case "opencode:logout":
@@ -321,12 +324,12 @@ final class BridgeCore {
             return ["ok": true]
         case "opencode:status":
             let profiles = CredentialStore.shared.opencodeProfiles()
-            let configured = profiles.contains { $0.enabled && (!$0.cookie.isEmpty || !$0.apiKey.isEmpty) }
+            let configured = profiles.contains { $0.enabled && !$0.apiKey.isEmpty }
             // Object keyed by profile name, matching what the renderer's
             // updateOpenCodeProfilesStatus expects (per-name status entries).
             var byName: [String: Any] = [:]
             for profile in profiles {
-                let linked = !profile.cookie.isEmpty || !profile.apiKey.isEmpty
+                let linked = !profile.apiKey.isEmpty
                 byName[profile.name] = [
                     "enabled": profile.enabled,
                     "linked": linked,

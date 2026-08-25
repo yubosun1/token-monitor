@@ -394,7 +394,7 @@ final class HistoryLedger {
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(date, client, model_id) DO UPDATE SET
             tokens = MAX(daily_history_ledger.tokens, excluded.tokens),
-            cost_usd = CASE WHEN excluded.cost_usd > 0 THEN excluded.cost_usd ELSE MAX(daily_history_ledger.cost_usd, excluded.cost_usd) END,
+            cost_usd = MAX(daily_history_ledger.cost_usd, excluded.cost_usd),
             messages = MAX(daily_history_ledger.messages, excluded.messages),
             active_time_ms = MAX(daily_history_ledger.active_time_ms, excluded.active_time_ms),
             updated_at_ms = excluded.updated_at_ms;
@@ -442,7 +442,7 @@ final class HistoryLedger {
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(date, client, model_id) DO UPDATE SET
             tokens = MAX(daily_history_ledger.tokens, excluded.tokens),
-            cost_usd = CASE WHEN excluded.cost_usd > 0 THEN excluded.cost_usd ELSE MAX(daily_history_ledger.cost_usd, excluded.cost_usd) END,
+            cost_usd = MAX(daily_history_ledger.cost_usd, excluded.cost_usd),
             messages = MAX(daily_history_ledger.messages, excluded.messages),
             active_time_ms = MAX(daily_history_ledger.active_time_ms, excluded.active_time_ms),
             updated_at_ms = excluded.updated_at_ms;
@@ -997,6 +997,20 @@ final class HistoryLedger {
                         max(prev.cost, mStats.cost)
                     )
                 }
+
+                for (client, models) in live.perClientModel {
+                    var pcm = existing.perClientModel[client] ?? [:]
+                    for (model, stats) in models {
+                        let prev = pcm[model] ?? (0, 0, 0)
+                        pcm[model] = (
+                            max(prev.tokens, stats.tokens),
+                            max(prev.cost, stats.cost),
+                            max(prev.messages, stats.messages)
+                        )
+                    }
+                    existing.perClientModel[client] = pcm
+                }
+
                 dayMap[live.date] = existing
             } else {
                 dayMap[live.date] = live

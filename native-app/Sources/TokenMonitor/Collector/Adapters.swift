@@ -835,17 +835,9 @@ enum Adapters {
             }
         }
 
-        struct ModelUsageBucket {
-            var inputOther: Double = 0
-            var output: Double = 0
-            var cacheRead: Double = 0
-            var cacheCreation: Double = 0
-            var reasoning: Double = 0
-            var messageCount: Double = 0
-            var firstTime: Double = 0
-            var lastTime: Double = 0
-        }
-        var buckets: [String: ModelUsageBucket] = [:]
+        let pLabel = title.isEmpty ? (cwd.isEmpty ? sessionId : URL(fileURLWithPath: cwd).lastPathComponent) : title
+        let pId = cwd.isEmpty ? sessionId : sourceNamespace(cwd)
+        var rows: [UsageCore.UsageRow] = []
 
         for wireFile in wireFiles {
             guard let data = try? Data(contentsOf: wireFile) else { continue }
@@ -880,47 +872,28 @@ enum Adapters {
                 let cacheCreation = UsageCore.doubleValue(usage["inputCacheCreation"] ?? usage["cache_creation"] ?? usage["cache_write_input_tokens"] ?? usage["cacheWrite"])
                 let reasoning = UsageCore.doubleValue(usage["reasoning"] ?? usage["reasoning_tokens"])
 
-                var bucket = buckets[modelId] ?? ModelUsageBucket()
-                bucket.inputOther += inputOther
-                bucket.output += output
-                bucket.cacheRead += cacheRead
-                bucket.cacheCreation += cacheCreation
-                bucket.reasoning += reasoning
-                bucket.messageCount += 1
-                if timeMs > 0 {
-                    if bucket.firstTime == 0 || timeMs < bucket.firstTime { bucket.firstTime = timeMs }
-                    if timeMs > bucket.lastTime { bucket.lastTime = timeMs }
-                }
-                buckets[modelId] = bucket
+                let time = timeMs > 0 ? timeMs : (updatedAt > 0 ? updatedAt : createdAt)
+
+                let row = UsageCore.UsageRow(
+                    client: "kimi",
+                    sessionId: sessionId,
+                    model: modelId,
+                    provider: "moonshot",
+                    input: inputOther,
+                    output: output,
+                    cacheRead: cacheRead,
+                    cacheWrite: cacheCreation,
+                    reasoning: reasoning,
+                    messageCount: 1,
+                    cost: 0,
+                    startedAt: time,
+                    lastUsedAt: time,
+                    projectId: pId,
+                    projectLabel: pLabel,
+                    performance: nil
+                )
+                rows.append(row)
             }
-        }
-
-        let pLabel = title.isEmpty ? (cwd.isEmpty ? sessionId : URL(fileURLWithPath: cwd).lastPathComponent) : title
-        let pId = cwd.isEmpty ? sessionId : sourceNamespace(cwd)
-
-        var rows: [UsageCore.UsageRow] = []
-        for (modelId, b) in buckets {
-            let start = b.firstTime > 0 ? b.firstTime : createdAt
-            let last = b.lastTime > 0 ? b.lastTime : updatedAt
-            let row = UsageCore.UsageRow(
-                client: "kimi",
-                sessionId: sessionId,
-                model: modelId,
-                provider: "moonshot",
-                input: b.inputOther,
-                output: b.output,
-                cacheRead: b.cacheRead,
-                cacheWrite: b.cacheCreation,
-                reasoning: b.reasoning,
-                messageCount: b.messageCount,
-                cost: 0,
-                startedAt: start,
-                lastUsedAt: last,
-                projectId: pId,
-                projectLabel: pLabel,
-                performance: nil
-            )
-            rows.append(row)
         }
 
         return rows

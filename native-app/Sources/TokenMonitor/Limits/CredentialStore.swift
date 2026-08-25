@@ -159,9 +159,16 @@ final class CredentialStore {
 
     struct OpenCodeProfile {
         let name: String
-        let cookie: String
         let apiKey: String
         let enabled: Bool
+
+        var cookie: String { apiKey }
+
+        init(name: String, apiKey: String, enabled: Bool = true) {
+            self.name = name
+            self.apiKey = apiKey
+            self.enabled = enabled
+        }
     }
 
     func opencodeProfiles() -> [OpenCodeProfile] {
@@ -172,10 +179,10 @@ final class CredentialStore {
         let profiles = (providers["opencode"] as? [String: Any] ?? [:])["profiles"] as? [String: Any] ?? [:]
         return profiles.compactMap { (name, value) in
             guard let profile = value as? [String: Any] else { return nil }
+            let key = (profile["apiKey"] as? String ?? profile["cookie"] as? String ?? "").trimmingCharacters(in: .whitespaces)
             return OpenCodeProfile(
                 name: name,
-                cookie: profile["cookie"] as? String ?? "",
-                apiKey: profile["apiKey"] as? String ?? "",
+                apiKey: key,
                 enabled: profile["enabled"] as? Bool ?? true
             )
         }.sorted { $0.name < $1.name }
@@ -195,26 +202,21 @@ final class CredentialStore {
         }
     }
 
-    func saveOpencodeProfile(name: String, cookie: String) {
+    func saveOpencodeProfile(name: String, apiKey: String) {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
         mutateProfiles { profiles in
             let existing = profiles[trimmed] as? [String: Any] ?? [:]
             var next = existing
-            next["cookie"] = cookie.trimmingCharacters(in: .whitespaces)
+            next["apiKey"] = apiKey.trimmingCharacters(in: .whitespaces)
+            next.removeValue(forKey: "cookie")
             next["enabled"] = true
             profiles[trimmed] = next
         }
     }
 
     func setOpencodeProfileApiKey(name: String, apiKey: String) {
-        let trimmed = name.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return }
-        mutateProfiles { profiles in
-            guard var profile = profiles[trimmed] as? [String: Any] else { return }
-            profile["apiKey"] = apiKey.trimmingCharacters(in: .whitespaces)
-            profiles[trimmed] = profile
-        }
+        saveOpencodeProfile(name: name, apiKey: apiKey)
     }
 
     func deleteOpencodeProfile(name: String) {

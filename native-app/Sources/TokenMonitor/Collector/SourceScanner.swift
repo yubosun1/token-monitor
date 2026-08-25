@@ -35,11 +35,10 @@ enum SourceScanner {
             return Array(Set(roots)).sorted()
         case "dsh": return [home + "/.dsh/sessions"]
         case "kimi":
-            var roots = [home + "/.kimi-code/sessions", home + "/.kimi/sessions", home + "/.kimi-code", home + "/.kimi"]
+            var roots = [home + "/.kimi-code/sessions", home + "/.kimi/sessions"]
             let custom = kimiCodeHome()
             if !custom.isEmpty {
                 roots.append(custom + "/sessions")
-                roots.append(custom)
             }
             return Array(Set(roots)).sorted()
         case "antigravity":

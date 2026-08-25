@@ -1,9 +1,7 @@
 import Foundation
 import CryptoKit
 
-/// OpenCode (opencode.ai) limit collection, ported from `src/shared/opencodeWeb.js`,
-/// `src/shared/opencodeLimits.js`, and the opencode sections of
-/// `src/shared/limitCollector.js` / `src/shared/limits.js`.
+/// OpenCode (opencode.ai) limit collection using official API key authentication.
 ///
 /// The wire shape produced here is the array returned by `normalizeLimitProvider`
 /// (input object already assembled), so callers can hand it straight to the hub
@@ -14,14 +12,18 @@ enum OpencodeLimits {
 
     struct Profile {
         let name: String
-        let cookie: String
         let apiKey: String
         let enabled: Bool
 
+        init(name: String, apiKey: String = "", enabled: Bool = true) {
+            self.name = name
+            self.apiKey = apiKey
+            self.enabled = enabled
+        }
+
         init(name: String, cookie: String, apiKey: String = "", enabled: Bool = true) {
             self.name = name
-            self.cookie = cookie
-            self.apiKey = apiKey
+            self.apiKey = apiKey.isEmpty ? cookie : apiKey
             self.enabled = enabled
         }
     }
@@ -29,9 +31,8 @@ enum OpencodeLimits {
     // MARK: - Public API
 
     /// Returns the opencode provider wire dictionaries (same shape as
-    /// `normalizeLimitProvider` output). Local mode (0 or 1 cookie) returns a single
-    /// provider; multi-account (2+ enabled cookies) returns one per profile,
-    /// matching `fetchOpenCodeLimits` / `fetchSingleOpenCodeProfile`.
+    /// `normalizeLimitProvider` output). Directly queries OpenCode's official
+    /// API with configured API key(s) or auto-detected ambient credentials.
     static func fetchProviders(
         profiles: [Profile],
         nowMs: Int64,
@@ -41,173 +42,77 @@ enum OpencodeLimits {
         let updatedAt = nowIso(now)
         let env = ProcessInfo.processInfo.environment
 
-        // An account is a name, and credentials belong to a name. A profile may
-        // hold a cookie (Go quota plus Zen balance) and/or a stored API key (Go
-        // quota); sharing a name is the user's assertion that they are one
-        // account, which licenses reading quota from one credential while
-        // identity and balance come from the other.
-        //
-        // The key OpenCode keeps in auth.json needs no setup. Native settings
-        // currently expose cookie profiles, not the upstream credential-binding
-        // flow, so an ambient key is published only when there is no configured
-        // account. Otherwise the same local sign-in appears as a second Home row
-        // with no identity-safe way for the user to merge it.
         let ambientKey = readGoApiKey(env)
 
-        // Credential sources: enabled profiles > env var (appended if not present) > ambient.
-        var cookies: [(name: String, cookie: String, apiKey: String, ambient: Bool)] = []
-        for p in profiles where p.enabled && (!p.cookie.isEmpty || !p.apiKey.isEmpty) {
-            cookies.append((p.name, p.cookie, p.apiKey, false))
+        var accounts: [(name: String, apiKey: String, ambient: Bool)] = []
+        for p in profiles where p.enabled && !p.apiKey.isEmpty {
+            accounts.append((p.name, p.apiKey, false))
         }
-        let envCookie = env["TOKEN_MONITOR_OPENCODE_COOKIE"] ?? ""
-        if !envCookie.isEmpty && !cookies.contains(where: { $0.cookie == envCookie }) {
-            cookies.append(("default (env)", envCookie, "", false))
+        let envKey = cleanSecret(env["TOKEN_MONITOR_OPENCODE_API_KEY"] ?? env["OPENCODE_API_KEY"] ?? "")
+        if !envKey.isEmpty && !accounts.contains(where: { $0.apiKey == envKey }) {
+            accounts.append(("default (env)", envKey, false))
         }
 
-        // Switched off for a machine signed in to an account the user does not
-        // want reported (`TOKEN_MONITOR_OPENCODE_AMBIENT=0`). Only the unclaimed
-        // row is suppressed: once a saved account holds the same key, the
-        // account's own toggle owns it.
         let ambientEnabled = parseAmbientEnv(env["TOKEN_MONITOR_OPENCODE_AMBIENT"], default: true)
-        let ambientClaimed = cookies.contains { $0.apiKey == ambientKey }
-        if !ambientKey.isEmpty && cookies.isEmpty && !ambientClaimed && ambientEnabled {
-            cookies.append((opencodeAmbientAccountName, "", ambientKey, true))
+        let ambientClaimed = accounts.contains { $0.apiKey == ambientKey }
+        if !ambientKey.isEmpty && accounts.isEmpty && !ambientClaimed && ambientEnabled {
+            accounts.append((opencodeAmbientAccountName, ambientKey, true))
         }
 
-        let multiAccountMode = cookies.count > 1
+        let multiAccountMode = accounts.count > 1
 
-        // ── Single account: merged behavior ─────────────────────────────────
+        // ── Single account mode ─────────────────────────────────────────────
         if !multiAccountMode {
             let goLocal = opencodeLocalLimitsEnabled
                 ? collectGo(env: env, nowMs: now)
                 : (status: "notConfigured", windows: [] as [Window], identity: "")
-            let primary = cookies.first
-            let cookie = primary?.cookie ?? ""
-            // Only this entry's own key, never the ambient one as a stand-in.
-            // The ambient key is its own entry above; reaching for it here
-            // would pair it with a cookie whose account nothing can prove it
-            // shares, publishing one account's quota under the other's
-            // identity. An empty apiKey therefore probes nothing (the key
-            // must be EXPLICITLY configured on this account before the API
-            // is consulted) — passing nil would silently fall back to the
-            // ambient key inside collectGoApi.
+            let primary = accounts.first
             let primaryApiKey = primary?.apiKey ?? ""
-            var goApi: (status: String, windows: [Window], identity: String, entitled: Bool)?
-            var goWeb: (status: String, windows: [Window], workspaceId: String)? = nil
-            var zen: (status: String, windows: [Window], balanceUsd: Double?, workspaceId: String)? = nil
-            if !cookie.isEmpty || !primaryApiKey.isEmpty {
-                // Race the three probes against a 15s deadline like the
-                // multi-account path: single-account refreshes must not block
-                // the limits queue for URLSession's default 60s timeout when
-                // opencode.ai hangs.
+            var goApi: (status: String, windows: [Window], identity: String, entitled: Bool)? = nil
+
+            if !primaryApiKey.isEmpty {
                 do {
-                    let resolved = try await Self.withTimeout(15) {
-                        async let api = collectGoApi(env: env, apiKey: primaryApiKey, nowMs: now)
-                        async let gw = cookie.isEmpty ? nil : fetchGoWeb(cookie: cookie, nowMs: now)
-                        async let zn = cookie.isEmpty ? nil : fetchZen(cookie: cookie, nowMs: now)
-                        let (g, z, a) = await (gw, zn, api)
-                        return (
-                            goWeb: g,
-                            zen: z,
-                            goApi: a
-                        )
+                    goApi = try await withTimeout(15) {
+                        await collectGoApi(env: env, apiKey: primaryApiKey, nowMs: now)
                     }
-                    goWeb = resolved.goWeb
-                    zen = resolved.zen
-                    goApi = resolved.goApi
                 } catch {
-                    // Deadline hit: report nothing rather than stale/partial
-                    // windows; the callers below surface the failure status.
-                    goWeb = nil
-                    zen = nil
                     goApi = nil
                 }
             }
 
-            let identity = openCodeWebIdentity(goWeb: goWeb, zen: zen, cookie: cookie.isEmpty ? nil : cookie)
-            let webAccountKey = identity.accountKey
-
             var windows: [Window] = []
             var status = "notConfigured"
             var source = "local"
-            var accountLabel = ""
+            var accountLabel = primary?.name.isEmpty == false ? primary!.name : "Go"
             var accountKey = ""
-            var balanceUsd: Double? = nil
 
-            // Go quota resolves api → web → local. The official API needs no
-            // user setup and is anchored on the real subscription month, so it
-            // outranks the cookie scrape; the local estimate stays last because
-            // it sees only this device's rows. API windows are tagged `web`,
-            // not `api`: windows[].source is a two-value wire enum ('web' |
-            // 'local') that hubs rank on, and the finer provenance rides on the
-            // provider-level source.
             if let api = goApi, api.status == "ok", !api.windows.isEmpty {
                 windows.append(contentsOf: api.windows.map { $0.withSource("web") })
-                status = "ok"; source = "api"; accountLabel = "Go"
+                status = "ok"
+                source = "api"
+                accountLabel = primary?.name.isEmpty == false ? primary!.name : "Go"
                 accountKey = hashKey("opencode", api.identity.isEmpty ? "go-api" : api.identity)
-            } else if let go = goWeb, go.status == "ok", !go.windows.isEmpty {
-                windows.append(contentsOf: go.windows.map { $0.withSource("web") })
-                status = "ok"; source = "web"; accountLabel = "Go"
-                accountKey = hashKey("opencode", "go:\(go.workspaceId)")
             } else if goLocal.status == "ok" && goApi?.entitled != false {
-                // `entitled === false` is the server saying this account has no
-                // Go plan; only an absent or failed API answer leaves room for
-                // the local estimate.
                 windows.append(contentsOf: goLocal.windows.map { $0.withSource("local") })
-                status = "ok"; accountLabel = "Go"
+                status = "ok"
+                accountLabel = "Go"
                 accountKey = hashKey("opencode", goLocal.identity.isEmpty ? "go" : goLocal.identity)
             } else if goLocal.status == "unavailable" && goApi?.entitled != false {
                 status = "unavailable"
+            } else if let api = goApi, opencodeRemoteFailStatuses.contains(api.status) {
+                status = api.status
+                source = "api"
             }
 
-            if let zn = zen, identity.includeZen {
-                windows.append(contentsOf: supplementalZenWindows(takenWindows: windows, zen: zn).map { $0.withSource("web") })
-                status = "ok"
-                // 'api' already implies every quota window is server truth, so
-                // it keeps that stronger claim instead of being flattened to
-                // 'web' by a Zen window.
-                if source != "api" && !windows.contains(where: { $0.source == "local" }) { source = "web" }
-                if let b = zn.balanceUsd, b.isFinite { balanceUsd = b }
-                if accountLabel.isEmpty { accountLabel = "Zen" }
-                if accountKey.isEmpty { accountKey = hashKey("opencode", "zen:\(zn.workspaceId)") }
-            } else if status != "ok" {
-                // Only reached when nothing produced windows. A stale API key
-                // would otherwise read as "not configured" and leave the user
-                // nothing to fix. `notConfigured` from the API means "no Go
-                // subscription", a fallback condition rather than a failure.
-                let surfaced: (status: String, source: String)?
-                if let api = goApi, opencodeRemoteFailStatuses.contains(api.status) {
-                    surfaced = (api.status, "api")
-                } else if let go = goWeb, opencodeRemoteFailStatuses.contains(go.status) {
-                    surfaced = (go.status, "web")
-                } else if let zn = zen, opencodeRemoteFailStatuses.contains(zn.status) {
-                    surfaced = (zn.status, "web")
-                } else {
-                    surfaced = nil
-                }
-                if let s = surfaced { status = s.status; source = s.source }
-            }
-
-            // A failed API probe still names its account: the key identifies
-            // it, so a 401 or rate limit must not leave an empty accountKey.
             if accountKey.isEmpty, let api = goApi, !api.identity.isEmpty {
                 accountKey = hashKey("opencode", api.identity)
-            }
-            if !webAccountKey.isEmpty { accountKey = webAccountKey }
-            // Publish the key's own identity as an alias whenever one was used,
-            // so a device holding only the key groups with the cookie account.
-            let apiAlias: String
-            if let api = goApi, !api.identity.isEmpty, hashKey("opencode", api.identity) != accountKey {
-                apiAlias = hashKey("opencode", api.identity)
-            } else {
-                apiAlias = ""
             }
 
             return [normalizeLimitProvider(ProviderInput(
                 provider: "opencode",
                 accountKey: accountKey,
-                webAccountKey: webAccountKey,
-                accountKeyAliases: identity.aliases + (apiAlias.isEmpty ? [] : [apiAlias]),
+                webAccountKey: "",
+                accountKeyAliases: [],
                 accountLabel: accountLabel,
                 accountName: primary?.name ?? "",
                 status: status,
@@ -215,30 +120,26 @@ enum OpencodeLimits {
                 sourceDetail: "managed",
                 updatedAt: updatedAt,
                 windows: windows,
-                balanceUsd: balanceUsd
+                balanceUsd: nil
             ))].compactMap { $0 }
         }
 
-        // ── Multi-account: per-profile providers (parallel) ─────────────────
+        // ── Multi-account mode ──────────────────────────────────────────────
         var providers: [JSON] = []
-        let results: [(name: String, cookie: String, provider: JSON?)] = await withTaskGroup(
-            of: (name: String, cookie: String, provider: JSON?).self
+        let results: [(index: Int, provider: JSON?)] = await withTaskGroup(
+            of: (index: Int, provider: JSON?).self
         ) { group in
-            for c in cookies {
+            for (idx, acc) in accounts.enumerated() {
                 group.addTask {
                     let provider = await fetchSingleOpenCodeProfile(
-                        name: c.name, cookie: c.cookie, apiKey: c.apiKey, nowMs: now, updatedAt: updatedAt
+                        name: acc.name, apiKey: acc.apiKey, nowMs: now, updatedAt: updatedAt
                     )
-                    return (c.name, c.cookie, provider)
+                    return (idx, provider)
                 }
             }
-            var collected: [(String, String, JSON?)] = []
+            var collected: [(index: Int, provider: JSON?)] = []
             for await r in group { collected.append(r) }
-            // Preserve original cookie order for deterministic output.
-            return collected.sorted { a, b in
-                cookies.firstIndex(where: { $0.cookie == a.1 })!
-                    < cookies.firstIndex(where: { $0.cookie == b.1 })!
-            }
+            return collected.sorted { a, b in a.index < b.index }
         }
         for r in results { if let p = r.provider { providers.append(p) } }
 
@@ -251,7 +152,67 @@ enum OpencodeLimits {
         return providers
     }
 
-    // MARK: - Window model (pre-normalization, mirrors opencodeWeb.js outputs)
+    // MARK: - Single profile fetch
+
+    private static func fetchSingleOpenCodeProfile(
+        name: String, apiKey: String, nowMs: Int64, updatedAt: String
+    ) async -> JSON? {
+        let env = ProcessInfo.processInfo.environment
+        let goApi: (status: String, windows: [Window], identity: String, entitled: Bool)?
+        do {
+            goApi = try await withTimeout(15) {
+                await collectGoApi(env: env, apiKey: apiKey, nowMs: nowMs)
+            }
+        } catch {
+            goApi = nil
+        }
+
+        let keyIdentity = apiKey.isEmpty ? "" : hashKey("opencode", goApiIdentity(apiKey))
+        if let api = goApi {
+            var windows: [Window] = []
+            var status = api.status
+            var planLabel = ""
+            let source = "api"
+
+            if api.status == "ok", !api.windows.isEmpty {
+                windows.append(contentsOf: api.windows.map { $0.withSource("web") })
+                status = "ok"
+                planLabel = "Go"
+            }
+
+            return normalizeLimitProvider(ProviderInput(
+                provider: "opencode",
+                accountKey: keyIdentity,
+                webAccountKey: "",
+                accountKeyAliases: [],
+                accountLabel: name,
+                planLabel: planLabel,
+                accountName: name,
+                status: status,
+                source: source,
+                sourceDetail: "managed",
+                updatedAt: updatedAt,
+                windows: windows,
+                balanceUsd: nil
+            ))
+        }
+
+        return normalizeLimitProvider(ProviderInput(
+            provider: "opencode",
+            accountKey: keyIdentity,
+            accountLabel: name,
+            planLabel: "",
+            accountName: name,
+            status: "unavailable",
+            source: "api",
+            sourceDetail: "managed",
+            updatedAt: updatedAt,
+            windows: [],
+            balanceUsd: nil
+        ))
+    }
+
+    // MARK: - Window model
 
     struct Window {
         var kind: String
@@ -271,256 +232,9 @@ enum OpencodeLimits {
         }
     }
 
-    // MARK: - Identity (openCodeWebIdentity)
-
-    private static func openCodeWebIdentity(
-        goWeb: (status: String, windows: [Window], workspaceId: String)?,
-        zen: (status: String, windows: [Window], balanceUsd: Double?, workspaceId: String)?,
-        cookie: String?
-    ) -> (accountKey: String, aliases: [String], includeZen: Bool) {
-        let goWorkspaceId = goWeb?.status == "ok" ? goWeb!.workspaceId : ""
-        let zenWorkspaceId = zen?.status == "ok" ? zen!.workspaceId : ""
-        let workspaceConflict = !goWorkspaceId.isEmpty && !zenWorkspaceId.isEmpty && goWorkspaceId != zenWorkspaceId
-        let includeZen = zen?.status == "ok" && !workspaceConflict
-        let hasSuccessfulWebProbe = goWeb?.status == "ok" || includeZen
-        let workspaceId = !goWorkspaceId.isEmpty ? goWorkspaceId : (includeZen ? zenWorkspaceId : "")
-
-        if hasSuccessfulWebProbe && !workspaceId.isEmpty {
-            return (
-                accountKey: hashKey("opencode", "workspace:\(workspaceId)"),
-                aliases: [
-                    hashKey("opencode", "go:\(workspaceId)"),
-                    hashKey("opencode", "zen:\(workspaceId)")
-                ],
-                includeZen: includeZen
-            )
-        }
-        if let cookie, !cookie.isEmpty, hasSuccessfulWebProbe {
-            let cookieHash = sha256HexPrefix(cookie, 12)
-            return (accountKey: hashKey("opencode", "cookie:\(cookieHash)"), aliases: [], includeZen: includeZen)
-        }
-        return (accountKey: "", aliases: [], includeZen: includeZen)
-    }
-
-    private static func supplementalZenWindows(
-        takenWindows: [Window],
-        zen: (status: String, windows: [Window], balanceUsd: Double?, workspaceId: String)?
-    ) -> [Window] {
-        let takenKeys = Set(takenWindows.map { openCodeWindowKey($0) }.filter { !$0.isEmpty })
-        return (zen?.windows ?? []).filter { w in
-            let key = openCodeWindowKey(w)
-            return key.isEmpty || !takenKeys.contains(key)
-        }
-    }
-
-    private static func openCodeWindowKey(_ window: Window) -> String {
-        let kind = normalizeWindowKind(window.kind) ?? ""
-        if kind.isEmpty { return "" }
-        let metric = normalizeValue(window.metric, from: VALID_LIMIT_WINDOW_METRICS) ?? ""
-        let label = normalizeWindowLabel(window.label ?? "")
-        return [kind, metric, label].joined(separator: ":")
-    }
-
-    // MARK: - Single-profile fetch (fetchSingleOpenCodeProfile)
-
-    private static func fetchSingleOpenCodeProfile(
-        name: String, cookie: String, apiKey: String, nowMs: Int64, updatedAt: String
-    ) async -> JSON? {
-        // Race the probes against a 15s deadline (Promise.race in JS).
-        let env = ProcessInfo.processInfo.environment
-        let resolved: (goWeb: (status: String, windows: [Window], workspaceId: String)?,
-                       zen: (status: String, windows: [Window], balanceUsd: Double?, workspaceId: String)?,
-                       goApi: (status: String, windows: [Window], identity: String, entitled: Bool)?)?
-        do {
-            resolved = try await withThrowingTaskGroup(
-                of: Optional<(goWeb: (status: String, windows: [Window], workspaceId: String)?,
-                               zen: (status: String, windows: [Window], balanceUsd: Double?, workspaceId: String)?,
-                               goApi: (status: String, windows: [Window], identity: String, entitled: Bool)?)>.self
-            ) { group in
-                group.addTask {
-                    async let go = cookie.isEmpty ? nil : fetchGoWeb(cookie: cookie, nowMs: nowMs)
-                    async let zn = cookie.isEmpty ? nil : fetchZen(cookie: cookie, nowMs: nowMs)
-                    async let api = apiKey.isEmpty ? nil : collectGoApi(env: env, apiKey: apiKey, nowMs: nowMs)
-                    let (g, z, a) = await (go, zn, api)
-                    return (goWeb: g, zen: z, goApi: a)
-                }
-                group.addTask {
-                    try await Task.sleep(nanoseconds: 15_000_000_000)
-                    throw FetchError.timeout
-                }
-                guard let first = try await group.next() else { throw FetchError.timeout }
-                group.cancelAll()
-                return first
-            }
-        } catch {
-            resolved = nil
-        }
-
-        if let resolved {
-            let goWeb = resolved.goWeb
-            let zen = resolved.zen
-            let goApi = resolved.goApi
-            var windows: [Window] = []
-            var status = "notConfigured"
-            var planLabel = ""
-            var balanceUsd: Double? = nil
-            var source = "web"
-
-            // Go quota resolves api → web within the profile: the official API
-            // needs no user setup and is the only source anchored on the real
-            // subscription month.
-            if let api = goApi, api.status == "ok", !api.windows.isEmpty {
-                windows.append(contentsOf: api.windows.map { $0.withSource("web") })
-                status = "ok"
-                planLabel = "Go"
-                source = "api"
-            } else if let go = goWeb, go.status == "ok", !go.windows.isEmpty {
-                windows.append(contentsOf: go.windows.map { $0.withSource("web") })
-                status = "ok"
-                planLabel = "Go"
-            }
-
-            let identity = openCodeWebIdentity(goWeb: goWeb, zen: zen, cookie: cookie.isEmpty ? nil : cookie)
-            if let zn = zen, identity.includeZen {
-                windows.append(contentsOf: supplementalZenWindows(takenWindows: windows, zen: zn).map { $0.withSource("web") })
-                status = "ok"
-                if planLabel.isEmpty { planLabel = "Zen" }
-                if let b = zn.balanceUsd, b.isFinite { balanceUsd = b }
-            }
-
-            if status != "ok" {
-                // `notConfigured` from the API means "no Go subscription", a
-                // fallback condition rather than a failure; it is ranked last so
-                // it cannot hide an expired cookie's `unauthorized`. Provenance
-                // travels with the status: how many accounts are configured
-                // cannot change which credential failed.
-                let failure: (status: String, source: String)?
-                if let api = goApi, opencodeRemoteFailStatuses.contains(api.status) {
-                    failure = (api.status, "api")
-                } else if let gw = goWeb {
-                    failure = (gw.status, "web")
-                } else if let zn = zen {
-                    failure = (zn.status, "web")
-                } else if let api = goApi {
-                    failure = (api.status, "api")
-                } else {
-                    failure = ("unauthorized", apiKey.isEmpty || !cookie.isEmpty ? "web" : "api")
-                }
-                if let f = failure { status = f.status; source = f.source }
-            }
-
-            // The key's own identity, published whenever this account holds one:
-            // the same key on another device with no cookie identifies itself by
-            // the key alone, so the two devices group into one account.
-            let keyIdentity = apiKey.isEmpty ? "" : hashKey("opencode", goApiIdentity(apiKey))
-
-            // Stable accountKey: workspaceId (preferred), then the key, then the
-            // cookie hash — never the user-editable profile name. The key ranks
-            // above the cookie hash because it is the same string on every
-            // device, while a cookie is per-browser-session.
-            var accountKey = identity.accountKey
-            if accountKey.isEmpty { accountKey = keyIdentity }
-            if accountKey.isEmpty && !cookie.isEmpty {
-                accountKey = hashKey("opencode", "cookie:\(sha256HexPrefix(cookie, 12))")
-            }
-            let boundKeyAlias = accountKey == keyIdentity ? "" : keyIdentity
-
-            return normalizeLimitProvider(ProviderInput(
-                provider: "opencode",
-                accountKey: accountKey,
-                // Only a cookie yields a workspace identity. The Hub picks the
-                // canonical identity from webAccountKeys it collects, so
-                // publishing the key's hash here would let an API-only device's
-                // identity win over a real workspace id.
-                webAccountKey: identity.accountKey,
-                accountKeyAliases: identity.aliases + (boundKeyAlias.isEmpty ? [] : [boundKeyAlias]),
-                accountLabel: name,
-                planLabel: planLabel,
-                accountName: name,
-                status: status,
-                source: source,
-                sourceDetail: "managed",
-                updatedAt: updatedAt,
-                windows: windows,
-                balanceUsd: balanceUsd
-            ))
-        }
-
-        // Timeout / network-error path. Same identity ranking as the success
-        // path, so a timeout does not hand the account a different accountKey.
-        let keyIdentity = apiKey.isEmpty ? "" : hashKey("opencode", goApiIdentity(apiKey))
-        var accountKey = keyIdentity
-        if accountKey.isEmpty && !cookie.isEmpty {
-            accountKey = hashKey("opencode", "cookie:\(sha256HexPrefix(cookie, 12))")
-        }
-        return normalizeLimitProvider(ProviderInput(
-            provider: "opencode",
-            accountKey: accountKey,
-            // No webAccountKey: this row probed nothing, so it has no workspace
-            // identity to offer.
-            accountLabel: name,
-            planLabel: "",
-            accountName: name,
-            status: "unavailable",
-            source: apiKey.isEmpty || !cookie.isEmpty ? "web" : "api",
-            sourceDetail: "managed",
-            updatedAt: updatedAt,
-            windows: [],
-            balanceUsd: nil
-        ))
-    }
-
-    // MARK: - opencodeWeb.js ports
-
-    private static let baseURL = "https://opencode.ai"
-    private static let serverURL = "https://opencode.ai/_server"
-    private static let workspacesServerID = "def39973159c7f0483d8793a822b8dbb10d067e12c65455fcb4608459ba0234f"
-    private static let subscriptionServerID = "7abeebee372f304e050aaaf92be863f4a86490e382f8c79db68fd94040d691b4"
-
-    private static let browserUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
-
-    private static let pctKeys = ["usagePercent", "usedPercent", "percentUsed", "percent", "usage_percent", "used_percent", "utilization", "utilizationPercent", "utilization_percent", "usage"]
-    private static let resetSecKeys = ["resetInSec", "resetInSeconds", "resetSeconds", "reset_sec", "reset_in_sec", "resetsInSec", "resetsInSeconds", "resetIn", "resetSec"]
-    private static let resetAtKeys = ["resetAt", "resetsAt", "reset_at", "resets_at", "nextReset", "next_reset", "renewAt", "renew_at"]
-    private static let balanceKeys = ["balanceUSD", "balanceUsd", "currentBalance", "zenBalance", "currentBalanceUSD"]
-
-    private static let goWindowMinutes: [String: Int] = ["session": 300, "weekly": 10080, "monthly": 43200]
-
-    private static func sanitizeCookieHeader(_ raw: String) -> String {
-        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if text.isEmpty { return "" }
-        if let r = text.range(of: "^cookie\\s*:\\s*", options: .regularExpression) { text.removeSubrange(r) }
-        let parts = text.split(separator: ";").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-        let cleaned = parts.joined(separator: "; ")
-        if !cleaned.isEmpty && !cleaned.contains("=") { return "auth=\(cleaned)" }
-        return cleaned
-    }
-
-    private static func serverRequestUrl(_ serverId: String, args: [String]?, method: String) -> String {
-        if method.uppercased() != "GET" { return serverURL }
-        var comps = URLComponents(string: serverURL)!
-        var items = [URLQueryItem(name: "id", value: serverId)]
-        if let args, !args.isEmpty {
-            if let data = try? JSONSerialization.data(withJSONObject: args),
-               let s = String(data: data, encoding: .utf8) {
-                items.append(URLQueryItem(name: "args", value: s))
-            }
-        }
-        comps.queryItems = items
-        return comps.url!.absoluteString
-    }
-
-    private static func buildHeaders(_ serverId: String, cookieHeader: String, referer: String) -> [String: String] {
-        return [
-            "Cookie": cookieHeader,
-            "X-Server-Id": serverId,
-            "X-Server-Instance": "server-fn:\(UUID().uuidString.lowercased())",
-            "User-Agent": browserUserAgent,
-            "Origin": baseURL,
-            "Referer": referer.isEmpty ? baseURL : referer,
-            "Accept": "text/javascript, application/json;q=0.9, */*;q=0.8"
-        ]
-    }
+    private static func round1(_ v: Double) -> Double { (v * 10).rounded() / 10 }
+    private static func round3(_ v: Double) -> Double { (v * 1000).rounded() / 1000 }
+    private static func clampPct(_ v: Double) -> Double { max(0, min(100, v)) }
 
     private static func asNum(_ value: Any) -> Double? {
         if let n = value as? Double { return n.isFinite ? n : nil }
@@ -534,209 +248,8 @@ enum OpencodeLimits {
         return nil
     }
 
-    private static func round1(_ v: Double) -> Double { (v * 10).rounded() / 10 }
-    private static func round3(_ v: Double) -> Double { (v * 1000).rounded() / 1000 }
-    private static func clampPct(_ v: Double) -> Double { max(0, min(100, v)) }
-
-    /// Ports opencodeWeb.js `toMs`: returns milliseconds. Numbers >1e12 are already
-    /// ms; >1e9 are seconds; strings are parsed as dates (milliseconds since epoch).
-    private static func toMs(_ value: Any) -> Double? {
-        if let n = asNum(value) {
-            if n > 1e12 { return n }
-            if n > 1e9 { return n * 1000 }
-            return nil
-        }
-        if let s = value as? String {
-            let f = ISO8601DateFormatter.parsingAny
-            if let d = f.date(from: s) { return d.timeIntervalSince1970 * 1000 }
-            return nil
-        }
-        return nil
-    }
-
-    private static func pick(_ obj: JSON, _ keys: [String]) -> Any? {
-        for k in keys {
-            if let v = obj[k], !(v is NSNull) { return v }
-        }
-        return nil
-    }
-
-    private static func parseWorkspaceIds(_ text: String) -> [String] {
-        var ids: [String] = []
-        var seen = Set<String>()
-        let re = try! NSRegularExpression(pattern: "id\\s*[:=]\\s*\"(wrk_[^\"]+)\"")
-        let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        for m in re.matches(in: text, range: range) {
-            if let r = Range(m.range(at: 1), in: text) {
-                let id = String(text[r])
-                if !seen.contains(id) { seen.insert(id); ids.append(id) }
-            }
-        }
-        if ids.isEmpty {
-            if let data = text.data(using: .utf8),
-               let obj = try? JSONSerialization.jsonObject(with: data) {
-                walkWorkspaceIds(obj, &seen, &ids)
-            }
-        }
-        return ids
-    }
-
-    private static func walkWorkspaceIds(_ value: Any, _ seen: inout Set<String>, _ ids: inout [String]) {
-        if let s = value as? String, s.hasPrefix("wrk_"), !seen.contains(s) {
-            seen.insert(s); ids.append(s)
-            return
-        }
-        if let arr = value as? [Any] {
-            for v in arr { walkWorkspaceIds(v, &seen, &ids) }
-        } else if let dict = value as? JSON {
-            for (_, v) in dict { walkWorkspaceIds(v, &seen, &ids) }
-        }
-    }
-
-    private static func parseWindowObj(_ obj: Any?, kind: String, windowMinutes: Int, nowMs: Int64) -> Window? {
-        guard let dict = obj as? JSON, !dict.isEmpty else { return nil }
-        var pct: Double? = nil
-        for k in pctKeys {
-            if let v = dict[k], let n = asNum(v) { pct = n; break }
-        }
-        if pct == nil {
-            let used = asNum(pick(dict, ["used", "consumed"]) ?? NSNull())
-            let limit = asNum(pick(dict, ["limit", "total", "quota", "max", "cap"]) ?? NSNull())
-            if let u = used, let l = limit, l > 0 { pct = (u / l) * 100 }
-        }
-        guard var pctValue = pct else { return nil }
-        if pctValue <= 1 && pctValue >= 0 { pctValue *= 100 }
-        pctValue = round1(clampPct(pctValue))
-        var resetSec: Double? = nil
-        for k in resetSecKeys {
-            if let v = dict[k], let n = asNum(v) { resetSec = n; break }
-        }
-        if resetSec == nil {
-            if let v = pick(dict, resetAtKeys), let ms = toMs(v) {
-                resetSec = max(0, ((ms - Double(nowMs)) / 1000).rounded())
-            }
-        }
-        let sec = max(0, resetSec ?? 0)
-        return Window(
-            kind: kind,
-            usedPercent: pctValue,
-            used: nil,
-            limit: nil,
-            resetsAt: Date(timeIntervalSince1970: Double(nowMs) / 1000 + sec),
-            windowMinutes: windowMinutes
-        )
-    }
-
-    private static func findByKeyword(_ obj: Any?, _ keyword: String, depth: Int = 0) -> JSON? {
-        guard depth <= 4 else { return nil }
-        if let dict = obj as? JSON {
-            for (k, v) in dict where k.lowercased().contains(keyword) {
-                if let nested = v as? JSON { return nested }
-            }
-            for (_, v) in dict {
-                if let nested = v as? JSON, let found = findByKeyword(nested, keyword, depth: depth + 1) {
-                    return found
-                }
-            }
-        }
-        return nil
-    }
-
-    private static func findBalance(_ obj: Any?, depth: Int = 0) -> Double? {
-        guard depth <= 4 else { return nil }
-        if let dict = obj as? JSON {
-            for k in balanceKeys {
-                if let v = dict[k], let n = asNum(v) { return n }
-            }
-            for (_, v) in dict {
-                if let nested = v as? JSON, let n = findBalance(nested, depth: depth + 1) { return n }
-            }
-        }
-        return nil
-    }
-
-    private static func extractWindowByRegex(_ text: String, windowKey: String, kind: String, windowMinutes: Int, nowMs: Int64) -> Window? {
-        let pctRe = try! NSRegularExpression(pattern: "\(NSRegularExpression.escapedPattern(for: windowKey))[^}]*?usagePercent\\s*:\\s*([0-9]+(?:\\.[0-9]+)?)")
-        let pctRange = NSRange(text.startIndex..<text.endIndex, in: text)
-        guard let pm = pctRe.firstMatch(in: text, range: pctRange),
-              let gr = Range(pm.range(at: 1), in: text),
-              let pv = Double(text[gr]) else { return nil }
-        let resetRe = try! NSRegularExpression(pattern: "\(NSRegularExpression.escapedPattern(for: windowKey))[^}]*?resetInSec\\s*:\\s*([0-9]+)")
-        var resetSec = 0.0
-        if let rm = resetRe.firstMatch(in: text, range: pctRange),
-           let rr = Range(rm.range(at: 1), in: text),
-           let rv = Double(text[rr]) {
-            resetSec = max(0, rv)
-        }
-        return Window(
-            kind: kind,
-            usedPercent: round1(clampPct(pv)),
-            used: nil,
-            limit: nil,
-            resetsAt: Date(timeIntervalSince1970: Double(nowMs) / 1000 + resetSec),
-            windowMinutes: windowMinutes
-        )
-    }
-
-    private static func parseSubscription(_ text: String, nowMs: Int64) -> (windows: [Window], balanceUsd: Double?) {
-        if text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "null" {
-            return ([], nil)
-        }
-        var windows: [Window] = []
-        var balanceUsd: Double? = nil
-
-        var rootObj: Any? = nil
-        if let data = text.data(using: .utf8),
-           let obj = try? JSONSerialization.jsonObject(with: data) as? JSON {
-            rootObj = obj
-        }
-
-        if let root = rootObj as? JSON {
-            if let w1 = parseWindowObj(findByKeyword(root, "rolling"), kind: "session", windowMinutes: 300, nowMs: nowMs) { windows.append(w1) }
-            let weeklyObj = findByKeyword(root, "weekly") ?? findByKeyword(root, "week")
-            if let w2 = parseWindowObj(weeklyObj, kind: "weekly", windowMinutes: 10080, nowMs: nowMs) { windows.append(w2) }
-            balanceUsd = findBalance(root)
-        }
-
-        if windows.isEmpty {
-            if let r1 = extractWindowByRegex(text, windowKey: "rollingUsage", kind: "session", windowMinutes: 300, nowMs: nowMs) { windows.append(r1) }
-            if let r2 = extractWindowByRegex(text, windowKey: "weeklyUsage", kind: "weekly", windowMinutes: 10080, nowMs: nowMs) { windows.append(r2) }
-        }
-
-        if balanceUsd == nil {
-            let bm = try! NSRegularExpression(pattern: "(?:balanceUSD|currentBalance|zenBalance|balanceUsd)[^0-9-]{0,20}([0-9]+(?:\\.[0-9]+)?)", options: .caseInsensitive)
-            let range = NSRange(text.startIndex..<text.endIndex, in: text)
-            if let m = bm.firstMatch(in: text, range: range),
-               let r = Range(m.range(at: 1), in: text),
-               let bv = Double(text[r]) {
-                balanceUsd = bv
-            }
-        }
-        return (windows, balanceUsd)
-    }
-
-    private static func looksSignedOut(_ text: String) -> Bool {
-        let l = text.lowercased()
-        return l.contains("login") || l.contains("sign in") || l.contains("auth/authorize")
-            || l.contains("not associated with an account") || l.contains("actor of type \"public\"")
-    }
-
-    private static func normalizeWorkspaceId(_ raw: String) -> String? {
-        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if text.isEmpty { return nil }
-        let re = try! NSRegularExpression(pattern: "wrk_[A-Za-z0-9]+")
-        let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        guard let m = re.firstMatch(in: text, range: range), let r = Range(m.range, in: text) else { return nil }
-        return String(text[r])
-    }
-
-    // MARK: - fetchServerText / resolveWorkspaceId / fetchZen / fetchGoWeb
-
     private enum FetchError: Error { case timeout }
 
-    /// Races `body` against a deadline; the first completion wins and the
-    /// losing tasks are cancelled. URLSession requests honour the
-    /// cancellation, so a hung probe cannot outlive the race.
     private static func withTimeout<T>(_ seconds: TimeInterval, _ body: @escaping () async throws -> T) async throws -> T {
         try await withThrowingTaskGroup(of: T.self) { group in
             group.addTask { try await body() }
@@ -747,171 +260,6 @@ enum OpencodeLimits {
             guard let first = try await group.next() else { throw FetchError.timeout }
             group.cancelAll()
             return first
-        }
-    }
-
-    private static func fetchServerText(
-        serverId: String, args: [String]?, method: String, cookieHeader: String, referer: String
-    ) async throws -> (status: Int, text: String) {
-        let url = serverRequestUrl(serverId, args: args, method: method)
-        var headers = buildHeaders(serverId, cookieHeader: cookieHeader, referer: referer)
-        var request = URLRequest(url: URL(string: url)!)
-        request.httpMethod = method
-        if method.uppercased() != "GET", let args {
-            headers["Content-Type"] = "application/json"
-            request.httpBody = try JSONSerialization.data(withJSONObject: args)
-        }
-        for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
-        let (data, response) = try await URLSession.shared.data(for: request)
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        let text = String(data: data, encoding: .utf8) ?? ""
-        return (status, text)
-    }
-
-    private static func resolveWorkspaceId(cookie: String) async throws -> (status: String, workspaceId: String) {
-        let cookieHeader = sanitizeCookieHeader(cookie)
-        if cookieHeader.isEmpty {
-            return ("notConfigured", "")
-        }
-        var wsText = try await fetchServerText(
-            serverId: workspacesServerID, args: nil, method: "GET", cookieHeader: cookieHeader, referer: baseURL
-        )
-        if wsText.status == 401 || wsText.status == 403 || looksSignedOut(wsText.text) {
-            return ("unauthorized", "")
-        }
-        var ids = parseWorkspaceIds(wsText.text)
-        if ids.isEmpty {
-            wsText = try await fetchServerText(
-                serverId: workspacesServerID, args: [], method: "POST", cookieHeader: cookieHeader, referer: baseURL
-            )
-            if looksSignedOut(wsText.text) { return ("unauthorized", "") }
-            ids = parseWorkspaceIds(wsText.text)
-        }
-        if ids.isEmpty { return ("unavailable", "") }
-        return ("ok", ids[0])
-    }
-
-    private static func fetchZen(cookie: String, nowMs: Int64) async -> (status: String, windows: [Window], balanceUsd: Double?, workspaceId: String) {
-        let fail = { (status: String) in
-            (status: status, windows: [] as [Window], balanceUsd: nil as Double?, workspaceId: "" as String)
-        }
-        let sanitized = sanitizeCookieHeader(cookie)
-        if sanitized.isEmpty { return fail("notConfigured") }
-
-        do {
-            let ws = try await resolveWorkspaceId(cookie: cookie)
-            if ws.status != "ok" { return fail(ws.status) }
-            let workspaceId = ws.workspaceId
-            let referer = "\(baseURL)/workspace/\(workspaceId)/billing"
-
-            func badSubStatus(_ r: (status: Int, text: String)) -> String? {
-                if r.status == 429 { return "sourceRateLimited" }
-                if r.status == 401 || r.status == 403 || looksSignedOut(r.text) { return "unauthorized" }
-                return nil
-            }
-            func isExplicitNull(_ t: String) -> Bool {
-                t.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "null"
-            }
-
-            var subText = try await fetchServerText(
-                serverId: subscriptionServerID, args: [workspaceId], method: "GET", cookieHeader: sanitized, referer: referer
-            )
-            if let bad = badSubStatus(subText) { return fail(bad) }
-            var parsed = parseSubscription(subText.text, nowMs: nowMs)
-            if parsed.windows.isEmpty && parsed.balanceUsd == nil && !isExplicitNull(subText.text) {
-                subText = try await fetchServerText(
-                    serverId: subscriptionServerID, args: [workspaceId], method: "POST", cookieHeader: sanitized, referer: referer
-                )
-                if let bad = badSubStatus(subText) { return fail(bad) }
-                parsed = parseSubscription(subText.text, nowMs: nowMs)
-            }
-            return (status: "ok", windows: parsed.windows, balanceUsd: parsed.balanceUsd, workspaceId: workspaceId)
-        } catch {
-            return fail("unavailable")
-        }
-    }
-
-    private static func fetchGoPageText(workspaceId: String, cookieHeader: String) async throws -> (status: Int, text: String) {
-        let url = "\(baseURL)/workspace/\(workspaceId)/go"
-        var request = URLRequest(url: URL(string: url)!)
-        request.httpMethod = "GET"
-        request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
-        request.setValue(browserUserAgent, forHTTPHeaderField: "User-Agent")
-        request.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", forHTTPHeaderField: "Accept")
-        let (data, response) = try await URLSession.shared.data(for: request)
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        let text = String(data: data, encoding: .utf8) ?? ""
-        return (status, text)
-    }
-
-    private static func extractGoWindow(_ text: String, key: String, kind: String, nowMs: Int64) -> Window? {
-        let pctRe = try! NSRegularExpression(pattern: "\(NSRegularExpression.escapedPattern(for: key))[^}]*?usagePercent\\s*[:=]\\s*([0-9]+(?:\\.[0-9]+)?)")
-        let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        guard let pm = pctRe.firstMatch(in: text, range: range),
-              let gr = Range(pm.range(at: 1), in: text),
-              let pv = Double(text[gr]) else { return nil }
-        let resetRe = try! NSRegularExpression(pattern: "\(NSRegularExpression.escapedPattern(for: key))[^}]*?resetInSec\\s*[:=]\\s*([0-9]+)")
-        var resetSec = 0.0
-        if let rm = resetRe.firstMatch(in: text, range: range),
-           let rr = Range(rm.range(at: 1), in: text),
-           let rv = Double(text[rr]) {
-            resetSec = max(0, rv)
-        }
-        return Window(
-            kind: kind,
-            usedPercent: round1(clampPct(pv)),
-            used: nil,
-            limit: nil,
-            resetsAt: Date(timeIntervalSince1970: Double(nowMs) / 1000 + resetSec),
-            windowMinutes: goWindowMinutes[kind] ?? 0
-        )
-    }
-
-    private static func parseGoUsageJson(_ text: String, nowMs: Int64) -> [Window] {
-        guard let data = text.data(using: .utf8),
-              let root = try? JSONSerialization.jsonObject(with: data) as? JSON, !root.isEmpty else { return [] }
-        let rolling = parseWindowObj(findByKeyword(root, "rolling"), kind: "session", windowMinutes: goWindowMinutes["session"]!, nowMs: nowMs)
-        let weeklyObj = findByKeyword(root, "weekly") ?? findByKeyword(root, "week")
-        let weekly = parseWindowObj(weeklyObj, kind: "weekly", windowMinutes: goWindowMinutes["weekly"]!, nowMs: nowMs)
-        let monthlyObj = findByKeyword(root, "monthly") ?? findByKeyword(root, "month")
-        let monthly = parseWindowObj(monthlyObj, kind: "monthly", windowMinutes: goWindowMinutes["monthly"]!, nowMs: nowMs)
-        guard let rolling, let weekly else { return [] }
-        var windows = [rolling, weekly]
-        if let monthly { windows.append(monthly) }
-        return windows
-    }
-
-    private static func parseGoUsage(_ text: String, nowMs: Int64) -> [Window] {
-        let fromJson = parseGoUsageJson(text, nowMs: nowMs)
-        if !fromJson.isEmpty { return fromJson }
-        guard let rolling = extractGoWindow(text, key: "rollingUsage", kind: "session", nowMs: nowMs),
-              let weekly = extractGoWindow(text, key: "weeklyUsage", kind: "weekly", nowMs: nowMs) else { return [] }
-        var windows = [rolling, weekly]
-        if let monthly = extractGoWindow(text, key: "monthlyUsage", kind: "monthly", nowMs: nowMs) { windows.append(monthly) }
-        return windows
-    }
-
-    private static func fetchGoWeb(cookie: String, nowMs: Int64) async -> (status: String, windows: [Window], workspaceId: String) {
-        let fail = { (status: String, workspaceId: String) in
-            (status: status, windows: [] as [Window], workspaceId: workspaceId as String)
-        }
-        let sanitized = sanitizeCookieHeader(cookie)
-        if sanitized.isEmpty { return fail("notConfigured", "") }
-        do {
-            let ws = try await resolveWorkspaceId(cookie: cookie)
-            if ws.status != "ok" { return fail(ws.status, "") }
-            let workspaceId = ws.workspaceId
-            let page = try await fetchGoPageText(workspaceId: workspaceId, cookieHeader: sanitized)
-            if page.status == 429 { return fail("sourceRateLimited", workspaceId) }
-            if page.status == 401 || page.status == 403 || looksSignedOut(page.text) {
-                return fail("unauthorized", workspaceId)
-            }
-            if page.status != 200 { return fail("unavailable", workspaceId) }
-            let windows = parseGoUsage(page.text, nowMs: nowMs)
-            if windows.isEmpty { return fail("unavailable", workspaceId) }
-            return (status: "ok", windows: windows, workspaceId: workspaceId)
-        } catch {
-            return fail("unavailable", "")
         }
     }
 
