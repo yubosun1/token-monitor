@@ -4681,7 +4681,7 @@ async function loadHomeHistory() {
         void loadHomeHistory();
       }, HOME_HISTORY_RETRY_MS);
     }
-    if (state.breakdown === 'home') render();
+    if (state.breakdown === 'home' || fixedPeriodRangesApi.isDerived(state.period)) render();
   }
 }
 
@@ -5600,6 +5600,13 @@ function render() {
   // Leaving Home only CSS-hides the panel, so its heatmap scroller never sees a
   // pointerleave — dismiss the body-level tooltip here (renderHome covers rerenders).
   if (state.breakdown !== 'home') hideHomeActivityTooltip();
+  if (fixedPeriodRangesApi.isDerived(state.period) && homeOverviewApi.shouldFetchHomeHistory({
+    requested: state.homeHistoryRequested,
+    stats: state.stats,
+    lastSignature: state.homeHistorySignature
+  })) {
+    void loadHomeHistory();
+  }
   if (state.breakdown === 'home') {
     els.breakdown.classList.add('hidden');
     els.trendsPanel.classList.add('hidden');
@@ -5990,8 +5997,15 @@ function currentPeriodData() {
     return state.stats.periods[state.period];
   }
   if (fixedPeriodRangesApi.isDerived(state.period)) {
+    const history = homeOverviewApi.pickHomeHistory(state.homeHistory, state.stats.historyPreview);
+    const todayPeriod = state.stats.periods?.today;
+    const todayDate = fixedPeriodRangesApi.localDayKey();
+    const rawDaily = history?.daily || [];
+    const daily = todayPeriod
+      ? homeOverviewApi.patchDailyToday(rawDaily, todayDate, todayPeriod.totalTokens, todayPeriod.costUsd)
+      : rawDaily;
     const snap = fixedPeriodRangesApi.fixedPeriodSnapshot(state.period, {
-      daily: state.stats.history?.daily || state.homeHistory?.daily || [],
+      daily,
       now: new Date(),
       customStart: state.settings?.customPeriodStart,
       customEnd: state.settings?.customPeriodEnd
@@ -6004,7 +6018,10 @@ function currentPeriodData() {
 function syncPeriodMenu() {
   if (!els.monthPeriodMenu) return;
   els.monthPeriodMenu.classList.toggle('hidden', !state.periodMenuOpen);
-  const currentMode = fixedPeriodRangesApi.normalizeMonthMode(state.period);
+  const activeSlot = fixedPeriodRangesApi.slotForSelection(state.period);
+  const currentMode = activeSlot === 'month'
+    ? fixedPeriodRangesApi.normalizeMonthMode(state.period)
+    : fixedPeriodRangesApi.normalizeMonthMode(state.settings?.periodMonthMode);
   for (const item of els.monthPeriodMenu.querySelectorAll('[data-fixed-period]')) {
     item.classList.toggle('active', item.dataset.fixedPeriod === currentMode);
   }
@@ -8197,6 +8214,20 @@ document.addEventListener('click', (event) => {
   if (!state.periodMenuOpen) return;
   if (els.monthPeriodMenu?.contains(event.target) || els.monthPeriodTab?.contains(event.target)) return;
   state.periodMenuOpen = false;
+  syncPeriodMenu();
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && state.periodMenuOpen) {
+    state.periodMenuOpen = false;
+    syncPeriodMenu();
+  }
+});
+
+els.monthPeriodTab?.addEventListener('contextmenu', (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  state.periodMenuOpen = !state.periodMenuOpen;
   syncPeriodMenu();
 });
 
