@@ -849,13 +849,286 @@ enum SessionDetailCore {
         return ([], 0, false)
     }
 
+    private static func readAntigravitySessionBreakdown(sessionId: String, period: String) -> JSON? {
+        let home = NSHomeDirectory()
+        let cleanId: String
+        if let atIdx = sessionId.firstIndex(of: "@") {
+            cleanId = String(sessionId[..<atIdx])
+        } else {
+            cleanId = sessionId
+        }
+        guard !cleanId.isEmpty else { return nil }
+
+        var roots = [
+            home + "/.config/tokscale/antigravity-cache/sessions",
+            home + "/Library/Application Support/tokscale/antigravity-cache/sessions"
+        ]
+        if let env = ProcessInfo.processInfo.environment["TOKSCALE_CONFIG_DIR"], !env.isEmpty {
+            roots.append(env + "/antigravity-cache/sessions")
+        }
+
+        var targetFile: URL?
+        let fm = FileManager.default
+        for root in roots {
+            guard let files = try? fm.contentsOfDirectory(at: URL(fileURLWithPath: root), includingPropertiesForKeys: nil) else { continue }
+            for file in files where file.pathExtension == "jsonl" {
+                let name = file.lastPathComponent
+                if name.contains(cleanId) {
+                    targetFile = file
+                    break
+                }
+            }
+            if targetFile != nil { break }
+        }
+
+        guard let file = targetFile, let data = try? Data(contentsOf: file) else { return nil }
+
+        struct ModelAcc {
+            var input = 0.0
+            var output = 0.0
+            var cacheRead = 0.0
+            var cacheWrite = 0.0
+            var reasoning = 0.0
+            var messages = 0
+            var cost = 0.0
+        }
+
+        var modelMap: [String: ModelAcc] = [:]
+        var minStart = 0.0
+        var maxUsed = 0.0
+
+        for obj in Adapters.parseJsonlLines(data) {
+            guard (obj["type"] as? String) == "usage" else { continue }
+            let modelId = (obj["modelId"] as? String) ?? (obj["model_id"] as? String) ?? (obj["model"] as? String) ?? "gemini-3.7-flash"
+            let inTk = UsageCore.doubleValue(obj["input"] ?? obj["inputTokens"] ?? obj["input_tokens"])
+            let outTk = UsageCore.doubleValue(obj["output"] ?? obj["outputTokens"] ?? obj["output_tokens"])
+            let crTk = UsageCore.doubleValue(obj["cacheRead"] ?? obj["cacheReadTokens"] ?? obj["cache_read"] ?? obj["cache_read_tokens"])
+            let cwTk = UsageCore.doubleValue(obj["cacheWrite"] ?? obj["cacheWriteTokens"] ?? obj["cache_write"] ?? obj["cache_write_tokens"])
+            let reTk = UsageCore.doubleValue(obj["reasoning"] ?? obj["reasoningTokens"] ?? obj["reasoning_tokens"])
+            let ts = obj["timestamp"] != nil && !(obj["timestamp"] is NSNull) ? UsageCore.timestampMs(obj["timestamp"]) : 0
+
+            if ts > 0 {
+                if minStart == 0 || ts < minStart { minStart = ts }
+                if ts > maxUsed { maxUsed = ts }
+            }
+
+            var acc = modelMap[modelId] ?? ModelAcc()
+            acc.input += inTk
+            acc.output += outTk
+            acc.cacheRead += crTk
+            acc.cacheWrite += cwTk
+            acc.reasoning += reTk
+            acc.messages += 1
+            modelMap[modelId] = acc
+        }
+
+        guard !modelMap.isEmpty else { return nil }
+
+        var totalInput = 0.0
+        var totalOutput = 0.0
+        var totalCacheRead = 0.0
+        var totalCacheWrite = 0.0
+        var totalReasoning = 0.0
+        var totalMessages = 0
+        var totalCost = 0.0
+
+        var models: [JSON] = []
+        for (mId, acc) in modelMap {
+            let mTotal = acc.input + acc.output + acc.cacheRead + acc.cacheWrite
+            totalInput += acc.input
+            totalOutput += acc.output
+            totalCacheRead += acc.cacheRead
+            totalCacheWrite += acc.cacheWrite
+            totalReasoning += acc.reasoning
+            totalMessages += acc.messages
+            totalCost += acc.cost
+
+            models.append([
+                "modelId": mId,
+                "provider": "google",
+                "totalTokens": Int(mTotal.rounded()),
+                "inputTokens": Int(acc.input.rounded()),
+                "outputTokens": Int(acc.output.rounded()),
+                "cacheReadTokens": Int(acc.cacheRead.rounded()),
+                "cacheWriteTokens": Int(acc.cacheWrite.rounded()),
+                "reasoningTokens": Int(acc.reasoning.rounded()),
+                "messageCount": acc.messages,
+                "costUsd": acc.cost
+            ])
+        }
+
+        models.sort { ($0["totalTokens"] as? Int ?? 0) > ($1["totalTokens"] as? Int ?? 0) }
+
+        let totalSessionTokens = totalInput + totalOutput + totalCacheRead + totalCacheWrite
+        let totalPrompt = totalInput + totalCacheRead + totalCacheWrite
+        let cacheHitRate = totalPrompt > 0 ? (totalCacheRead / totalPrompt * 100.0) : 0.0
+
+        for i in 0..<models.count {
+            let mTokens = Double(models[i]["totalTokens"] as? Int ?? 0)
+            let pct = totalSessionTokens > 0 ? (mTokens / totalSessionTokens * 100.0) : 0.0
+            models[i]["percent"] = (pct * 10).rounded() / 10.0
+            let inTk = Double(models[i]["inputTokens"] as? Int ?? 0)
+            let crTk = Double(models[i]["cacheReadTokens"] as? Int ?? 0)
+            let cwTk = Double(models[i]["cacheWriteTokens"] as? Int ?? 0)
+            let mTotalPrompt = inTk + crTk + cwTk
+            let mCacheHitRate = mTotalPrompt > 0 ? (crTk / mTotalPrompt * 100.0) : 0.0
+            models[i]["cacheHitRate"] = (mCacheHitRate * 10).rounded() / 10.0
+        }
+
+        return [
+            "found": true,
+            "client": "antigravity",
+            "sessionId": sessionId,
+            "period": period,
+            "totalTokens": Int(totalSessionTokens.rounded()),
+            "costUsd": totalCost,
+            "messageCount": totalMessages,
+            "startedAt": minStart > 0 ? UsageCore.isoFromMs(minStart) : "",
+            "lastUsedAt": maxUsed > 0 ? UsageCore.isoFromMs(maxUsed) : "",
+            "models": models,
+            "totals": [
+                "inputTokens": Int(totalInput.rounded()),
+                "outputTokens": Int(totalOutput.rounded()),
+                "cacheReadTokens": Int(totalCacheRead.rounded()),
+                "cacheWriteTokens": Int(totalCacheWrite.rounded()),
+                "reasoningTokens": Int(totalReasoning.rounded()),
+                "cacheHitRate": (cacheHitRate * 10).rounded() / 10.0
+            ]
+        ]
+    }
+
+    // MARK: - Kimi Live Session Breakdown
+
+    static func readKimiSessionBreakdown(sessionId: String, period: String = "total") -> JSON? {
+        let cleanId = sessionId.replacingOccurrences(of: "@.*$", with: "", options: .regularExpression)
+        for root in Adapters.kimiRoots {
+            let sessionDirs = Adapters.findKimiSessionDirs(at: root)
+            for sDir in sessionDirs {
+                let name = sDir.lastPathComponent
+                if name == sessionId || name == cleanId || name.contains(cleanId) {
+                    let rows = Adapters.parseKimiSessionDir(sDir)
+                    guard !rows.isEmpty else { continue }
+                    return buildModelBreakdownFromRows(client: "kimi", sessionId: sessionId, period: period, rows: rows)
+                }
+            }
+        }
+        return nil
+    }
+
+    private static func buildModelBreakdownFromRows(client: String, sessionId: String, period: String, rows: [UsageCore.UsageRow]) -> JSON {
+        var totalTokens: Double = 0
+        var totalInput: Double = 0
+        var totalOutput: Double = 0
+        var totalCacheRead: Double = 0
+        var totalCacheWrite: Double = 0
+        var totalReasoning: Double = 0
+        var totalCost: Double = 0
+        var totalMessages: Int = 0
+        var minStart: Double = 0
+        var maxUsed: Double = 0
+
+        var models: [[String: Any]] = []
+        for r in rows {
+            let inTk = r.input
+            let outTk = r.output
+            let crTk = r.cacheRead
+            let cwTk = r.cacheWrite
+            let rzTk = r.reasoning
+            let cost = r.cost
+            let msgs = Int(r.messageCount)
+            let mTokens = inTk + outTk + crTk + cwTk
+
+            totalTokens += mTokens
+            totalInput += inTk
+            totalOutput += outTk
+            totalCacheRead += crTk
+            totalCacheWrite += cwTk
+            totalReasoning += rzTk
+            totalCost += cost
+            totalMessages += msgs
+
+            if r.startedAt > 0 && (minStart == 0 || r.startedAt < minStart) { minStart = r.startedAt }
+            if r.lastUsedAt > 0 && r.lastUsedAt > maxUsed { maxUsed = r.lastUsedAt }
+
+            let mTotalInput = inTk + crTk + cwTk
+            let mCacheHitRate = mTotalInput > 0 ? (crTk / mTotalInput * 100.0) : 0.0
+
+            models.append([
+                "modelId": r.model ?? "unknown",
+                "totalTokens": Int(mTokens.rounded()),
+                "percent": 0.0,
+                "inputTokens": Int(inTk.rounded()),
+                "outputTokens": Int(outTk.rounded()),
+                "cacheReadTokens": Int(crTk.rounded()),
+                "cacheWriteTokens": Int(cwTk.rounded()),
+                "reasoningTokens": Int(rzTk.rounded()),
+                "costUsd": cost,
+                "cacheHitRate": (mCacheHitRate * 10).rounded() / 10.0,
+                "messageCount": msgs
+            ])
+        }
+
+        models.sort { ($0["totalTokens"] as? Int ?? 0) > ($1["totalTokens"] as? Int ?? 0) }
+        for i in 0..<models.count {
+            let mTokens = Double(models[i]["totalTokens"] as? Int ?? 0)
+            let pct = totalTokens > 0 ? (mTokens / totalTokens * 100.0) : 0.0
+            models[i]["percent"] = (pct * 10).rounded() / 10.0
+        }
+
+        let totalPrompt = totalInput + totalCacheRead + totalCacheWrite
+        let cacheHitRate = totalPrompt > 0 ? (totalCacheRead / totalPrompt * 100.0) : 0.0
+
+        return [
+            "found": true,
+            "client": client,
+            "sessionId": sessionId,
+            "period": period,
+            "totalTokens": Int(totalTokens.rounded()),
+            "costUsd": totalCost,
+            "messageCount": totalMessages,
+            "startedAt": minStart > 0 ? UsageCore.isoFromMs(minStart) : "",
+            "lastUsedAt": maxUsed > 0 ? UsageCore.isoFromMs(maxUsed) : "",
+            "models": models,
+            "totals": [
+                "inputTokens": Int(totalInput.rounded()),
+                "outputTokens": Int(totalOutput.rounded()),
+                "cacheReadTokens": Int(totalCacheRead.rounded()),
+                "cacheWriteTokens": Int(totalCacheWrite.rounded()),
+                "reasoningTokens": Int(totalReasoning.rounded()),
+                "cacheHitRate": (cacheHitRate * 10).rounded() / 10.0
+            ]
+        ]
+    }
+
     // MARK: - Entry point
 
     static func read(client: String, sessionId: String, period: String, sessionCost: Double) -> JSON {
-        let home = NSHomeDirectory()
-        let now = Date()
         let normalizedClient = client.trimmingCharacters(in: .whitespaces).lowercased()
         let normalizedPeriod = period.isEmpty ? "total" : period
+
+        // 1. Check persistent SQLite ledger first (covers all clients with historical & recorded sessions)
+        if let breakdown = HistoryLedger.shared.querySessionModelBreakdown(
+            client: normalizedClient,
+            sessionId: sessionId,
+            period: normalizedPeriod
+        ) {
+            return breakdown
+        }
+
+        // 2. Client-specific live / file fallbacks
+        if normalizedClient == "antigravity" {
+            if let breakdown = readAntigravitySessionBreakdown(sessionId: sessionId, period: normalizedPeriod) {
+                return breakdown
+            }
+        }
+        if normalizedClient == "kimi" {
+            if let breakdown = readKimiSessionBreakdown(sessionId: sessionId, period: normalizedPeriod) {
+                return breakdown
+            }
+        }
+
+        let home = NSHomeDirectory()
+        let now = Date()
 
         switch normalizedClient {
         case "claude", "codex", "proma", "hanako":

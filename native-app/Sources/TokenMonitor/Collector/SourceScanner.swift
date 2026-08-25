@@ -34,6 +34,14 @@ enum SourceScanner {
             roots.append(contentsOf: Adapters.hanakoRoots)
             return Array(Set(roots)).sorted()
         case "dsh": return [home + "/.dsh/sessions"]
+        case "kimi":
+            var roots = [home + "/.kimi-code/sessions", home + "/.kimi/sessions", home + "/.kimi-code", home + "/.kimi"]
+            let custom = kimiCodeHome()
+            if !custom.isEmpty {
+                roots.append(custom + "/sessions")
+                roots.append(custom)
+            }
+            return Array(Set(roots)).sorted()
         case "antigravity":
             var roots = [
                 home + "/.config/tokscale/antigravity-cache",
@@ -113,6 +121,9 @@ enum SourceScanner {
             return path.hasSuffix(".jsonl") && !Adapters.isDiagArtifact(path)
         case "dsh":
             return path.hasSuffix("session.jsonl.zstd")
+        case "kimi":
+            let lower = path.lowercased()
+            return lower.hasSuffix(".jsonl") || lower.hasSuffix(".json")
         case "antigravity":
             let lower = path.lowercased()
             return lower.hasSuffix(".jsonl")

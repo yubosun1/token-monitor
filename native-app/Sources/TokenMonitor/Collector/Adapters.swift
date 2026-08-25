@@ -715,6 +715,199 @@ enum Adapters {
         return rows
     }
 
+    // MARK: - Kimi Adapter (~/.kimi-code/sessions/wd_* / ~/.kimi/sessions)
+
+    static var kimiRoots: [String] {
+        let home = NSHomeDirectory()
+        var roots = [
+            home + "/.kimi-code/sessions",
+            home + "/.kimi/sessions"
+        ]
+        let custom = SourceScanner.kimiCodeHome()
+        if !custom.isEmpty {
+            roots.append(custom + "/sessions")
+        }
+        return Array(Set(roots)).filter { FileManager.default.fileExists(atPath: $0) }
+    }
+
+    static func collectKimiRows() -> [UsageCore.UsageRow] {
+        var rows: [UsageCore.UsageRow] = []
+        var seenSessionDirs = Set<String>()
+
+        for sessionsRoot in kimiRoots {
+            let sessionDirs = findKimiSessionDirs(at: sessionsRoot)
+            for sDir in sessionDirs {
+                let dirPath = sDir.path
+                guard seenSessionDirs.insert(dirPath).inserted else { continue }
+                autoreleasepool {
+                    rows.append(contentsOf: parseKimiSessionDir(sDir))
+                }
+            }
+        }
+        return sortRows(rows)
+    }
+
+    static func findKimiSessionDirs(at rootPath: String) -> [URL] {
+        let rootURL = URL(fileURLWithPath: rootPath)
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(at: rootURL, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) else {
+            return []
+        }
+        var sessionDirs: [URL] = []
+        for entry in entries {
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: entry.path, isDirectory: &isDir), isDir.boolValue else { continue }
+            let name = entry.lastPathComponent
+            if name.hasPrefix("session_") || fm.fileExists(atPath: entry.appendingPathComponent("state.json").path) {
+                sessionDirs.append(entry)
+            } else if name.hasPrefix("wd_") {
+                if let subEntries = try? fm.contentsOfDirectory(at: entry, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) {
+                    for sub in subEntries {
+                        var subIsDir: ObjCBool = false
+                        if fm.fileExists(atPath: sub.path, isDirectory: &subIsDir), subIsDir.boolValue {
+                            if sub.lastPathComponent.hasPrefix("session_") || fm.fileExists(atPath: sub.appendingPathComponent("state.json").path) {
+                                sessionDirs.append(sub)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return sessionDirs
+    }
+
+    static func parseKimiSessionDir(_ dir: URL) -> [UsageCore.UsageRow] {
+        let fm = FileManager.default
+        var sessionId = dir.lastPathComponent
+        var title = ""
+        var cwd = ""
+        var createdAt: Double = 0
+        var updatedAt: Double = 0
+
+        let stateUrl = dir.appendingPathComponent("state.json")
+        if let data = try? Data(contentsOf: stateUrl),
+           let json = try? JSONSerialization.jsonObject(with: data) as? JSON {
+            if let idStr = json["id"] as? String, !idStr.isEmpty { sessionId = idStr }
+            if let tStr = json["title"] as? String { title = tStr }
+            if let cStr = json["cwd"] as? String { cwd = cStr }
+            if let ca = json["createdAt"] as? Double { createdAt = ca }
+            else if let ca = json["createdAt"] as? Int64 { createdAt = Double(ca) }
+            if let ua = json["updatedAt"] as? Double { updatedAt = ua }
+            else if let ua = json["updatedAt"] as? Int64 { updatedAt = Double(ua) }
+        }
+
+        if updatedAt == 0 {
+            if let attrs = try? fm.attributesOfItem(atPath: dir.path), let mdate = attrs[.modificationDate] as? Date {
+                updatedAt = mdate.timeIntervalSince1970 * 1000
+            }
+        }
+        if createdAt == 0 { createdAt = updatedAt }
+
+        var wireFiles: [URL] = []
+        let directWire = dir.appendingPathComponent("wire.jsonl")
+        if fm.fileExists(atPath: directWire.path) { wireFiles.append(directWire) }
+
+        let agentsDir = dir.appendingPathComponent("agents")
+        if let agentEntries = try? fm.contentsOfDirectory(at: agentsDir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
+            for agentDir in agentEntries {
+                let agentWire = agentDir.appendingPathComponent("wire.jsonl")
+                if fm.fileExists(atPath: agentWire.path) {
+                    wireFiles.append(agentWire)
+                }
+            }
+        }
+
+        struct ModelUsageBucket {
+            var inputOther: Double = 0
+            var output: Double = 0
+            var cacheRead: Double = 0
+            var cacheCreation: Double = 0
+            var reasoning: Double = 0
+            var messageCount: Double = 0
+            var firstTime: Double = 0
+            var lastTime: Double = 0
+        }
+        var buckets: [String: ModelUsageBucket] = [:]
+
+        for wireFile in wireFiles {
+            guard let data = try? Data(contentsOf: wireFile) else { continue }
+            let lines = parseJsonlLines(data)
+            let hasUsageRecord = lines.contains { ($0["type"] as? String) == "usage.record" }
+
+            for line in lines {
+                guard let type = line["type"] as? String else { continue }
+                var usageObj: JSON?
+                var modelRaw: String?
+                var timeMs: Double = 0
+
+                if hasUsageRecord {
+                    guard type == "usage.record" else { continue }
+                    usageObj = line["usage"] as? JSON
+                    modelRaw = line["model"] as? String
+                    timeMs = UsageCore.doubleValue(line["time"])
+                } else if type == "context.append_loop_event",
+                          let event = line["event"] as? JSON,
+                          (event["type"] as? String) == "step.end",
+                          let evUsage = event["usage"] as? JSON {
+                    usageObj = evUsage
+                    modelRaw = (event["model"] as? String) ?? (line["model"] as? String)
+                    timeMs = UsageCore.doubleValue(line["time"])
+                }
+
+                guard let usage = usageObj else { continue }
+                let modelId = UsageCore.normalizeModelName(modelRaw ?? "") ?? "k3-256k"
+                let inputOther = UsageCore.doubleValue(usage["inputOther"] ?? usage["input"] ?? usage["input_tokens"])
+                let output = UsageCore.doubleValue(usage["output"] ?? usage["output_tokens"])
+                let cacheRead = UsageCore.doubleValue(usage["inputCacheRead"] ?? usage["cache_read"] ?? usage["cache_read_input_tokens"] ?? usage["cacheRead"])
+                let cacheCreation = UsageCore.doubleValue(usage["inputCacheCreation"] ?? usage["cache_creation"] ?? usage["cache_write_input_tokens"] ?? usage["cacheWrite"])
+                let reasoning = UsageCore.doubleValue(usage["reasoning"] ?? usage["reasoning_tokens"])
+
+                var bucket = buckets[modelId] ?? ModelUsageBucket()
+                bucket.inputOther += inputOther
+                bucket.output += output
+                bucket.cacheRead += cacheRead
+                bucket.cacheCreation += cacheCreation
+                bucket.reasoning += reasoning
+                bucket.messageCount += 1
+                if timeMs > 0 {
+                    if bucket.firstTime == 0 || timeMs < bucket.firstTime { bucket.firstTime = timeMs }
+                    if timeMs > bucket.lastTime { bucket.lastTime = timeMs }
+                }
+                buckets[modelId] = bucket
+            }
+        }
+
+        let pLabel = title.isEmpty ? (cwd.isEmpty ? sessionId : URL(fileURLWithPath: cwd).lastPathComponent) : title
+        let pId = cwd.isEmpty ? sessionId : sourceNamespace(cwd)
+
+        var rows: [UsageCore.UsageRow] = []
+        for (modelId, b) in buckets {
+            let start = b.firstTime > 0 ? b.firstTime : createdAt
+            let last = b.lastTime > 0 ? b.lastTime : updatedAt
+            let row = UsageCore.UsageRow(
+                client: "kimi",
+                sessionId: sessionId,
+                model: modelId,
+                provider: "moonshot",
+                input: b.inputOther,
+                output: b.output,
+                cacheRead: b.cacheRead,
+                cacheWrite: b.cacheCreation,
+                reasoning: b.reasoning,
+                messageCount: b.messageCount,
+                cost: 0,
+                startedAt: start,
+                lastUsedAt: last,
+                projectId: pId,
+                projectLabel: pLabel,
+                performance: nil
+            )
+            rows.append(row)
+        }
+
+        return rows
+    }
+
     // MARK: - DeepSeek Harness (~/.dsh/sessions/<project>/session-*/session.jsonl.zstd)
 
     static let dshRoot = NSHomeDirectory() + "/.dsh/sessions"

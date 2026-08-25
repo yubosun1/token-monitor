@@ -92,6 +92,7 @@ struct CollectorEnvironment {
                 case "hanako": return Adapters.collectHanakoRows()
                 case "dsh": return Adapters.collectDshRows()
                 case "antigravity": return Adapters.collectAntigravityRows()
+                case "kimi": return Adapters.collectKimiRows()
                 default: return []
                 }
             },
@@ -219,8 +220,8 @@ final class Collector {
     private var periodRetryAfter = Date.distantPast
     private var graphRetryAfter = Date.distantPast
 
-    private let tokscaleClientIds = Set(["claude", "codex", "opencode", "kimi", "workbuddy"])
-    private let adapterClientIds = ["proma", "hanako", "dsh", "antigravity"]
+    private let tokscaleClientIds = Set(["claude", "codex", "opencode", "workbuddy"])
+    private let adapterClientIds = ["proma", "hanako", "dsh", "antigravity", "kimi"]
     private var refreshIdCounter = 0
 
     init(environment: CollectorEnvironment, workerQueue: DispatchQueue) {

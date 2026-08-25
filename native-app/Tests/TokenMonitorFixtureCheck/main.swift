@@ -711,17 +711,53 @@ func runKimiTests() {
     check(kimiRoots.contains(NSHomeDirectory() + "/.kimi/sessions"), "Kimi web sessions are fingerprinted")
     check(kimiRoots.contains(SourceScanner.kimiCodeHome() + "/sessions"), "Kimi Code sessions are fingerprinted")
 
+    // Kimi native session parsing test
+    do {
+        let tempKimiDir = FileManager.default.temporaryDirectory.appendingPathComponent("tm-kimi-test-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: tempKimiDir) }
+        let sessionDir = tempKimiDir.appendingPathComponent("wd_sample_123/session_test_456")
+        let agentsMainDir = sessionDir.appendingPathComponent("agents/main")
+        let agentsSubDir = sessionDir.appendingPathComponent("agents/agent-0")
+        try! FileManager.default.createDirectory(at: agentsMainDir, withIntermediateDirectories: true)
+        try! FileManager.default.createDirectory(at: agentsSubDir, withIntermediateDirectories: true)
+
+        let stateJson = """
+        {"id":"session_test_456","title":"exp01 实验 PPT 制作","cwd":"/Users/test/sandbox","createdAt":1787680000000,"updatedAt":1787685000000}
+        """
+        try! stateJson.data(using: .utf8)!.write(to: sessionDir.appendingPathComponent("state.json"))
+
+        let mainWire = """
+        {"type":"usage.record","model":"kimi-code/k3-256k","usage":{"inputOther":2000,"output":500,"inputCacheRead":18000,"inputCacheCreation":0},"time":1787681000000}
+        """
+        try! mainWire.data(using: .utf8)!.write(to: agentsMainDir.appendingPathComponent("wire.jsonl"))
+
+        let subWire = """
+        {"type":"usage.record","model":"RightCode/gpt-5.6-luna","usage":{"inputOther":5000,"output":200,"inputCacheRead":10000,"inputCacheCreation":0},"time":1787682000000}
+        """
+        try! subWire.data(using: .utf8)!.write(to: agentsSubDir.appendingPathComponent("wire.jsonl"))
+
+        let rows = Adapters.parseKimiSessionDir(sessionDir)
+        checkEqual(rows.count, 2, "Kimi parser extracts both main and subagent models")
+        let k3 = rows.first { $0.model == "k3-256k" }
+        let luna = rows.first { $0.model == "gpt-5.6-luna" }
+        checkEqual(k3?.input, 2000, "Kimi k3 input tokens")
+        checkEqual(k3?.cacheRead, 18000, "Kimi k3 cache read tokens")
+        checkEqual(k3?.projectLabel, "exp01 实验 PPT 制作", "Kimi session title extracted")
+        checkEqual(luna?.input, 5000, "Kimi subagent luna input")
+        checkEqual(luna?.cacheRead, 10000, "Kimi subagent luna cache read")
+    }
+
     let world = FakeCollectorWorld(
         now: shanghaiDate(2026, 8, 15, 12, 0),
         settings: stateSettings(clients: "kimi")
     )
-    world.tokscalePeriods = ["today": UsageCore.emptyPeriod(), "month": UsageCore.emptyPeriod(), "allTime": UsageCore.emptyPeriod()]
-    world.tokscaleGraph = ([], nil)
+    world.rowsByClient["kimi"] = [
+        stateRow(client: "kimi", session: "s1", model: "k3-256k", input: 100, output: 50, startedAt: "2026-08-15T12:00:00+08:00")
+    ]
     let (collector, queue) = world.makeCollector()
     collector.requestRefresh(.full, reason: .startup)
     world.waitIdle(collector, queue)
-    checkEqual(world.tokscalePeriodClients.last, ["kimi"], "Kimi is passed to tokscale period collection")
-    checkEqual(world.tokscaleGraphClients.last, ["kimi"], "Kimi is passed to tokscale graph collection")
+    checkEqual(UsageCore.intValue(world.period(collector, "today")["totalTokens"]), 150, "Kimi is collected via native adapter")
 }
 
 func runCollectorStateTests() {
@@ -2233,6 +2269,71 @@ func runHistoryLedgerTests() {
         check(merged.contains { $0.date == "2026-08-10" }, "L4.2: deleted day1 preserved in merged history")
         let mDay2 = merged.first { $0.date == "2026-08-11" }
         checkEqual(mDay2?.tokens ?? 0, 1000, "L4.3: live growth merged to latest max tokens")
+    }
+
+    // L5: Session model token breakdown with parent model and subagents
+    do {
+        let parentRow = UsageCore.UsageRow(
+            client: "antigravity",
+            sessionId: "test-sess-123@local",
+            model: "gemini-3.7-flash",
+            provider: "google",
+            input: 30000,
+            output: 5000,
+            cacheRead: 165000,
+            cacheWrite: 0,
+            reasoning: 2000,
+            messageCount: 20,
+            cost: 0.07,
+            startedAt: 1787400000000,
+            lastUsedAt: 1787405000000,
+            projectId: "proj-1",
+            projectLabel: "Project One"
+        )
+        let subagentRow = UsageCore.UsageRow(
+            client: "antigravity",
+            sessionId: "test-sess-123@local",
+            model: "gemini-3.7-flash-lite",
+            provider: "google",
+            input: 8000,
+            output: 1200,
+            cacheRead: 35800,
+            cacheWrite: 0,
+            reasoning: 300,
+            messageCount: 5,
+            cost: 0.015,
+            startedAt: 1787401000000,
+            lastUsedAt: 1787404000000,
+            projectId: "proj-1",
+            projectLabel: "Project One"
+        )
+        ledger.recordUsageRows([parentRow, subagentRow])
+
+        let breakdown = ledger.querySessionModelBreakdown(client: "antigravity", sessionId: "test-sess-123")
+        check(breakdown != nil, "L5.1: querySessionModelBreakdown found session")
+        checkEqual(breakdown?["found"] as? Bool, true, "L5.2: found flag is true")
+        checkEqual(breakdown?["totalTokens"] as? Int, 245000, "L5.3: total tokens computed correctly (200k + 45k)")
+        checkEqual(breakdown?["messageCount"] as? Int, 25, "L5.4: message count summed (20 + 5)")
+
+        let models = breakdown?["models"] as? [[String: Any]] ?? []
+        checkEqual(models.count, 2, "L5.5: both parent and subagent models returned")
+        if models.count == 2 {
+            let m0 = models[0]
+            let m1 = models[1]
+            checkEqual(m0["modelId"] as? String, "gemini-3.7-flash", "L5.6: primary model sorted first")
+            checkEqual(m0["totalTokens"] as? Int, 200000, "L5.7: primary model tokens 200,000")
+            checkEqual(m0["percent"] as? Double, 81.6, "L5.8: primary model percentage 81.6%")
+
+            checkEqual(m1["modelId"] as? String, "gemini-3.7-flash-lite", "L5.9: subagent model sorted second")
+            checkEqual(m1["totalTokens"] as? Int, 45000, "L5.10: subagent model tokens 45,000")
+            checkEqual(m1["percent"] as? Double, 18.4, "L5.11: subagent model percentage 18.4%")
+        }
+
+        let totals = breakdown?["totals"] as? [String: Any] ?? [:]
+        checkEqual(totals["inputTokens"] as? Int, 38000, "L5.12: total input tokens 38,000")
+        checkEqual(totals["outputTokens"] as? Int, 6200, "L5.13: total output tokens 6,200")
+        checkEqual(totals["cacheReadTokens"] as? Int, 200800, "L5.14: total cache read tokens 200,800")
+        checkEqual(totals["cacheHitRate"] as? Double, 84.1, "L5.15: total cache hit rate 84.1%")
     }
 }
 

@@ -142,19 +142,19 @@ final class HistoryLedger {
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id, client, date, model_id) DO UPDATE SET
             provider = CASE WHEN excluded.provider != '' THEN excluded.provider ELSE session_ledger.provider END,
-            input_tokens = MAX(session_ledger.input_tokens, excluded.input_tokens),
-            output_tokens = MAX(session_ledger.output_tokens, excluded.output_tokens),
-            cache_read_tokens = MAX(session_ledger.cache_read_tokens, excluded.cache_read_tokens),
-            cache_write_tokens = MAX(session_ledger.cache_write_tokens, excluded.cache_write_tokens),
-            reasoning_tokens = MAX(session_ledger.reasoning_tokens, excluded.reasoning_tokens),
-            message_count = MAX(session_ledger.message_count, excluded.message_count),
-            cost_usd = CASE WHEN excluded.cost_usd > 0 THEN excluded.cost_usd ELSE MAX(session_ledger.cost_usd, excluded.cost_usd) END,
+            input_tokens = excluded.input_tokens,
+            output_tokens = excluded.output_tokens,
+            cache_read_tokens = excluded.cache_read_tokens,
+            cache_write_tokens = excluded.cache_write_tokens,
+            reasoning_tokens = excluded.reasoning_tokens,
+            message_count = excluded.message_count,
+            cost_usd = CASE WHEN excluded.cost_usd > 0 THEN excluded.cost_usd ELSE session_ledger.cost_usd END,
             started_at_ms = CASE WHEN session_ledger.started_at_ms > 0 THEN session_ledger.started_at_ms ELSE excluded.started_at_ms END,
             last_used_at_ms = MAX(session_ledger.last_used_at_ms, excluded.last_used_at_ms),
             project_id = CASE WHEN excluded.project_id != '' THEN excluded.project_id ELSE session_ledger.project_id END,
             project_label = CASE WHEN excluded.project_label != '' THEN excluded.project_label ELSE session_ledger.project_label END,
-            timed_tokens = MAX(session_ledger.timed_tokens, excluded.timed_tokens),
-            timed_duration_ms = MAX(session_ledger.timed_duration_ms, excluded.timed_duration_ms),
+            timed_tokens = excluded.timed_tokens,
+            timed_duration_ms = excluded.timed_duration_ms,
             updated_at_ms = excluded.updated_at_ms;
         """
 
@@ -454,6 +454,150 @@ final class HistoryLedger {
             }
         }
         return results
+    }
+
+    /// Queries the detailed per-model token breakdown for a specific session across its lifetime or period.
+    func querySessionModelBreakdown(client: String, sessionId: String, period: String = "total") -> [String: Any]? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let db, !sessionId.isEmpty else { return nil }
+
+        let escapedClient = client.replacingOccurrences(of: "'", with: "''")
+        let escapedSessionId = sessionId.replacingOccurrences(of: "'", with: "''")
+        let baseSessionId: String
+        if let atIdx = sessionId.firstIndex(of: "@") {
+            baseSessionId = String(sessionId[..<atIdx]).replacingOccurrences(of: "'", with: "''")
+        } else {
+            baseSessionId = escapedSessionId
+        }
+
+        var whereClauses: [String] = []
+        if !escapedClient.isEmpty {
+            whereClauses.append("client = '\(escapedClient)'")
+        }
+        whereClauses.append("(session_id = '\(escapedSessionId)' OR session_id = '\(baseSessionId)' OR session_id LIKE '\(baseSessionId)@%')")
+
+        let whereSQL = "WHERE " + whereClauses.joined(separator: " AND ")
+        let sql = """
+        SELECT model_id, provider,
+               SUM(input_tokens) AS in_tk,
+               SUM(output_tokens) AS out_tk,
+               SUM(cache_read_tokens) AS cr_tk,
+               SUM(cache_write_tokens) AS cw_tk,
+               SUM(reasoning_tokens) AS re_tk,
+               SUM(message_count) AS msg_cnt,
+               SUM(cost_usd) AS cost,
+               MIN(started_at_ms) AS min_start,
+               MAX(last_used_at_ms) AS max_used,
+               MIN(project_id) AS pid,
+               MIN(project_label) AS plabel
+        FROM session_ledger
+        \(whereSQL)
+        GROUP BY model_id
+        ORDER BY (SUM(input_tokens) + SUM(output_tokens) + SUM(cache_read_tokens) + SUM(cache_write_tokens)) DESC;
+        """
+
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            NSLog("[HistoryLedger] querySessionModelBreakdown failed: %s", sqlite3_errmsg(db))
+            return nil
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        var models: [[String: Any]] = []
+        var totalInput = 0.0
+        var totalOutput = 0.0
+        var totalCacheRead = 0.0
+        var totalCacheWrite = 0.0
+        var totalReasoning = 0.0
+        var totalMessages = 0.0
+        var totalCost = 0.0
+        var overallMinStart = 0.0
+        var overallMaxUsed = 0.0
+        var projectId = ""
+        var projectLabel = ""
+
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let modelId = String(cString: sqlite3_column_text(stmt, 0))
+            let provider = sqlite3_column_text(stmt, 1) != nil ? String(cString: sqlite3_column_text(stmt, 1)) : ""
+            let input = sqlite3_column_double(stmt, 2)
+            let output = sqlite3_column_double(stmt, 3)
+            let cacheRead = sqlite3_column_double(stmt, 4)
+            let cacheWrite = sqlite3_column_double(stmt, 5)
+            let reasoning = sqlite3_column_double(stmt, 6)
+            let messageCount = sqlite3_column_double(stmt, 7)
+            let cost = sqlite3_column_double(stmt, 8)
+            let minStart = sqlite3_column_double(stmt, 9)
+            let maxUsed = sqlite3_column_double(stmt, 10)
+            if projectId.isEmpty, let p = sqlite3_column_text(stmt, 11) { projectId = String(cString: p) }
+            if projectLabel.isEmpty, let pl = sqlite3_column_text(stmt, 12) { projectLabel = String(cString: pl) }
+
+            let modelTokens = input + output + cacheRead + cacheWrite
+
+            totalInput += input
+            totalOutput += output
+            totalCacheRead += cacheRead
+            totalCacheWrite += cacheWrite
+            totalReasoning += reasoning
+            totalMessages += messageCount
+            totalCost += cost
+            if minStart > 0 && (overallMinStart == 0 || minStart < overallMinStart) { overallMinStart = minStart }
+            if maxUsed > overallMaxUsed { overallMaxUsed = maxUsed }
+
+            models.append([
+                "modelId": modelId,
+                "provider": provider,
+                "totalTokens": Int(modelTokens.rounded()),
+                "inputTokens": Int(input.rounded()),
+                "outputTokens": Int(output.rounded()),
+                "cacheReadTokens": Int(cacheRead.rounded()),
+                "cacheWriteTokens": Int(cacheWrite.rounded()),
+                "reasoningTokens": Int(reasoning.rounded()),
+                "messageCount": Int(messageCount.rounded()),
+                "costUsd": cost
+            ])
+        }
+
+        guard !models.isEmpty else { return nil }
+
+        let totalSessionTokens = totalInput + totalOutput + totalCacheRead + totalCacheWrite
+        let totalPrompt = totalInput + totalCacheRead + totalCacheWrite
+        let cacheHitRate = (totalPrompt > 0) ? (totalCacheRead / totalPrompt * 100.0) : 0.0
+
+        for i in 0..<models.count {
+            let mTokens = Double(models[i]["totalTokens"] as? Int ?? 0)
+            let pct = totalSessionTokens > 0 ? (mTokens / totalSessionTokens * 100.0) : 0.0
+            models[i]["percent"] = (pct * 10).rounded() / 10.0
+            let inTk = Double(models[i]["inputTokens"] as? Int ?? 0)
+            let crTk = Double(models[i]["cacheReadTokens"] as? Int ?? 0)
+            let cwTk = Double(models[i]["cacheWriteTokens"] as? Int ?? 0)
+            let mTotalPrompt = inTk + crTk + cwTk
+            let mCacheHitRate = (mTotalPrompt > 0) ? (crTk / mTotalPrompt * 100.0) : 0.0
+            models[i]["cacheHitRate"] = (mCacheHitRate * 10).rounded() / 10.0
+        }
+
+        return [
+            "found": true,
+            "client": client,
+            "sessionId": sessionId,
+            "period": period,
+            "totalTokens": Int(totalSessionTokens.rounded()),
+            "costUsd": totalCost,
+            "messageCount": Int(totalMessages.rounded()),
+            "startedAt": overallMinStart > 0 ? UsageCore.isoFromMs(overallMinStart) : "",
+            "lastUsedAt": overallMaxUsed > 0 ? UsageCore.isoFromMs(overallMaxUsed) : "",
+            "projectId": projectId,
+            "projectLabel": projectLabel,
+            "models": models,
+            "totals": [
+                "inputTokens": Int(totalInput.rounded()),
+                "outputTokens": Int(totalOutput.rounded()),
+                "cacheReadTokens": Int(totalCacheRead.rounded()),
+                "cacheWriteTokens": Int(totalCacheWrite.rounded()),
+                "reasoningTokens": Int(totalReasoning.rounded()),
+                "cacheHitRate": (cacheHitRate * 10).rounded() / 10.0
+            ]
+        ]
     }
 
     /// Fetches all aggregated periods (today, month, allTime) from the persistent ledger.

@@ -1315,8 +1315,7 @@ function sessionRowsForPeriod(period) {
     nativeSessions: state.stats?.nativeSessions?.[state.period] || {}
   });
   if (rows.length > 0) {
-    const sorted = rows.sort((a, b) => b.sortTime - a.sortTime || b.value - a.value || b.cost - a.cost || a.name.localeCompare(b.name));
-    return sorted.slice(0, 50);
+    return rows.sort((a, b) => b.sortTime - a.sortTime || b.value - a.value || b.cost - a.cost || a.name.localeCompare(b.name));
   }
   if (Number(period?.totalTokens || 0) === 0) return [];
   return modelRowsForPeriod(period);
@@ -4412,7 +4411,7 @@ async function openSessionDetail({ client, sessionId, sessionCost, title }) {
 }
 
 function toggleDetailSort() {
-  state.detailSort = state.detailSort === 'tokens' ? 'time' : 'tokens';
+  state.detailSort = state.detailSort === 'tokens' ? 'cost' : 'tokens';
   if (state.openSession && state.openSession.detail) renderSessionDetail({ detail: state.openSession.detail });
 }
 
@@ -4423,6 +4422,153 @@ function closeSessionDetail() {
   els.sessionDetailHead.classList.add('hidden');
   els.sessionDetailHead.replaceChildren();
   render();
+}
+
+function escapeHtml(str) {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function sessionSummaryCard(summary, modelRows) {
+  const card = document.createElement('div');
+  card.className = 'detail-summary-card';
+
+  const clientName = clientLabels[summary.client] || summary.client || 'AI Client';
+  const cColor = clientColors[summary.client] || clientColors.default || '#3186ff';
+
+  const headEl = document.createElement('div');
+  headEl.className = 'detail-summary-head';
+  const sidShort = summary.sessionId ? summary.sessionId.slice(0, 8) : '';
+  headEl.innerHTML = `
+    <div class="detail-client-badge">
+      <span class="detail-client-dot" style="background: ${cColor}"></span>
+      <span class="detail-client-name">${escapeHtml(clientName)}</span>
+      ${sidShort ? `<span class="detail-session-chip">${escapeHtml(sidShort)}</span>` : ''}
+    </div>
+    <div class="detail-session-time">${summary.timeLabel ? escapeHtml(summary.timeLabel) : ''}${summary.messageCount > 0 ? ` · ${summary.messageCount} msgs` : ''}</div>
+  `;
+  card.append(headEl);
+
+  const statsEl = document.createElement('div');
+  statsEl.className = 'detail-summary-stats';
+  statsEl.innerHTML = `
+    <div class="detail-stat-box">
+      <span class="detail-stat-label">${t('totalTokens') || 'Total Tokens'}</span>
+      <span class="detail-stat-value">${formatNumber(summary.totalTokens)}</span>
+    </div>
+    <div class="detail-stat-box">
+      <span class="detail-stat-label">${t('cost') || 'Cost'}</span>
+      <span class="detail-stat-value">${formatCost(summary.costUsd)}</span>
+    </div>
+    <div class="detail-stat-box">
+      <span class="detail-stat-label">${t('cacheHit') || 'Cache Hit'}</span>
+      <span class="detail-stat-value accent">${summary.cacheHitRate}%</span>
+    </div>
+  `;
+  card.append(statsEl);
+
+  if (modelRows.length > 1) {
+    const barEl = document.createElement('div');
+    barEl.className = 'detail-multi-bar';
+    for (const m of modelRows) {
+      const seg = document.createElement('div');
+      seg.className = 'detail-multi-segment';
+      const mCol = modelColor(m.modelId) || cColor;
+      seg.style.width = `${Math.max(1, m.percent)}%`;
+      seg.style.background = mCol;
+      seg.title = `${m.modelId}: ${formatNumber(m.totalTokens)} (${m.percent}%)`;
+      barEl.append(seg);
+    }
+    card.append(barEl);
+  }
+
+  const splitEl = document.createElement('div');
+  splitEl.className = 'detail-summary-split';
+  splitEl.innerHTML = `
+    <span class="detail-pill pill-cache"><span class="detail-pill-label">${t('dashboard.tooltip.inputCacheHit') || '输入 (缓存命中)'}</span> <span class="detail-pill-val">${formatNumber(summary.cacheReadTokens)}</span><span class="detail-pill-pct accent">(${summary.hitPct}%)</span></span>
+    <span class="detail-pill pill-input"><span class="detail-pill-label">${t('dashboard.tooltip.inputCacheMiss') || '输入 (未命中)'}</span> <span class="detail-pill-val">${formatNumber(summary.inputTokens)}</span><span class="detail-pill-pct">(${summary.missPct}%)</span></span>
+    <span class="detail-pill pill-output"><span class="detail-pill-label">${t('dashboard.tooltip.output') || '输出'}</span> <span class="detail-pill-val">${formatNumber(summary.outputTokens)}</span></span>
+    ${summary.reasoningTokens > 0 ? `<span class="detail-pill pill-reason"><span class="detail-pill-label">思考</span> <span class="detail-pill-val">${formatNumber(summary.reasoningTokens)}</span></span>` : ''}
+  `;
+  card.append(splitEl);
+
+  return card;
+}
+
+function sessionModelCard(row, maxTokens, sessionTotalTokens) {
+  const card = document.createElement('div');
+  card.className = 'detail-model-card';
+
+  const mColor = modelColor(row.modelId) || '#6ab4f0';
+
+  const headEl = document.createElement('div');
+  headEl.className = 'detail-model-head';
+  headEl.innerHTML = `
+    <div class="detail-model-title-wrap">
+      <span class="detail-model-dot" style="background: ${mColor}"></span>
+      <span class="detail-model-name" title="${escapeHtml(row.modelId)}">${escapeHtml(row.modelId)}</span>
+      <span class="detail-model-pct" style="color: ${mColor}">${row.percent}%</span>
+    </div>
+    <div class="detail-model-metrics">
+      <span class="detail-model-tokens">${formatNumber(row.totalTokens)}</span>
+      ${row.costUsd > 0 ? `<span class="detail-model-cost">${formatCost(row.costUsd)}</span>` : ''}
+    </div>
+  `;
+  card.append(headEl);
+
+  const barEl = document.createElement('div');
+  barEl.className = 'detail-model-bar';
+  const fill = document.createElement('div');
+  fill.className = 'detail-model-bar-fill';
+  fill.style.width = `${Math.min(100, Math.max(1, (row.totalTokens / maxTokens) * 100))}%`;
+  fill.style.background = mColor;
+  barEl.append(fill);
+  card.append(barEl);
+
+  const pillsEl = document.createElement('div');
+  pillsEl.className = 'detail-pills-grid';
+
+  let pillsHtml = `
+    <div class="detail-pill pill-cache">
+      <span class="detail-pill-label">${t('dashboard.tooltip.inputCacheHit') || '输入 (缓存命中)'}</span>
+      <div><span class="detail-pill-val">${formatNumber(row.cacheReadTokens)}</span><span class="detail-pill-pct accent"> ${row.hitPct}%</span></div>
+    </div>
+    <div class="detail-pill pill-input">
+      <span class="detail-pill-label">${t('dashboard.tooltip.inputCacheMiss') || '输入 (未命中)'}</span>
+      <div><span class="detail-pill-val">${formatNumber(row.inputTokens)}</span><span class="detail-pill-pct"> ${row.missPct}%</span></div>
+    </div>
+    <div class="detail-pill pill-output">
+      <span class="detail-pill-label">${t('dashboard.tooltip.output') || '输出'}</span>
+      <span class="detail-pill-val">${formatNumber(row.outputTokens)}</span>
+    </div>
+  `;
+
+  if (row.reasoningTokens > 0) {
+    pillsHtml += `
+      <div class="detail-pill pill-reason">
+        <span class="detail-pill-label">思考</span>
+        <span class="detail-pill-val">${formatNumber(row.reasoningTokens)}</span>
+      </div>
+    `;
+  }
+
+  if (row.messageCount > 0) {
+    pillsHtml += `
+      <div class="detail-pill">
+        <span class="detail-pill-label">调用</span>
+        <span class="detail-pill-val">${row.messageCount}</span>
+      </div>
+    `;
+  }
+
+  pillsEl.innerHTML = pillsHtml;
+  card.append(pillsEl);
+
+  return card;
 }
 
 function renderSessionDetail({ detail, loading, error } = {}) {
@@ -4441,8 +4587,42 @@ function renderSessionDetail({ detail, loading, error } = {}) {
   head.append(back);
 
   if (loading) { container.append(detailNote(t('detailLoading') || 'Loading…')); return; }
-  if (error || (detail && detail.found === false)) { container.append(detailNote(t('detailNotFound') || 'Transcript not found on this machine.')); return; }
+  if (error || (detail && detail.found === false)) { container.append(detailNote(t('detailNotFound') || 'Session details not found on this machine.')); return; }
 
+  const hasModels = Array.isArray(detail?.models) && detail.models.length > 0;
+
+  if (hasModels) {
+    const summary = sessionDetailApi.sessionSummary(detail, { now: new Date() });
+    const modelRows = sessionDetailApi.modelBreakdownRows(detail, { now: new Date(), sortBy: state.detailSort });
+
+    if (modelRows.length === 0 && summary.totalTokens === 0) {
+      container.append(detailNote(t('detailEmpty') || 'No activity in this period.'));
+      return;
+    }
+
+    const sort = document.createElement('button');
+    sort.className = 'detail-sort';
+    sort.textContent = state.detailSort === 'cost'
+      ? (t('sortCost') || '↕ Cost')
+      : (t('sortMostTokens') || '↕ Most tokens');
+    sort.addEventListener('click', toggleDetailSort);
+    head.append(sort);
+
+    container.append(sessionSummaryCard(summary, modelRows));
+
+    const modelsHeader = document.createElement('div');
+    modelsHeader.className = 'detail-models-header';
+    modelsHeader.innerHTML = `<span>${t('models') || 'Models & Subagents'} (${modelRows.length})</span><span>Tokens / Ratio</span>`;
+    container.append(modelsHeader);
+
+    const maxTokens = Math.max(1, ...modelRows.map((r) => r.totalTokens));
+    for (const row of modelRows) {
+      container.append(sessionModelCard(row, maxTokens, summary.totalTokens));
+    }
+    return;
+  }
+
+  // Fallback for raw exchange transcripts if models array not present
   const rows = sessionDetailApi.exchangeRows(detail, { now: new Date(), sortBy: state.detailSort });
   if (rows.length === 0) { container.append(detailNote(t('detailEmpty') || 'No activity in this period.')); return; }
   if (detail?.tokenDataUnavailable === true) {
@@ -4508,8 +4688,6 @@ function turnNode(turn) {
   const el = document.createElement('div');
   el.className = 'detail-turn';
   const tk = turn.tokens || {};
-  // "cache" folds cache reads + cache writes (Claude's cache_creation) into one bucket so the
-  // in/out/cache breakdown sums to the turn total; reason is an informational subset of out.
   const cache = (tk.cacheRead || 0) + (tk.cacheWrite || 0);
   const split = `in ${formatNumber(tk.input || 0)} · out ${formatNumber(tk.output || 0)} · cache ${formatNumber(cache)}`
     + (tk.reasoning ? ` · reason ${formatNumber(tk.reasoning)}` : '');
@@ -8237,15 +8415,15 @@ els.breakdown.addEventListener('click', (event) => {
   if (!rowEl) return;
   const key = rowEl.dataset.key || '';            // "session:<client>:<sessionId>"
   const client = rowEl.dataset.client || '';
-  if (client !== 'claude' && client !== 'codex' && client !== 'opencode' && client !== 'proma' && client !== 'hanako' && client !== 'dsh' && client !== 'reasonix') return;
-  if (client === 'reasonix' && rowEl.dataset.detailUnavailable === 'true') return;
+  if (!client) return;
+  if (rowEl.dataset.detailUnavailable === 'true') return;
   const match = key.match(/^session:([^:]+):(.+)$/);
   if (!match) return;
   const sessionId = client === 'reasonix' ? `reasonix:${match[2]}` : match[2];
   const period = state.stats?.periods?.[state.period];
   const session = client === 'reasonix'
     ? state.stats?.nativeSessions?.[state.period]?.[sessionId]
-    : period?.sessions?.[`${client}:${sessionId}`];
+    : (period?.sessions?.[`${client}:${sessionId}`] || period?.sessions?.[sessionId]);
   openSessionDetail({
     client,
     sessionId,
