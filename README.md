@@ -22,7 +22,7 @@
 ## 特性
 
 - **界面**：原版渲染层跑在 WKWebView 中，外观与 Electron 版一致；外壳为原生 Swift，支持暗色玻璃拟物材质与流畅过渡。
-- **用量采集**：追踪本机 8 个客户端 —— Claude Code、Codex、OpenCode、Kimi、WorkBuddy（经 tokscale 引擎）+ Proma、Hanako、Antigravity、DeepSeek Harness（原生 Swift 解析器与跨工作区会话同步）。
+- **用量采集**：追踪本机 8 个客户端 —— Claude Code、Codex、Kimi、WorkBuddy（经 tokscale 引擎）+ Proma、Hanako、Antigravity、DeepSeek Harness（原生 Swift 解析器与跨工作区会话同步）。
 - **AI 限额**：DeepSeek 余额 + OpenCode 配额 + Kimi 会员额度（保留原版界面与订阅记录功能）。
 - **统计口径**：今日/本月/全部按**本地时区自然日/自然月**划分，用量按**消息/事件自身时间戳**归日（跨午夜的会话会正确拆到两天），与 tokscale 的 `bucketTimezone` 配置保持一致。
 - **性能与内存控制**：
@@ -72,7 +72,6 @@ TOKEN_MONITOR_DIAG=1 ./dist/Token\ Monitor.app/Contents/MacOS/TokenMonitor   # �
 |---|---|---|
 | Claude Code | `~/.claude/projects`、`~/.claude/transcripts` | tokscale 引擎 |
 | Codex | `~/.codex/sessions` | tokscale 引擎 |
-| OpenCode | `~/.local/share/opencode/storage/message` | tokscale 引擎 |
 | Kimi | `~/.kimi/sessions`、kimi-code sessions | tokscale 引擎 |
 | WorkBuddy | `~/.workbuddy/projects`、`~/.workbuddy/sessions` | tokscale 引擎 |
 | Proma | `~/.proma/agent-sessions` | 原生 Swift 解析器（按消息时间戳归日） |

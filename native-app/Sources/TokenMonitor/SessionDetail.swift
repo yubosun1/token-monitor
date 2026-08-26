@@ -1,15 +1,14 @@
 import Foundation
 
 /// Session detail for the renderer popup — port of src/shared/sessionDetail.js
-/// (plus sessionFiles.js and the session-detail parts of opencodeSession.js)
-/// from the Electron app. Wire shape is unchanged:
+/// (plus sessionFiles.js) from the Electron app. Wire shape is unchanged:
 ///
 ///     { found, client, sessionId, period, exchanges: [...], totals: {...} }
 ///
 /// consumed by src/electron/renderer/sessionDetail.js (exchangeRows) via the
 /// session:getDetail bridge method. Transcript readers cover the local
 /// adapters (proma/hanako/dsh) as well as the tokscale clients that have
-/// transcript files (claude/codex) or an opencode.db (opencode).
+/// transcript files (claude/codex).
 enum SessionDetailCore {
     typealias JSON = [String: Any]
 
@@ -572,8 +571,7 @@ enum SessionDetailCore {
         }
     }
 
-    /// OpenCode reports a real cost per assistant message: sum per exchange
-    /// rather than splitting proportionally — port of sumRealCost.
+    /// Sum per exchange rather than splitting proportionally for clients with real costs.
     private static func sumRealCost(_ exchanges: inout [Exchange]) {
         for i in 0..<exchanges.count {
             var cost = 0.0
@@ -717,136 +715,6 @@ enum SessionDetailCore {
             }
         }
         return nil
-    }
-
-    // MARK: - OpenCode (SQLite via the sqlite3 CLI, same pattern as OpencodeLimits)
-
-    private static func opencodeDataDir(_ env: [String: String]) -> String {
-        let home = env["HOME"] ?? env["USERPROFILE"] ?? NSHomeDirectory()
-        return (home as NSString).appendingPathComponent(".local/share/opencode")
-    }
-
-    private static func isOpenCodeDbFilename(_ name: String) -> Bool {
-        guard name.hasSuffix(".db") else { return false }
-        let stem = String(name.dropLast(3))
-        if stem == "opencode" { return true }
-        guard stem.hasPrefix("opencode-") else { return false }
-        let channel = String(stem.dropFirst("opencode-".count))
-        if channel.isEmpty { return false }
-        let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-")
-        return channel.unicodeScalars.allSatisfy { allowed.contains($0) }
-    }
-
-    private static func discoverOpenCodeDbPaths() -> [String] {
-        let fm = FileManager.default
-        let env = ProcessInfo.processInfo.environment
-        let override = (env["OPENCODE_DB"] ?? "").trimmingCharacters(in: .whitespaces)
-        if !override.isEmpty {
-            var isDir: ObjCBool = false
-            if fm.fileExists(atPath: override, isDirectory: &isDir), !isDir.boolValue { return [override] }
-        }
-        let dataDir = opencodeDataDir(env)
-        guard let entries = try? fm.contentsOfDirectory(atPath: dataDir) else { return [] }
-        return entries.filter(isOpenCodeDbFilename).sorted().map { (dataDir as NSString).appendingPathComponent($0) }
-    }
-
-    private static func runSqlite(_ dbPath: String, _ args: [String]) -> Data {
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
-        proc.arguments = [dbPath] + args
-        let pipe = Pipe()
-        proc.standardOutput = pipe
-        proc.standardError = Pipe()
-        do { try proc.run() } catch { return Data() }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        proc.waitUntilExit()
-        guard proc.terminationStatus == 0 else { return Data() }
-        return data
-    }
-
-    /// Run one SQL statement through /usr/bin/sqlite3 in JSON mode. The busy
-    /// timeout pragma runs as a separate invocation: in -json mode sqlite3
-    /// would emit the pragma's own row as the array, masking the real query.
-    private static func sqliteQueryJSON(_ dbPath: String, _ sql: String) -> [[String: Any]]? {
-        _ = runSqlite(dbPath, ["PRAGMA busy_timeout = 250;"])
-        let data = runSqlite(dbPath, ["-json", sql])
-        guard !data.isEmpty else { return [] }
-        return (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]]
-    }
-
-    private static func sqlEscape(_ value: String) -> String {
-        return value.replacingOccurrences(of: "'", with: "''")
-    }
-
-    private static func readOpenCodeEvents(sessionId: String) -> (events: [Event], sessionCost: Double, found: Bool) {
-        let id = sqlEscape(sessionId)
-        let messagesSql = """
-        SELECT id,
-               CAST(COALESCE(json_extract(data,'$.time.created'), time_created) AS INTEGER) AS createdMs,
-               json_extract(data,'$.role') AS role,
-               json_extract(data,'$.cost') AS cost,
-               json_extract(data,'$.tokens.input') AS tInput,
-               json_extract(data,'$.tokens.output') AS tOutput,
-               json_extract(data,'$.tokens.reasoning') AS tReasoning,
-               json_extract(data,'$.tokens.cache.read') AS tCacheRead,
-               json_extract(data,'$.tokens.cache.write') AS tCacheWrite
-        FROM message
-        WHERE session_id = '\(id)' AND json_valid(data)
-        ORDER BY createdMs ASC, id ASC
-        """
-        let partsSql = """
-        SELECT message_id AS messageId,
-               json_extract(data,'$.type') AS type,
-               json_extract(data,'$.text') AS text,
-               json_extract(data,'$.tool') AS tool
-        FROM part
-        WHERE session_id = '\(id)' AND json_valid(data)
-        ORDER BY time_created ASC, id ASC
-        """
-
-        for dbPath in discoverOpenCodeDbPaths() {
-            guard let messages = sqliteQueryJSON(dbPath, messagesSql), !messages.isEmpty else { continue }
-            let parts = sqliteQueryJSON(dbPath, partsSql) ?? []
-
-            var textByMessage: [String: [String]] = [:]
-            var toolsByMessage: [String: [String]] = [:]
-            for part in parts {
-                let messageId = part["messageId"] as? String ?? ""
-                let type = part["type"] as? String ?? ""
-                if type == "text", let text = part["text"] as? String, !text.isEmpty {
-                    textByMessage[messageId, default: []].append(text)
-                } else if type == "tool", let tool = part["tool"] as? String, !tool.isEmpty {
-                    toolsByMessage[messageId, default: []].append(tool)
-                }
-            }
-
-            var events: [Event] = []
-            var sessionCost = 0.0
-            for m in messages {
-                let role = m["role"] as? String ?? ""
-                let timestamp = num(m["createdMs"])
-                if role == "user" {
-                    let text = cleanPromptText((textByMessage[m["id"] as? String ?? ""] ?? []).joined(separator: " "))
-                    events.append(Event(kind: .prompt, timestampMs: timestamp, text: text))
-                } else if role == "assistant" {
-                    let cost = num(m["cost"])
-                    sessionCost += cost
-                    var event = Event(kind: .turn, timestampMs: timestamp)
-                    event.tokens = Tokens(
-                        input: num(m["tInput"]),
-                        output: num(m["tOutput"]),
-                        cacheRead: num(m["tCacheRead"]),
-                        cacheWrite: num(m["tCacheWrite"]),
-                        reasoning: num(m["tReasoning"])
-                    )
-                    event.tools = uniqueTools(toolsByMessage[m["id"] as? String ?? ""] ?? [])
-                    event.cost = cost
-                    events.append(event)
-                }
-            }
-            return (events, sessionCost, true)
-        }
-        return ([], 0, false)
     }
 
     private static func readAntigravitySessionBreakdown(sessionId: String, period: String) -> JSON? {
@@ -1163,23 +1031,6 @@ enum SessionDetailCore {
             return finish(events: result.events, hasRealCost: result.hasRealCost,
                           client: normalizedClient, sessionId: sessionId,
                           period: normalizedPeriod, sessionCost: sessionCost, now: now)
-
-        case "opencode":
-            let detail = readOpenCodeEvents(sessionId: sessionId)
-            guard detail.found else {
-                return notFound(client: normalizedClient, sessionId: sessionId, period: normalizedPeriod, sessionCost: sessionCost)
-            }
-            var grouped = filterExchangesByPeriod(groupEvents(detail.events), normalizedPeriod, now)
-            sumRealCost(&grouped)
-            let filteredCost = grouped.reduce(0.0) { $0 + num($1.costEstimate) }
-            return [
-                "found": true,
-                "client": normalizedClient,
-                "sessionId": sessionId,
-                "period": normalizedPeriod,
-                "exchanges": grouped.map { $0.json() },
-                "totals": totalsOf(grouped, filteredCost)
-            ]
 
         default:
             return notFound(client: normalizedClient, sessionId: sessionId, period: normalizedPeriod, sessionCost: sessionCost)

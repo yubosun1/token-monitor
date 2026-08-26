@@ -16,7 +16,6 @@ const BRAND_VENDOR_COLORS = { ...charts.clientColors };
 const clientLabels = {
   claude: 'Claude Code',
   codex: 'Codex',
-  opencode: 'OpenCode',
   kimi: 'Kimi',
   antigravity: 'Antigravity',
   workbuddy: 'WorkBuddy',

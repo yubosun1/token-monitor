@@ -74,10 +74,9 @@ final class HistoryLedger {
     }
 
     /// Tokscale clients whose v1 session rows must be purged on upgrade.
-    /// Mirrors the v1 collector's tokscale client set (claude/codex/opencode/
-    /// workbuddy); kimi and antigravity were always adapter-collected and are
-    /// preserved.
-    private static let legacyTokscaleClients = ["claude", "codex", "opencode", "workbuddy"]
+    /// Mirrors the v1 collector's tokscale client set (claude/codex/workbuddy);
+    /// kimi and antigravity were always adapter-collected and are preserved.
+    private static let legacyTokscaleClients = ["claude", "codex", "workbuddy"]
 
     private func migrateLegacyData() {
         lock.lock()

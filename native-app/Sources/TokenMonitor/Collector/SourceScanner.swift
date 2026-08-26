@@ -71,8 +71,6 @@ enum SourceScanner {
             roots = [home + "/.claude/projects", home + "/.claude/transcripts"]
         case "codex":
             roots = [home + "/.codex/sessions"]
-        case "opencode":
-            roots = [home + "/.local/share/opencode/storage/message"]
         case "workbuddy":
             roots = [home + "/.workbuddy/projects", home + "/.workbuddy/sessions"]
         case "kimi":

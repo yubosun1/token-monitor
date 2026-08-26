@@ -125,8 +125,8 @@ final class SettingsStore {
             // happens at most once per window instead of on every tick.
             "adapterRecheckMs": 30000,
             "collectionIntervalMs": 300000,
-            "clients": "claude,codex,opencode,kimi,antigravity,workbuddy,proma,hanako,dsh",
-            "clientDisplayOrder": "claude,codex,opencode,kimi,antigravity,proma,workbuddy,hanako,dsh",
+            "clients": "claude,codex,kimi,antigravity,workbuddy,proma,hanako,dsh",
+            "clientDisplayOrder": "claude,codex,kimi,antigravity,proma,workbuddy,hanako,dsh",
             "hiddenClients": "",
             "pinnedClients": "",
             "historyEnabled": true,

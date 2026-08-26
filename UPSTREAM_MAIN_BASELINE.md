@@ -1,19 +1,33 @@
 # Upstream Main Review Baseline
 
 - Upstream remote: `https://github.com/Javis603/token-monitor.git`
-- Local `main` synchronized through: `7ad2acce0580d5be23b8a5930a67cb836370a500`
-- Upstream subject: `feat(trae): add Trae CN credit limits (#483)`
-- Reviewed on: `2026-08-22`
+- Local `main` synchronized through: `6121585f5d5e7fa98385f8a5ac7f8639660e4965`
+- Upstream subject: `chore: release v0.48.0`
+- Reviewed on: `2026-08-26`
 - Native branch: `macos-native`
 
 This is a review baseline, not a claim that `macos-native` contains every
 upstream change. For the next upstream review, start with:
 
 ```text
-7ad2acce0580d5be23b8a5930a67cb836370a500..upstream/main
+6121585f5d5e7fa98385f8a5ac7f8639660e4965..upstream/main
 ```
 
 ## Reviewed Compatibility Notes
+
+Range `7ad2acce..6121585f` (v0.48.0) reviewed on 2026-08-26:
+
+- `6bfac460` `feat(limits): add Sub2API-compatible account preset to third-party APIs (#476)`:
+  Skipped per maintainer preference (not needed).
+- `c493a209` `feat(kimi): integrate Kimi Work usage and project attribution (#453)`:
+  Skipped — `macos-native` has its own native Kimi collector, ledger, and model token breakdown.
+- `af634791` `fix(tokscale): pin latest upstream and align usage semantics (#501)`:
+  Skipped — native branch uses custom Swift collector & standalone tokscale build.
+- Electron/Node-specific architecture fixes (`5ecc6053` #486, `a4302988` #495, `76cf94b0` #499, `2a88aa03` #500):
+  Not applicable to `macos-native` (native Swift multi-threading, ARC/autoreleasepools, and SQLite history ledger handle watcher and collector lifecycle).
+- `5be24d32` `fix(trae): align account setup UI`: Trae limits not enabled in native branch.
+- `a22e1744`, `e4f2619b`, `b9258659`: UI/test cosmetic updates, skipped.
+
 
 Range `bed9fc32..7ad2acce` (v0.47.0) reviewed on 2026-08-22:
 

@@ -1,6 +1,6 @@
 'use strict';
 
-const clientLabels = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', kimi: 'Kimi', antigravity: 'Antigravity', workbuddy: 'WorkBuddy', proma: 'Proma', hanako: 'Hanako', dsh: 'DeepSeek Harness' };
+const clientLabels = { claude: 'Claude Code', codex: 'Codex', kimi: 'Kimi', antigravity: 'Antigravity', workbuddy: 'WorkBuddy', proma: 'Proma', hanako: 'Hanako', dsh: 'DeepSeek Harness' };
 const reasonixSessionGuard = window.TokenMonitorReasonixSessionGuard;
 const { clientColors, fallbackModelColors, modelVendorFor, modelColor } = window.TokenMonitorUsageCharts;
 const motionPreferenceApi = window.TokenMonitorMotionPreference;
@@ -10,7 +10,7 @@ const tokenRateApi = window.TokenMonitorTokenRate;
 const { tokenRatePerSecond, tokenBurnPerMinute } = tokenRateApi;
 const reducedMotionMedia = window.matchMedia?.('(prefers-reduced-motion: reduce)');
 const clientsWithIcon = new Set([
-  'claude', 'codex', 'opencode', 'kimi', 'antigravity', 'workbuddy', 'proma', 'hanako', 'dsh',
+  'claude', 'codex', 'kimi', 'antigravity', 'workbuddy', 'proma', 'hanako', 'dsh',
   'deepseek'
 ]);
 const modelVendorsWithIcon = new Set([
@@ -40,7 +40,6 @@ function iconKindFor(rowData, breakdown) {
 const KNOWN_CLIENTS = [
   { id: 'claude', label: 'Claude Code' },
   { id: 'codex', label: 'Codex' },
-  { id: 'opencode', label: 'OpenCode' },
   { id: 'kimi', label: 'Kimi' },
   { id: 'antigravity', label: 'Antigravity' },
   { id: 'workbuddy', label: 'WorkBuddy' },

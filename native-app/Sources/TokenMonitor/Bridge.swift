@@ -408,8 +408,6 @@ final class BridgeCore {
             return [("claude-projects", "\(home)/.claude/projects"), ("claude-transcripts", "\(home)/.claude/transcripts")]
         case "codex":
             return [("codex-sessions", "\(home)/.codex/sessions")]
-        case "opencode":
-            return [("opencode-data", "\(home)/.local/share/opencode")]
         case "kimi":
             return [
                 ("kimi-sessions", "\(home)/.kimi/sessions"),

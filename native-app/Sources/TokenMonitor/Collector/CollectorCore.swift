@@ -130,7 +130,7 @@ struct CollectorEnvironment {
     }
 }
 
-/// Usage collector: tokscale (claude/codex/opencode/kimi/workbuddy) plus the
+/// Usage collector: tokscale (claude/codex/kimi/workbuddy) plus the
 /// local proma/hanako/dsh adapters, assembled into the aggregate stats
 /// shape the renderer consumes.
 ///
@@ -220,7 +220,7 @@ final class Collector {
     private var periodRetryAfter = Date.distantPast
     private var graphRetryAfter = Date.distantPast
 
-    private let tokscaleClientIds = Set(["claude", "codex", "opencode", "workbuddy"])
+    private let tokscaleClientIds = Set(["claude", "codex", "workbuddy"])
     private let adapterClientIds = ["proma", "hanako", "dsh", "antigravity", "kimi"]
     private var refreshIdCounter = 0
 
@@ -1088,7 +1088,7 @@ final class Collector {
     // MARK: - Components
 
     private func enabledClients(_ settings: [String: Any]) -> [String] {
-        let csv = settings["clients"] as? String ?? "claude,codex,opencode,kimi,workbuddy,proma,hanako,dsh"
+        let csv = settings["clients"] as? String ?? "claude,codex,kimi,antigravity,workbuddy,proma,hanako,dsh"
         return csv.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() }.filter { !$0.isEmpty }
     }
 
@@ -1329,7 +1329,6 @@ final class Collector {
         switch client {
         case "claude": candidates = ["\(home)/.claude/projects", "\(home)/.claude"]
         case "codex": candidates = ["\(home)/.codex/sessions", "\(home)/.codex"]
-        case "opencode": candidates = ["\(home)/.local/share/opencode/storage/message", "\(home)/.local/share/opencode"]
         case "kimi": candidates = [
             "\(home)/.kimi/sessions",
             "\(home)/.kimi",
