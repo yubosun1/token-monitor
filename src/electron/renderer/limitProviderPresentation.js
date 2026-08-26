@@ -22,7 +22,6 @@
     codex: { rpc: 'RPC' },
     cursor: { web: 'Web' },
     antigravity: { rpc: 'RPC' },
-    opencode: { local: 'Local', web: 'Web' },
     openrouter: { api: 'API' },
     deepseek: { api: 'API' },
     minimax: { api: 'API' },
@@ -51,7 +50,6 @@
     codex: ['Auto', 'App/CLI RPC'],
     cursor: ['Manual login', 'Web'],
     antigravity: ['App/CLI must be open', 'RPC'],
-    opencode: ['Local/Web', 'Manual login'],
     openrouter: ['Pay-as-you-go', 'API key'],
     deepseek: ['Pay-as-you-go', 'API key'],
     minimax: ['Token Plan', 'API key'],
@@ -239,7 +237,6 @@
     const source = sourceId(provider);
     return (providerName === 'claude' && source === 'web')
       || providerName === 'cursor'
-      || (providerName === 'opencode' && source === 'web')
       || (providerName === 'mimo' && source === 'web');
   }
 

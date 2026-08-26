@@ -78,8 +78,6 @@ final class BridgeCore {
     func rendererSettingsSnapshot() -> [String: Any] {
         var snapshot = settings.snapshot()
         snapshot.removeValue(forKey: "deepseekApiKey")
-        snapshot.removeValue(forKey: "opencodeProfiles")
-        snapshot.removeValue(forKey: "opencodeCookie")
         snapshot.removeValue(forKey: "kimiApiKey")
         snapshot.removeValue(forKey: "kimiWebAccessToken")
         let hasDeepseekKey = !CredentialStore.shared.deepseekApiKey().isEmpty
@@ -142,24 +140,6 @@ final class BridgeCore {
             if let token = patch.removeValue(forKey: "kimiWebAccessToken") as? String {
                 CredentialStore.shared.setKimiWebAccessToken(token)
                 limitsCredentialChanged = true
-            }
-            if let key = patch.removeValue(forKey: "opencodeApiKey") as? String, !key.isEmpty {
-                CredentialStore.shared.saveOpencodeProfile(name: "default", apiKey: key)
-                limitsCredentialChanged = true
-            }
-            if let cookie = patch.removeValue(forKey: "opencodeCookie") as? String, !cookie.isEmpty {
-                CredentialStore.shared.saveOpencodeProfile(name: "default", apiKey: cookie)
-                limitsCredentialChanged = true
-            }
-            if let profiles = patch.removeValue(forKey: "opencodeProfiles") as? [[String: Any]] {
-                for profile in profiles {
-                    guard let name = profile["name"] as? String else { continue }
-                    let apiKey = (profile["apiKey"] as? String ?? profile["cookie"] as? String ?? "").trimmingCharacters(in: .whitespaces)
-                    if !apiKey.isEmpty {
-                        CredentialStore.shared.saveOpencodeProfile(name: name, apiKey: apiKey)
-                        limitsCredentialChanged = true
-                    }
-                }
             }
             // Start-at-login is a native system registration; the setting
             // value itself is kept so the toggle reflects the desired state.
@@ -284,61 +264,6 @@ final class BridgeCore {
         case "subscriptions:adoptOrphans", "subscriptions:discardOrphans":
             return ["ok": true]
 
-        case "opencode:getProfiles":
-            var safe: [String: Any] = [:]
-            for profile in CredentialStore.shared.opencodeProfiles() {
-                safe[profile.name] = [
-                    "enabled": profile.enabled,
-                    "hasApiKey": !profile.apiKey.isEmpty,
-                    "hasCookie": !profile.apiKey.isEmpty,
-                    "usesAmbientKey": false
-                ]
-            }
-            return ["profiles": safe, "hasEnvVar": false, "hasAmbientKey": false]
-        case "opencode:saveProfile":
-            let name = args.first as? String ?? ""
-            let apiKey = args.count > 1 ? (args[1] as? String ?? "") : ""
-            CredentialStore.shared.saveOpencodeProfile(name: name, apiKey: apiKey)
-            LimitsRuntime.shared.refreshNow()
-            return ["ok": true]
-        case "opencode:deleteProfile":
-            CredentialStore.shared.deleteOpencodeProfile(name: args.first as? String ?? "")
-            LimitsRuntime.shared.refreshNow()
-            return ["ok": true]
-        case "opencode:renameProfile":
-            CredentialStore.shared.renameOpencodeProfile(oldName: args.first as? String ?? "", newName: args.count > 1 ? (args[1] as? String ?? "") : "")
-            LimitsRuntime.shared.refreshNow()
-            return ["ok": true]
-        case "opencode:setProfileEnabled":
-            CredentialStore.shared.setOpencodeProfileEnabled(name: args.first as? String ?? "", enabled: args.count > 1 ? (args[1] as? Bool ?? true) : true)
-            LimitsRuntime.shared.refreshNow()
-            return ["ok": true]
-        case "opencode:saveCookie":
-            let apiKey = args.first as? String ?? ""
-            CredentialStore.shared.saveOpencodeProfile(name: "default", apiKey: apiKey)
-            LimitsRuntime.shared.refreshNow()
-            return ["ok": true]
-        case "opencode:logout":
-            CredentialStore.shared.clearOpencode()
-            LimitsRuntime.shared.refreshNow()
-            return ["ok": true]
-        case "opencode:status":
-            let profiles = CredentialStore.shared.opencodeProfiles()
-            let configured = profiles.contains { $0.enabled && !$0.apiKey.isEmpty }
-            // Object keyed by profile name, matching what the renderer's
-            // updateOpenCodeProfilesStatus expects (per-name status entries).
-            var byName: [String: Any] = [:]
-            for profile in profiles {
-                let linked = !profile.apiKey.isEmpty
-                byName[profile.name] = [
-                    "enabled": profile.enabled,
-                    "linked": linked,
-                    "hasBalance": false,
-                    "balanceUsd": NSNull(),
-                    "error": NSNull()
-                ]
-            }
-            return ["status": configured ? "configured" : "notConfigured", "profiles": byName]
         case "openrouter:saveProfile", "openrouter:deleteProfile", "openrouter:renameProfile",
              "openrouter:setProfileEnabled",
              "thirdparty:saveProfile", "thirdparty:deleteProfile", "thirdparty:renameProfile",

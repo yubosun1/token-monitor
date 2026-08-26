@@ -116,16 +116,6 @@
     signalContentReady: function () { send('window:contentReady'); },
     setViewState: function (patch) { send('window:viewState', [patch]); },
     setTrayIcons: function (icons) { return invoke('tray:setIcons', [icons]); },
-    opencode: {
-      saveCookie: function (cookie) { return invoke('opencode:saveCookie', [cookie]); },
-      logout: function () { return invoke('opencode:logout'); },
-      status: function () { return invoke('opencode:status'); },
-      getProfiles: function () { return invoke('opencode:getProfiles'); },
-      saveProfile: function (name, cookie) { return invoke('opencode:saveProfile', [name, cookie]); },
-      deleteProfile: function (name) { return invoke('opencode:deleteProfile', [name]); },
-      renameProfile: function (oldName, newName) { return invoke('opencode:renameProfile', [oldName, newName]); },
-      setProfileEnabled: function (name, enabled) { return invoke('opencode:setProfileEnabled', [name, enabled]); }
-    },
     openrouter: {
       getProfiles: function () { return invoke('openrouter:getProfiles'); },
       saveProfile: function (name, apiKey) { return invoke('openrouter:saveProfile', [name, apiKey]); },

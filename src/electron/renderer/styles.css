@@ -3149,9 +3149,9 @@ html.is-windows .settings-panel select option {
 .row-icon-proma      { -webkit-mask-image: url(../../../assets/icons/proma.svg);         mask-image: url(../../../assets/icons/proma.svg); }
 .row-icon-hanako     { -webkit-mask-image: url(../../../assets/icons/hanako-mask.svg);   mask-image: url(../../../assets/icons/hanako-mask.svg); }
 .row-icon-dsh        { -webkit-mask-image: url(../../../assets/icons/dsh.svg);           mask-image: url(../../../assets/icons/dsh.svg); }
-.row-icon-opencode   { -webkit-mask-image: url(../../../assets/icons/opencode.svg);      mask-image: url(../../../assets/icons/opencode.svg); }
 .row-icon-deepseek   { -webkit-mask-image: url(../../../assets/icons/deepseek.svg);      mask-image: url(../../../assets/icons/deepseek.svg); }
 .row-icon-cursor     { -webkit-mask-image: url(../../../assets/icons/cursor.svg);        mask-image: url(../../../assets/icons/cursor.svg); }
+.row-icon-google     { -webkit-mask-image: url(../../../assets/icons/gemini.svg);        mask-image: url(../../../assets/icons/gemini.svg); }
 .row-icon-gemini     { -webkit-mask-image: url(../../../assets/icons/gemini.svg);        mask-image: url(../../../assets/icons/gemini.svg); }
 .row-icon-antigravity { -webkit-mask-image: url(../../../assets/icons/antigravity.svg);  mask-image: url(../../../assets/icons/antigravity.svg); }
 .row-icon-xai        { -webkit-mask-image: url(../../../assets/icons/xai.svg);           mask-image: url(../../../assets/icons/xai.svg); }
@@ -3177,10 +3177,6 @@ html.is-windows .settings-panel select option {
   mask-size: contain;
   -webkit-mask-repeat: no-repeat;
   mask-repeat: no-repeat;
-}
-.limit-icon-opencode {
-  -webkit-mask-image: url(../../../assets/icons/opencode.svg);
-  mask-image: url(../../../assets/icons/opencode.svg);
 }
 .limit-icon-deepseek {
   -webkit-mask-image: url(../../../assets/icons/deepseek.svg);
@@ -4393,7 +4389,6 @@ html.is-windows .limit-live-badge {
 }
 
 #deepseekManualPanel.hidden,
-#opencodeErrorMessage.hidden,
 #deepseekErrorMessage.hidden { display: none; }
 #deepseekManualPanel {
   min-width: 0;
@@ -4978,25 +4973,20 @@ html.is-windows .limit-live-badge {
   font-variant-numeric: tabular-nums;
 }
 
-.custom-pricing-row .custom-pricing-remove {
-  width: auto;
-  height: 24px;
-  padding: 0 8px;
-  font-size: 10px;
-  line-height: 24px;
-  opacity: 0.72;
-}
-
+.subscription-profile-list,
 .opencode-profile-list {
   margin-bottom: 4px;
 }
-.opencode-empty {
+.opencode-empty,
+.subscription-empty {
   padding: 16px 8px;
   color: var(--muted);
   font-size: 11px;
   text-align: center;
 }
-.opencode-empty.hidden { display: none; }
+.opencode-empty.hidden,
+.subscription-empty.hidden { display: none; }
+.profile-item,
 .opencode-profile-item {
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr) auto;
@@ -5008,12 +4998,14 @@ html.is-windows .limit-live-badge {
   border-radius: 6px;
   background: rgba(var(--sunken-rgb), 0.36);
 }
+.profile-item .profile-toggle,
 .opencode-profile-item .profile-toggle {
   justify-self: center;
   width: 14px;
   height: 14px;
   padding: 0;
 }
+.profile-item .profile-name-box,
 .opencode-profile-item .profile-name-box {
   display: grid;
   grid-template-columns: minmax(0, max-content) auto minmax(0, 1fr);
@@ -5024,6 +5016,7 @@ html.is-windows .limit-live-badge {
   gap: 1px 4px;
   min-width: 0;
 }
+.profile-item .profile-name,
 .opencode-profile-item .profile-name {
   grid-area: name;
   min-width: 0;
@@ -5034,6 +5027,7 @@ html.is-windows .limit-live-badge {
   font-size: 11px;
   line-height: 1.2;
 }
+.profile-item .profile-detail,
 .opencode-profile-item .profile-detail {
   grid-area: detail;
   min-width: 0;
@@ -5044,10 +5038,13 @@ html.is-windows .limit-live-badge {
   font-size: 9px;
   line-height: 1.2;
 }
+.profile-item .profile-name.hidden,
+.profile-item .profile-name-input.hidden,
 .opencode-profile-item .profile-name.hidden,
 .opencode-profile-item .profile-name-input.hidden {
   display: none;
 }
+.profile-item .profile-name-input,
 .opencode-profile-item .profile-name-input {
   grid-area: name;
   min-width: 60px;
@@ -5060,6 +5057,7 @@ html.is-windows .limit-live-badge {
   color: inherit;
   outline: none;
 }
+.profile-item .profile-rename-btn,
 .opencode-profile-item .profile-rename-btn {
   grid-area: rename;
   flex: 0 0 auto;
@@ -5073,23 +5071,29 @@ html.is-windows .limit-live-badge {
   opacity: 0;
   transition: opacity 0.15s;
 }
+.profile-item:hover .profile-rename-btn,
 .opencode-profile-item:hover .profile-rename-btn {
   opacity: 0.6;
 }
+.profile-item .profile-rename-btn:focus-visible,
+.profile-item .profile-delete:focus-visible,
 .opencode-profile-item .profile-rename-btn:focus-visible,
 .opencode-profile-item .profile-delete:focus-visible {
   opacity: 1;
 }
+.profile-item .profile-rename-btn:hover,
 .opencode-profile-item .profile-rename-btn:hover {
   opacity: 1;
   color: var(--text);
 }
+.profile-item .profile-right,
 .opencode-profile-item .profile-right {
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
 }
+.profile-item .profile-info,
 .opencode-profile-item .profile-info {
   max-width: 72px;
   overflow: hidden;
@@ -5100,6 +5104,7 @@ html.is-windows .limit-live-badge {
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
+.profile-item .profile-delete,
 .opencode-profile-item .profile-delete {
   flex: 0 0 auto;
   width: 18px;
@@ -5116,22 +5121,27 @@ html.is-windows .limit-live-badge {
   opacity: 0.55;
   transition: opacity 0.15s, color 0.15s, background 0.15s;
 }
+.profile-item:hover .profile-delete,
 .opencode-profile-item:hover .profile-delete {
   opacity: 0.85;
 }
+.profile-item .profile-delete:hover,
 .opencode-profile-item .profile-delete:hover {
   opacity: 1;
   color: var(--text);
 }
+.profile-item .profile-delete.confirming,
 .opencode-profile-item .profile-delete.confirming {
   opacity: 1;
   color: var(--red);
   background: rgba(255, 91, 91, 0.12);
 }
+.subscription-add-form,
 .opencode-add-form {
   margin-top: 6px;
   border-radius: 6px;
 }
+.subscription-add-summary,
 .opencode-add-summary {
   cursor: pointer;
   width: fit-content;
@@ -5149,44 +5159,54 @@ html.is-windows .limit-live-badge {
   list-style: none;
   transition: border-color 0.2s, background 0.2s;
 }
+.subscription-add-summary:hover,
 .opencode-add-summary:hover {
   border-color: var(--line-strong);
   background: rgba(var(--overlay-rgb), 0.072);
 }
+.subscription-add-summary .add-icon,
 .opencode-add-summary .add-icon {
   width: 10px;
   height: 10px;
   opacity: 0.72;
   transition: transform 0.25s ease;
 }
+.subscription-add-form.expanded .add-icon,
 .opencode-add-form.expanded .add-icon {
   transform: rotate(45deg);
 }
+.subscription-add-details,
 .opencode-add-details {
   margin-top: 8px;
 }
+.subscription-add-body,
 .opencode-add-body {
   display: flex;
   flex-direction: column;
   gap: 7px;
 }
+.subscription-add-body .settings-note,
 .opencode-add-body .settings-note {
   margin: 0;
 }
+.subscription-add-body .settings-row,
 .opencode-add-body .settings-row {
   display: flex;
   gap: 8px;
   align-items: center;
 }
+.subscription-add-body .settings-row label,
 .opencode-add-body .settings-row label {
   font-size: 11px;
   color: var(--muted);
   white-space: nowrap;
 }
+.subscription-add-body .settings-row input,
 .opencode-add-body .settings-row input {
   flex: 1;
   font-size: 12px;
 }
+.subscription-add-body textarea,
 .opencode-add-body textarea {
   width: 100%;
   box-sizing: border-box;

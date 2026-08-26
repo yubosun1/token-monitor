@@ -36,7 +36,7 @@ final class SettingsStore {
     /// from the older native configuration.
     private func migrateLegacyDefaultsIfNeeded() {
         let version = values["settingsSchemaVersion"] as? Int ?? 0
-        guard version < 7 else { return }
+        guard version < 8 else { return }
         if version < 1, (values["heatmapMetric"] as? String) == "cost" {
             values["heatmapMetric"] = "tokens"
         }
@@ -91,7 +91,18 @@ final class SettingsStore {
             values.removeValue(forKey: "themeColors")
             values.removeValue(forKey: "vendorColors")
         }
-        values["settingsSchemaVersion"] = 7
+        if version < 8 {
+            for key in ["limitProviders", "limitProviderOrder", "homeLimitProviderOrder", "hiddenHomeLimitProviders"] {
+                if let str = values[key] as? String {
+                    values[key] = Self.removingCSVValue(str, value: "opencode")
+                }
+            }
+            values.removeValue(forKey: "opencodeApiKey")
+            values.removeValue(forKey: "opencodeCookie")
+            values.removeValue(forKey: "opencodeProfiles")
+            values.removeValue(forKey: "opencodeLocalLimitsEnabled")
+        }
+        values["settingsSchemaVersion"] = 8
         persist(values)
     }
 
@@ -144,8 +155,8 @@ final class SettingsStore {
             ],
             // Limits
             "limitsEnabled": true,
-            "limitProviders": "deepseek,opencode,kimi",
-            "limitProviderOrder": "deepseek,opencode,kimi",
+            "limitProviders": "deepseek,kimi",
+            "limitProviderOrder": "deepseek,kimi",
             "homeLimitProviderOrder": "",
             "hiddenHomeLimitProviders": "",
             "homeLimitAccountCount": 3,
@@ -153,7 +164,6 @@ final class SettingsStore {
             "showLimitSource": false,
             "maskLimitAccountEmails": false,
             "showLimitUsed": false,
-            "opencodeLocalLimitsEnabled": false,
             // Subscriptions
             "subscriptions": [Any](),
             // UI

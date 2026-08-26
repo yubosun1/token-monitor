@@ -15,8 +15,7 @@ const clientsWithIcon = new Set([
 ]);
 const modelVendorsWithIcon = new Set([
   'claude', 'codex', 'cursor', 'gemini', 'antigravity', 'xai', 'deepseek', 'meta', 'mistral',
-  'qwen', 'kimi', 'zai', 'cohere', 'xiaomi', 'minimax', 'doubao', 'hunyuan',
-  'opencode'
+  'qwen', 'kimi', 'zai', 'cohere', 'xiaomi', 'minimax', 'doubao', 'hunyuan'
 ]);
 
 function iconKindFor(rowData, breakdown) {
@@ -47,18 +46,28 @@ const KNOWN_CLIENTS = [
   { id: 'hanako', label: 'Hanako' },
   { id: 'dsh', label: 'DeepSeek Harness' }
 ];
+const SUBSCRIPTION_PROVIDERS = [
+  { id: 'google', label: 'Google' },
+  { id: 'antigravity', label: 'Antigravity' },
+  { id: 'deepseek', label: 'DeepSeek' },
+  { id: 'kimi', label: 'Kimi' },
+  { id: 'claude', label: 'Claude Code' },
+  { id: 'codex', label: 'Codex' },
+  { id: 'cursor', label: 'Cursor' },
+  { id: 'workbuddy', label: 'WorkBuddy' },
+  { id: 'proma', label: 'Proma' },
+  { id: 'hanako', label: 'Hanako' },
+  { id: 'dsh', label: 'DeepSeek Harness' }
+];
 const LIMIT_PROVIDERS = [
   { id: 'deepseek', label: 'DeepSeek' },
-  { id: 'opencode', label: 'OpenCode' },
   { id: 'kimi', label: 'Kimi' }
 ];
 const LIMIT_PROVIDER_ACCOUNT_GROUP_IDS = {
-  opencode: 'opencodeCookieGroup',
   deepseek: 'deepseekAccountGroup',
   kimi: 'kimiAccountGroup'
 };
 const LIMIT_PROVIDER_ACCOUNT_STATUS_IDS = {
-  opencode: 'opencodeCookieStatus',
   deepseek: 'deepseekApiKeyStatus',
   kimi: 'kimiAccountStatus'
 };
@@ -188,7 +197,7 @@ function normalizeInitialViewValue(value, allowed, fallback) {
   return allowed.has(raw) ? raw : fallback;
 }
 
-const state = { period: normalizeInitialViewValue(initialViewState.period, viewPeriodValues, 'today'), breakdown: normalizeInitialViewValue(initialViewState.breakdown, viewBreakdownValues, 'home'), periodMenuOpen: false, viewSwitcherOpen: false, viewSwitcherHasOpened: false, limitDetailTooltipHasOpened: false, limitDetailTooltipActive: false, limitDetailTooltipRenderPending: false, settings: null, stats: null, homeHistory: null, homeHistoryBusy: false, homeHistoryRequested: false, homeHistorySignature: '', homeHistoryRetries: 0, homeHistoryRetryTimer: null, homeActivityScrollLeft: null, homeActivityFollowEnd: true, homeActivityResizeObserver: null, trendSettingsExpanded: false, trendsActivating: false, homeSettingsExpanded: false, homeLimitSettingsExpanded: false, limitProviderSettingsExpanded: '', clientHealthExpanded: '', clientSources: clientSourceCacheApi.createClientSourceCache(), clientSourcesKey: '', clientSourcesRequest: 0, subscriptionEditingId: '', subscriptionTopUps: [], subscriptionFormBase: null, subscriptionEditorTransitionId: 0, refreshTimer: null, refreshBusy: false, refreshFeedbackTimer: null, currentTotal: 0, rowSignature: '', streamConnected: false, streamFailure: null, mode: 'idle', appInfo: null, hubInfo: null, cursorAccount: { status: null, error: '' }, cursorAccountExpanded: false, codexAccountExpanded: false, codexAccountError: '', codexSignInBusy: false, codexSignInFlowId: '', codexLoginUrl: '', codexLoginStatus: '', codexLoginOutput: '', codexWorkspaceChoices: [], codexWorkspaceId: '', codexActiveAccount: null, codexPendingActiveAccount: null, codexPendingActiveAccountUntil: 0, codexPendingActiveAccountTimer: null, codexSystemSwitchingAccountId: '', codexSystemSwitchErrorAccountId: '', codexSystemSwitchError: '', codexSwitchPopoverHasOpened: false, codexSwitchPopoverActive: false, codexSwitchPopoverRenderPending: false, customPricingExpanded: false, claudeAccountExpanded: false, claudePendingCheckSince: 0, opencodeProfileCount: 0, opencodeCookieExpanded: false, openrouterProfileCount: 0, openrouterAccountExpanded: false, thirdPartyProfileCount: 0, thirdPartyAccountExpanded: false, deepseekAccountExpanded: false, deepseekPendingCheckSince: 0, minimaxAccountExpanded: false, minimaxPendingCheckSince: 0, zaiAccountExpanded: false, zaiPendingCheckSince: 0, zaiteamAccountExpanded: false, zaiteamPendingCheckSince: 0, volcengineAccountExpanded: false, volcenginePendingCheckSince: 0, qoderAccountExpanded: false, qoderPendingCheckSince: 0, kimiAccountExpanded: false, kimiPendingCheckSince: 0, ollamaAccountExpanded: false, ollamaPendingCheckSince: 0, mimoAccountExpanded: false, mimoAccountError: '', copilotAccountExpanded: false, copilotManualExpanded: false, copilotPendingCheckSince: 0, copilotSignInBusy: false, copilotSignInCancelable: false, copilotSignInFlowId: '', copilotAuthorizeMessage: '', copilotLoginStatus: '', copilotErrorMessage: '', suppressInitialNumberAnimation: window.__TOKEN_MONITOR_SUPPRESS_INITIAL_NUMBER_ANIMATION__ === true, openSession: null, detailSort: 'time', recordingWindowShortcut: false, windowShortcutInvalid: false };
+const state = { period: normalizeInitialViewValue(initialViewState.period, viewPeriodValues, 'today'), breakdown: normalizeInitialViewValue(initialViewState.breakdown, viewBreakdownValues, 'home'), periodMenuOpen: false, viewSwitcherOpen: false, viewSwitcherHasOpened: false, limitDetailTooltipHasOpened: false, limitDetailTooltipActive: false, limitDetailTooltipRenderPending: false, settings: null, stats: null, homeHistory: null, homeHistoryBusy: false, homeHistoryRequested: false, homeHistorySignature: '', homeHistoryRetries: 0, homeHistoryRetryTimer: null, homeActivityScrollLeft: null, homeActivityFollowEnd: true, homeActivityResizeObserver: null, trendSettingsExpanded: false, trendsActivating: false, homeSettingsExpanded: false, homeLimitSettingsExpanded: false, limitProviderSettingsExpanded: '', clientHealthExpanded: '', clientSources: clientSourceCacheApi.createClientSourceCache(), clientSourcesKey: '', clientSourcesRequest: 0, subscriptionEditingId: '', subscriptionTopUps: [], subscriptionFormBase: null, subscriptionEditorTransitionId: 0, refreshTimer: null, refreshBusy: false, refreshFeedbackTimer: null, currentTotal: 0, rowSignature: '', streamConnected: false, streamFailure: null, mode: 'idle', appInfo: null, hubInfo: null, cursorAccount: { status: null, error: '' }, cursorAccountExpanded: false, codexAccountExpanded: false, codexAccountError: '', codexSignInBusy: false, codexSignInFlowId: '', codexLoginUrl: '', codexLoginStatus: '', codexLoginOutput: '', codexWorkspaceChoices: [], codexWorkspaceId: '', codexActiveAccount: null, codexPendingActiveAccount: null, codexPendingActiveAccountUntil: 0, codexPendingActiveAccountTimer: null, codexSystemSwitchingAccountId: '', codexSystemSwitchErrorAccountId: '', codexSystemSwitchError: '', codexSwitchPopoverHasOpened: false, codexSwitchPopoverActive: false, codexSwitchPopoverRenderPending: false, customPricingExpanded: false, claudeAccountExpanded: false, claudePendingCheckSince: 0, openrouterProfileCount: 0, openrouterAccountExpanded: false, thirdPartyProfileCount: 0, thirdPartyAccountExpanded: false, deepseekAccountExpanded: false, deepseekPendingCheckSince: 0, minimaxAccountExpanded: false, minimaxPendingCheckSince: 0, zaiAccountExpanded: false, zaiPendingCheckSince: 0, zaiteamAccountExpanded: false, zaiteamPendingCheckSince: 0, volcengineAccountExpanded: false, volcenginePendingCheckSince: 0, qoderAccountExpanded: false, qoderPendingCheckSince: 0, kimiAccountExpanded: false, kimiPendingCheckSince: 0, ollamaAccountExpanded: false, ollamaPendingCheckSince: 0, mimoAccountExpanded: false, mimoAccountError: '', copilotAccountExpanded: false, copilotManualExpanded: false, copilotPendingCheckSince: 0, copilotSignInBusy: false, copilotSignInCancelable: false, copilotSignInFlowId: '', copilotAuthorizeMessage: '', copilotLoginStatus: '', copilotErrorMessage: '', suppressInitialNumberAnimation: window.__TOKEN_MONITOR_SUPPRESS_INITIAL_NUMBER_ANIMATION__ === true, openSession: null, detailSort: 'time', recordingWindowShortcut: false, windowShortcutInvalid: false };
 state.clientRescans = clientRescanStateApi.createClientRescanState({
   onChange: (clientId) => {
     if (state.clientHealthExpanded === clientId) refillOpenClientHealthPanel();
@@ -1433,15 +1442,23 @@ function subscriptionList() {
 }
 
 function subscriptionProviderLabel(providerId) {
-  const entry = LIMIT_PROVIDERS.find((provider) => provider.id === providerId);
-  return entry?.settingsLabel || entry?.label || providerId;
+  if (providerId === 'google') return 'Google';
+  const entry = SUBSCRIPTION_PROVIDERS.find((provider) => provider.id === providerId)
+    || LIMIT_PROVIDERS.find((provider) => provider.id === providerId)
+    || KNOWN_CLIENTS.find((client) => client.id === providerId);
+  return entry?.settingsLabel || entry?.label || limitProviderPresentationApi?.limitProviderDisplayLabel(providerId) || providerId;
 }
 
 // Keyed off the same list the label comes from, because a `.row-icon-<id>` with
 // no mask rule behind it paints a solid square rather than nothing — so a record
 // still bound to a provider that has since left the list gets no icon at all.
 function subscriptionProviderIconClass(providerId) {
-  const known = LIMIT_PROVIDERS.some((provider) => provider.id === providerId);
+  if (providerId === 'google') return 'row-icon row-icon-google';
+  const known = SUBSCRIPTION_PROVIDERS.some((provider) => provider.id === providerId)
+    || LIMIT_PROVIDERS.some((provider) => provider.id === providerId)
+    || KNOWN_CLIENTS.some((client) => client.id === providerId)
+    || clientsWithIcon.has(providerId)
+    || modelVendorsWithIcon.has(providerId);
   return known ? `row-icon row-icon-${providerId}` : '';
 }
 
@@ -1474,7 +1491,7 @@ function limitProvidersForSubscriptions() {
 function subscriptionAccountChoices() {
   const visible = limitProvidersForSubscriptions()
     .filter((provider) => provider?.provider && provider.status !== 'notConfigured');
-  return visible.map((provider, index) => ({
+  const choices = visible.map((provider, index) => ({
     provider,
     value: subscriptionAccountValue(provider),
     label: accountIdentityApi.accountTitleLabel(provider, visible, {
@@ -1482,6 +1499,43 @@ function subscriptionAccountChoices() {
       index
     }) || subscriptionProviderLabel(provider.provider)
   }));
+
+  const existingSubscriptions = subscriptionList();
+  const allProviders = new Set([
+    ...SUBSCRIPTION_PROVIDERS.map((p) => p.id),
+    ...choices.map((c) => c.provider.provider),
+    ...existingSubscriptions.map((s) => s.provider)
+  ]);
+
+  const defaultAccountLabel = t('settings.subscriptions.defaultAccount') || '默认账号';
+  for (const provId of allProviders) {
+    const hasChoice = choices.some((c) => c.provider.provider === provId);
+    if (!hasChoice) {
+      choices.push({
+        provider: { provider: provId, accountKey: 'default', accountName: defaultAccountLabel },
+        value: `${provId}\0default\0${defaultAccountLabel}`,
+        label: defaultAccountLabel
+      });
+    }
+  }
+
+  if (state.subscriptionEditingId) {
+    const sub = existingSubscriptions.find((s) => s.id === state.subscriptionEditingId);
+    if (sub) {
+      const subAcc = subscriptionApi.matchProviderAccount(sub, limitProvidersForSubscriptions());
+      const val = subAcc ? subscriptionAccountValue(subAcc) : [sub.provider, sub.binding?.accountKey || 'default', sub.binding?.profileName || defaultAccountLabel].join('\0');
+      if (!choices.some((c) => c.value === val)) {
+        const accName = sub.binding?.profileName || sub.binding?.accountEmail || defaultAccountLabel;
+        choices.push({
+          provider: { provider: sub.provider, accountKey: sub.binding?.accountKey || 'default', accountName: accName, accountEmail: sub.binding?.accountEmail || '' },
+          value: val,
+          label: accName
+        });
+      }
+    }
+  }
+
+  return choices;
 }
 
 function subscriptionAccountValue(provider) {
@@ -2041,7 +2095,7 @@ function renderSubscriptionRows() {
   const list = subscriptionList();
   if (list.length === 0) {
     const empty = document.createElement('div');
-    empty.className = 'opencode-empty';
+    empty.className = 'subscription-empty';
     empty.textContent = t('settings.subscriptions.emptyList');
     listEl.append(empty);
     positionSubscriptionEditor();
@@ -2153,16 +2207,20 @@ function renderSubscriptionPickers() {
   if (!providerSelect || !accountSelect) return;
 
   const choices = subscriptionAccountChoices();
-  const providerIds = [...new Set(choices.map((choice) => choice.provider.provider))];
+  const choiceProviders = new Set(choices.map((choice) => choice.provider.provider));
+  const orderedProviders = [
+    ...SUBSCRIPTION_PROVIDERS.map((p) => p.id).filter((id) => choiceProviders.has(id)),
+    ...[...choiceProviders].filter((id) => !SUBSCRIPTION_PROVIDERS.some((p) => p.id === id))
+  ];
   const previousProvider = providerSelect.value;
   providerSelect.replaceChildren();
-  for (const id of providerIds) {
+  for (const id of orderedProviders) {
     const option = document.createElement('option');
     option.value = id;
     option.textContent = subscriptionProviderLabel(id);
     providerSelect.append(option);
   }
-  if (providerIds.includes(previousProvider)) providerSelect.value = previousProvider;
+  if (orderedProviders.includes(previousProvider)) providerSelect.value = previousProvider;
 
   const activeProvider = providerSelect.value;
   const previousAccount = accountSelect.value;
@@ -2547,7 +2605,7 @@ function renderSubscriptionTopUpEntries() {
   const entries = subscriptionFormTopUps();
   if (entries.length === 0) {
     const empty = document.createElement('div');
-    empty.className = 'opencode-empty';
+    empty.className = 'subscription-empty';
     empty.textContent = t('settings.subscriptions.topUpEmpty');
     listEl.append(empty);
     return;
@@ -3716,32 +3774,6 @@ function renderProviderWindows(provider, color) {
         windows.append(node);
       }
     }
-  } else if (provider.provider === 'opencode') {
-    // Go reports session/weekly/monthly windows ($12/$30/$60); Zen reports a prepaid balance (and,
-    // when the account is active, rolling/weekly). The monthly window normalizes to kind 'billing'
-    // (see normalizeWindowKind). Show only the windows that exist — no empty `--` placeholders — and
-    // surface the Zen balance as a full-width, no-meter note when present.
-    const session = windowForKind(provider, 'session');
-    const weekly = windowForKind(provider, 'weekly');
-    const monthly = windowForKind(provider, 'billing');
-    if (session) windows.append(limitWindowNode('Session', session, color, 0.95));
-    if (weekly) windows.append(limitWindowNode('Weekly', weekly, color, 0.68));
-    // Monthly spans the full row (like Balance) so it never leaves a half-empty grid cell.
-    if (monthly) {
-      const node = limitWindowNode('Monthly', monthly, color, 0.5);
-      node.classList.add('limit-window-wide');
-      windows.append(node);
-    }
-    // Balance is a Zen-only concept. Show it only when a real balance number came
-    // back (incl. $0.00). It can't key off `source === 'web'` anymore — Go usage is
-    // now fetched over the web too, so a pure-Go account (no Zen, balanceUsd null)
-    // must not get a phantom `Balance —` line.
-    const hasBalance = typeof provider.balanceUsd === 'number' && Number.isFinite(provider.balanceUsd);
-    if (hasBalance) {
-      const node = limitWindowNode('Balance', { showMeter: false }, color, 0.68, formatLimitAmount(provider.balanceUsd));
-      node.classList.add('limit-window-wide');
-      windows.append(node);
-    }
   } else if (provider.provider === 'openrouter') {
     windows.classList.add('limit-windows-openrouter');
     const balance = provider.balance || null;
@@ -4062,7 +4094,6 @@ function renderLimitProviderRow(id, label, provider, color, options = {}) {
 // already masks them.
 const LIMIT_ACCOUNT_TITLES = {
   codex: codexAccountTitle,
-  opencode: opencodeAccountTitle,
   openrouter: (provider, index) => namedApiAccountTitle(provider, index, 'openrouter'),
   thirdparty: (provider, index) => namedApiAccountTitle(provider, index, 'thirdparty')
 };
@@ -4202,43 +4233,6 @@ function renderMimoAccountGroup(label, providers, color) {
   return row;
 }
 
-function opencodeAccountTitle(provider, index) {
-  const name = String(provider?.accountName || '').trim();
-  if (name) return name;
-  // Older synced clients put the user-defined profile name in accountLabel.
-  // Keep those rows identifiable while new clients carry profile and plan in
-  // separate fields. Go/Zen are plan labels, never account identities.
-  const legacyName = String(provider?.accountLabel || '').trim();
-  return legacyName && legacyName !== 'Go' && legacyName !== 'Zen'
-    ? legacyName
-    : `Account ${index + 1}`;
-}
-
-function renderOpenCodeAccountGroup(label, providers, color) {
-  const row = document.createElement('div');
-  row.className = 'limit-row limit-row-group';
-  const groupProvider = { provider: 'opencode', status: 'ok', windows: [], accountGroup: true };
-  const head = renderLimitProviderHead('opencode', label, groupProvider, color, {
-    planText: t('settings.opencode.nAccounts', { count: providers.length }),
-    hideMeta: true
-  });
-  const accountList = document.createElement('div');
-  accountList.className = 'limit-account-list';
-  providers.forEach((provider, index) => {
-    const legacyProfileLabel = !provider?.accountName
-      && provider?.accountLabel
-      && provider.accountLabel !== 'Go'
-      && provider.accountLabel !== 'Zen';
-    accountList.append(renderLimitProviderRow('opencode', limitAccountTitle('opencode', provider, index, providers), provider, color, {
-      accountRow: true,
-      showIcon: false,
-      ...(legacyProfileLabel ? { planText: '' } : {})
-    }));
-  });
-  row.append(head, accountList);
-  return row;
-}
-
 function namedApiAccountTitle(provider, index, providerId) {
   const accountName = String(provider?.accountName || provider?.accountLabel || '').trim();
   if (accountName.toLowerCase() === 'environment') return t(`settings.${providerId}.environment`);
@@ -4365,10 +4359,6 @@ function renderLimits() {
     }
     if (id === 'codex' && Array.isArray(visibleProviders) && visibleProviders.length > 1) {
       nodes.push(renderCodexAccountGroup(label, visibleProviders, color));
-      continue;
-    }
-    if (id === 'opencode' && Array.isArray(visibleProviders) && visibleProviders.length > 1) {
-      nodes.push(renderOpenCodeAccountGroup(label, visibleProviders, color));
       continue;
     }
     if (id === 'openrouter' && Array.isArray(visibleProviders) && visibleProviders.length > 1) {
@@ -6316,7 +6306,6 @@ function syncSettingsForm() {
   renderToolPreferences();
   renderLimitProviderCheckboxes();
   renderSettingsSummaries();
-  renderOpenCodeProfiles();
   renderOpenRouterProfiles();
   renderThirdPartyProfiles();
   applyVendorColorOverrides(state.settings.vendorColors);
@@ -7782,7 +7771,7 @@ function renderLimitProviderCheckboxesNow() {
       const toggleOptions = () => {
         const opening = state.limitProviderSettingsExpanded !== id;
         if (accountGroup) {
-          const stateKey = id === 'opencode' ? 'opencodeCookieExpanded' : `${id}AccountExpanded`;
+          const stateKey = `${id}AccountExpanded`;
           setAccountGroupExpanded(id, opening, stateKey);
         } else {
           setLimitProviderSettingsExpanded(opening ? id : '');
@@ -7864,12 +7853,6 @@ const LIMIT_PROVIDER_SETTINGS = {
     descKey: 'settings.limits.prepaidBalanceDesc',
     requiresConfiguredKey: 'claudeWebCookieConfigured',
     defaultValue: true
-  }],
-  opencode: [{
-    key: 'opencodeLocalLimitsEnabled',
-    titleKey: 'settings.limits.opencodeLocalLimits',
-    descKey: 'settings.limits.opencodeLocalLimitsDesc',
-    defaultValue: false
   }]
 };
 
@@ -8764,10 +8747,6 @@ function setCursorAccountExpanded(expanded) {
   setAccountGroupExpanded('cursor', expanded, 'cursorAccountExpanded');
 }
 
-function setOpencodeCookieExpanded(expanded) {
-  setAccountGroupExpanded('opencode', expanded, 'opencodeCookieExpanded');
-}
-
 function selectedThirdPartyAdapter() {
   const platform = String(document.getElementById('thirdpartyPlatformInput')?.value || 'newapi');
   const mode = String(document.getElementById('thirdpartyModeInput')?.value || 'account');
@@ -8828,7 +8807,7 @@ function renderCodexAccounts() {
   const enabledCount = accounts.filter(account => account.enabled !== false).length;
   const statusText = accounts.length === 0
     ? t('settings.codex.notConfigured')
-    : t('settings.opencode.connected', { linked: enabledCount, total: accounts.length });
+    : t('settings.codex.connected', { linked: enabledCount, total: accounts.length });
   setCursorStatusText(statusEl, statusText);
   errorEl.textContent = state.codexAccountError || '';
   errorEl.classList.toggle('hidden', !state.codexAccountError);
@@ -9473,172 +9452,6 @@ function renderDeepseekStatus() {
   renderSettingsSummaries();
 }
 
-function renderOpenCodeProfiles() {
-  const listEl = document.getElementById('opencodeProfileList');
-  if (!listEl) return;
-
-  const api = window.tokenMonitor.opencode;
-
-  api.getProfiles().then(({ profiles, hasEnvVar }) => {
-    listEl.innerHTML = '';
-    const entries = Object.entries(profiles);
-
-    if (entries.length === 0 && !hasEnvVar) {
-      listEl.innerHTML = '<div class="opencode-empty">' + t('settings.opencode.emptyList') + '</div>';
-      state.opencodeProfileCount = 0;
-      renderOpenCodeProfilesStatusSummary({});
-      renderSettingsSummaries();
-      return;
-    }
-
-    state.opencodeProfileCount = entries.length;
-    renderSettingsSummaries();
-
-    for (const [name, profile] of entries) {
-      const item = document.createElement('div');
-      item.className = 'opencode-profile-item';
-
-      const toggle = document.createElement('input');
-      toggle.className = 'profile-toggle';
-      toggle.type = 'checkbox';
-      toggle.checked = profile.enabled;
-      toggle.addEventListener('change', () => {
-        api.setProfileEnabled(name, toggle.checked).then(() => {
-          const info = item.querySelector('.profile-info');
-          info.textContent = toggle.checked ? '...' : t('settings.opencode.disabled');
-          renderSettingsSummaries();
-          updateOpenCodeProfilesStatus();
-        });
-      });
-
-      const nameBox = document.createElement('span');
-      nameBox.className = 'profile-name-box';
-      const nameSpan = document.createElement('span');
-      nameSpan.className = 'profile-name';
-      nameSpan.textContent = name;
-
-      const nameInput = document.createElement('input');
-      nameInput.className = 'profile-name-input hidden';
-      nameInput.type = 'text';
-      nameInput.value = name;
-
-      const renameBtn = document.createElement('button');
-      renameBtn.className = 'profile-rename-btn';
-      renameBtn.textContent = '✎';
-      renameBtn.title = t('settings.opencode.rename');
-
-      let editing = false;
-      function beginRename() {
-        if (editing) return;
-        editing = true;
-        nameSpan.classList.add('hidden');
-        nameInput.classList.remove('hidden');
-        nameInput.focus();
-        nameInput.select();
-      }
-      function endRename(save) {
-        if (!editing) return;
-        editing = false;
-        nameInput.classList.add('hidden');
-        nameSpan.classList.remove('hidden');
-        if (save && nameInput.value.trim() && nameInput.value.trim() !== name) {
-          api.renameProfile(name, nameInput.value.trim()).then(() => {
-            renderOpenCodeProfiles();
-            updateOpenCodeProfilesStatus();
-            renderSettingsSummaries();
-          });
-        }
-      }
-      renameBtn.addEventListener('click', beginRename);
-      nameInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') endRename(true);
-        if (e.key === 'Escape') endRename(false);
-      });
-      nameInput.addEventListener('blur', () => endRename(true));
-
-      nameBox.append(nameSpan, nameInput, renameBtn);
-
-      const rightBox = document.createElement('span');
-      rightBox.className = 'profile-right';
-
-      const infoSpan = document.createElement('span');
-      infoSpan.className = 'profile-info';
-      infoSpan.id = 'opencode-info-' + name.replace(/[^a-zA-Z0-9_-]/g, '_');
-      infoSpan.textContent = profile.enabled ? '...' : t('settings.opencode.disabled');
-
-      const deleteBtn = document.createElement('button');
-      deleteBtn.className = 'profile-delete';
-      deleteBtn.textContent = '✕';
-      deleteBtn.title = t('settings.opencode.delete');
-      let confirmingDelete = false;
-      deleteBtn.addEventListener('click', async () => {
-        if (!confirmingDelete) {
-          confirmingDelete = true;
-          deleteBtn.classList.add('confirming');
-          deleteBtn.textContent = '✓';
-          deleteBtn.title = t('settings.opencode.deleteConfirm', { name });
-          return;
-        }
-        await api.deleteProfile(name);
-        renderOpenCodeProfiles();
-        updateOpenCodeProfilesStatus();
-        renderSettingsSummaries();
-      });
-
-      rightBox.append(infoSpan, deleteBtn);
-      item.append(toggle, nameBox, rightBox);
-      listEl.appendChild(item);
-    }
-
-    updateOpenCodeProfilesStatus();
-  });
-}
-
-async function updateOpenCodeProfilesStatus() {
-  const api = window.tokenMonitor.opencode;
-  const status = await api.status();
-  const profiles = status.profiles || {};
-
-  for (const [name, s] of Object.entries(profiles)) {
-    const safeName = name.replace(/[^a-zA-Z0-9_-]/g, '_');
-    const infoEl = document.getElementById('opencode-info-' + safeName);
-    if (!infoEl) continue;
-
-    if (s.expired) {
-      infoEl.textContent = t('settings.opencode.statusExpired');
-    } else if (s.linked) {
-      const parts = [];
-      if (s.go) parts.push('Go');
-      if (s.zen) parts.push('Zen');
-      let text = '✓ ' + parts.join(' · ');
-      if (s.hasBalance && s.balanceUsd != null) {
-        text += '  $' + Number(s.balanceUsd).toFixed(2);
-      }
-      infoEl.textContent = text;
-    } else if (s.error) {
-      infoEl.textContent = s.error;
-    } else {
-      infoEl.textContent = t('settings.opencode.connectFailed');
-    }
-  }
-
-  renderOpenCodeProfilesStatusSummary(profiles);
-}
-
-function renderOpenCodeProfilesStatusSummary(profiles) {
-  const totalEl = document.getElementById('opencodeCookieStatus');
-  if (totalEl) {
-    const linkedCount = Object.values(profiles).filter(s => s.linked).length;
-    const configuredProfileCount = state.opencodeProfileCount || 0;
-    const totalCount = Math.max(Object.keys(profiles).length, configuredProfileCount);
-    if (totalCount > 0) {
-      totalEl.textContent = t('settings.opencode.connected', { linked: linkedCount, total: totalCount });
-    } else {
-      totalEl.textContent = t('settings.opencode.statusNotSet');
-    }
-  }
-}
-
 function openrouterProfileStatusText(provider, options = {}) {
   const status = limitProviderPresentationApi.namedApiProfileStatus(provider, options);
   if (status === 'disabled') return t('settings.profiles.disabled');
@@ -9757,7 +9570,7 @@ function appendNamedApiProfileRow(listEl, config) {
     detail = ''
   } = config;
   const item = document.createElement('div');
-  item.className = 'opencode-profile-item';
+  item.className = 'profile-item';
   if (!env) {
     const toggle = document.createElement('input');
     toggle.className = 'profile-toggle';
@@ -9907,7 +9720,7 @@ function renderNamedApiProfiles(config) {
     state[profileCountStateKey] = entries.length + (hasEnvVar ? 1 : 0);
     if (state[profileCountStateKey] === 0) {
       const empty = document.createElement('div');
-      empty.className = 'opencode-empty';
+      empty.className = 'subscription-empty';
       empty.textContent = t(`settings.${providerId}.emptyList`);
       listEl.append(empty);
       updateStatus();
@@ -10248,53 +10061,6 @@ function setupCustomPricingUI() {
 }
 
 function setupCursorAccountUI() {
-
-  const opencodeToggle = document.getElementById('opencodeSettingsToggle');
-  if (opencodeToggle) {
-    opencodeToggle.addEventListener('click', () => {
-      const expanding = document.getElementById('opencodeSettingsDetails').classList.contains('hidden');
-      setOpencodeCookieExpanded(expanding);
-      if (expanding) renderOpenCodeProfiles();
-    });
-
-    const addToggle = document.getElementById('opencodeAddToggle');
-    const addDetails = document.getElementById('opencodeAddDetails');
-    function setOpenCodeAddExpanded(expanded) {
-      const next = Boolean(expanded);
-      addToggle?.setAttribute('aria-expanded', next ? 'true' : 'false');
-      addDetails?.classList.toggle('hidden', !next);
-      document.getElementById('opencodeAddForm')?.classList.toggle('expanded', next);
-    }
-    addToggle?.addEventListener('click', () => setOpenCodeAddExpanded(addDetails?.classList.contains('hidden')));
-
-    document.getElementById('opencodeOpenBrowser')?.addEventListener('click', () => {
-      window.tokenMonitor.openExternal('https://opencode.ai/auth');
-    });
-
-    document.getElementById('opencodeCookieSubmit').addEventListener('click', async () => {
-      const input = document.getElementById('opencodeCookieInput');
-      const nameInput = document.getElementById('opencodeProfileName');
-      const errorEl = document.getElementById('opencodeErrorMessage');
-      const name = (nameInput.value || '').trim() || 'default';
-      const cookie = input.value;
-
-      errorEl.classList.add('hidden');
-
-      const result = await window.tokenMonitor.opencode.saveProfile(name, cookie);
-      if (result.ok) {
-        input.value = '';
-        nameInput.value = '';
-        renderOpenCodeProfiles();
-        updateOpenCodeProfilesStatus();
-        renderSettingsSummaries();
-      } else {
-        errorEl.textContent = result.error || t('settings.opencode.saveFailedShort');
-        errorEl.classList.remove('hidden');
-      }
-    });
-  }
-
-
 
   const deepseekToggle = document.getElementById('deepseekSettingsToggle');
   if (deepseekToggle) {

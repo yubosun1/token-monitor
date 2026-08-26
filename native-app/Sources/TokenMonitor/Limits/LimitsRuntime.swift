@@ -1,8 +1,8 @@
 import Foundation
 
-/// Limits refresh loop: polls the enabled providers (deepseek, opencode, kimi) at
+/// Limits refresh loop: polls the enabled providers (deepseek, kimi) at
 /// limitsRefreshMs and keeps the summary the stats frames embed. Ports the
-/// LimitsRuntime role of src/shared/deviceRuntime.js, trimmed to three
+/// LimitsRuntime role of src/shared/deviceRuntime.js, trimmed to two
 /// providers and local mode.
 final class LimitsRuntime {
     static let shared = LimitsRuntime()
@@ -93,7 +93,7 @@ final class LimitsRuntime {
 
         let settings = core.settings.snapshot()
         guard settings["limitsEnabled"] as? Bool ?? true else { return }
-        let enabled = (settings["limitProviders"] as? String ?? "deepseek,opencode,kimi")
+        let enabled = (settings["limitProviders"] as? String ?? "deepseek,kimi")
             .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
 
@@ -102,23 +102,6 @@ final class LimitsRuntime {
             switch provider {
             case "deepseek":
                 providers.append(DeepseekBalance.fetchLimits(nowMs: nowMs))
-            case "opencode":
-                let profiles = CredentialStore.shared.opencodeProfiles()
-                    .filter { $0.enabled && !$0.apiKey.isEmpty }
-                let profileList = profiles.map { OpencodeLimits.Profile(name: $0.name, apiKey: $0.apiKey, enabled: $0.enabled) }
-                // Async fetch on this queue via a semaphore bridge.
-                let semaphore = DispatchSemaphore(value: 0)
-                var fetched: [[String: Any]] = []
-                Task {
-                    fetched = await OpencodeLimits.fetchProviders(
-                        profiles: profileList,
-                        nowMs: nowMs,
-                        opencodeLocalLimitsEnabled: settings["opencodeLocalLimitsEnabled"] as? Bool ?? false
-                    )
-                    semaphore.signal()
-                }
-                semaphore.wait()
-                providers.append(contentsOf: fetched)
             case "kimi":
                 let semaphore = DispatchSemaphore(value: 0)
                 var fetched: JSON = [:]

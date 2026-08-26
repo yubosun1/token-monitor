@@ -575,7 +575,7 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
                   out.settingsSections = [...document.querySelectorAll('.settings-section-toggle')].map(b => b.getAttribute('data-settings-section'));
                   out.clientRows = [...document.querySelectorAll('#clientDisplayList [class*="row"]')].map(r => (r.querySelector('[class*="name"], [class*="label"]')?.textContent || '').trim()).slice(0, 10);
                   out.providerExpansion = {};
-                  for (const id of ['deepseek', 'opencode']) {
+                  for (const id of ['deepseek', 'kimi']) {
                     const button = document.getElementById(`limitProviderDisclosure-${id}`);
                     if (button?.getAttribute('aria-expanded') !== 'true') button?.click();
                     await new Promise(r => setTimeout(r, 100));
@@ -591,9 +591,9 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
                   if (limitsTab) limitsTab.click();
                   await new Promise(r => setTimeout(r, 500));
                   out.limitsProviders = [...document.querySelectorAll('.limit-provider-row')].map(r => (r.querySelector('[class*="name"], [class*="label"]')?.textContent || '').trim()).slice(0, 6);
-                  const openCodeTitle = [...document.querySelectorAll('#limitsPanel .limit-name-title')].find(el => el.textContent.trim() === 'OpenCode');
-                  const openCodeGroup = openCodeTitle?.closest('.limit-row-group');
-                  out.openCodeAccountRows = openCodeGroup?.querySelectorAll('.limit-account-row').length ?? (openCodeTitle ? 1 : 0);
+                  const deepSeekTitle = [...document.querySelectorAll('#limitsPanel .limit-name-title')].find(el => el.textContent.trim() === 'DeepSeek');
+                  const deepSeekGroup = deepSeekTitle?.closest('.limit-row-group');
+                  out.deepSeekAccountRows = deepSeekGroup?.querySelectorAll('.limit-account-row').length ?? (deepSeekTitle ? 1 : 0);
                   const toolTab = document.querySelector('[data-view="tool"], [data-breakdown="tool"]');
                   if (toolTab) toolTab.click();
                   await new Promise(r => setTimeout(r, 300));

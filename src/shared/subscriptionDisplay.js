@@ -500,8 +500,8 @@
   // Account binding
   //
   // `accountKey` is a stable identifier for only some providers. For anything
-  // keyed on the credential itself — openrouter hashes the API key, qoder and
-  // opencode hash the cookie, grok and kimi hash the token — it is really a
+  // keyed on the credential itself — openrouter hashes the API key, qoder
+  // hashes the cookie, grok and kimi hash the token — it is really a
   // credential fingerprint, and re-pasting an expired cookie changes it. Those
   // are exactly the providers whose credentials rotate most often, so binding on
   // accountKey alone would orphan a subscription every time.

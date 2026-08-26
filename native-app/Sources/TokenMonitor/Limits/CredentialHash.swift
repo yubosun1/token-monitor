@@ -2,8 +2,7 @@ import Foundation
 import CryptoKit
 
 /// SHA-256 credential fingerprint ("sha256:" hex prefix) used to key
-/// per-account limit caches. Historically duplicated in
-/// DeepseekBalance/OpencodeLimits; kept here as a single shared helper.
+/// per-account limit caches. Shared helper for limits providers.
 enum CredentialHash {
     static func key(_ parts: [String]) -> String {
         var hasher = SHA256()

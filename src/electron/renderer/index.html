@@ -241,52 +241,6 @@
             </div>
 
             <div id="accountsSettingsDetails">
-            <div id="opencodeCookieGroup" class="settings-group cursor-account-group">
-              <button id="opencodeSettingsToggle" class="settings-group-header cursor-settings-toggle" type="button" aria-expanded="false" aria-controls="opencodeSettingsDetails">
-                <span data-i18n="settings.opencode.title">OpenCode Accounts</span>
-                <span class="cursor-settings-summary">
-                  <span id="opencodeCookieStatus" class="cursor-status-pill">Not configured</span>
-                  <span class="cursor-disclosure-icon" aria-hidden="true"></span>
-                </span>
-              </button>
-              <div id="opencodeSettingsDetails" class="cursor-settings-details hidden">
-                <!-- Profile list -->
-                <div id="opencodeProfileList" class="opencode-profile-list"></div>
-
-                <!-- Add new account -->
-                <div id="opencodeAddForm" class="opencode-add-form">
-                  <button id="opencodeAddToggle" class="opencode-add-summary" type="button" aria-expanded="false" aria-controls="opencodeAddDetails">
-                    <svg class="add-icon" width="14" height="14" viewBox="0 0 14 14" fill="none">
-                      <path d="M7 1v12M1 7h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                    </svg>
-                    <span data-i18n="settings.opencode.addProfile">添加账号</span>
-                  </button>
-                  <div id="opencodeAddDetails" class="opencode-add-details accordion-animated-container hidden">
-                    <div class="accordion-animation-inner opencode-add-body">
-                      <div class="settings-actions">
-                        <button id="opencodeOpenBrowser" data-i18n="settings.opencode.openBrowser">Open OpenCode auth in browser</button>
-                      </div>
-                      <p class="settings-note">
-                        <strong>1.</strong> <span data-i18n="settings.opencode.step1Before">Open</span> <code>opencode.ai/auth</code> <span data-i18n="settings.opencode.step1After">in your browser and sign in.</span><br>
-                        <strong>2.</strong> <span data-i18n="settings.opencode.step2">Open DevTools (F12 or Cmd+Opt+I) -> Application/Storage -> Cookies -> opencode.ai.</span><br>
-                        <strong>3.</strong> <span data-i18n="settings.opencode.step3Before">Copy the</span> <code>auth</code> <span data-i18n="settings.opencode.step3After">value.</span><br>
-                        <strong>4.</strong> <span data-i18n="settings.opencode.step4">Paste it below and click Save.</span>
-                      </p>
-                      <div class="settings-row">
-                        <label for="opencodeProfileName" data-i18n="settings.opencode.profileName">账号名称</label>
-                        <input id="opencodeProfileName" type="text" data-i18n-placeholder="settings.opencode.profileNamePlaceholder" placeholder="例如: work、personal">
-                      </div>
-                      <textarea id="opencodeCookieInput" rows="3" spellcheck="false" placeholder="auth=..."></textarea>
-                      <div class="settings-actions">
-                        <button id="opencodeCookieSubmit" data-i18n="settings.opencode.saveProfile">保存</button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div id="opencodeErrorMessage" class="settings-note error hidden"></div>
-              </div>
-            </div>
             <div id="deepseekAccountGroup" class="settings-group cursor-account-group">
               <button id="deepseekSettingsToggle" class="settings-group-header cursor-settings-toggle" type="button" aria-expanded="false" aria-controls="deepseekSettingsDetails">
                 <span data-i18n="settings.deepseek.title">DeepSeek Account</span>
@@ -367,16 +321,16 @@
           </button>
           <div id="subscriptionsSettingsDetails" class="settings-section-details hidden">
             <p id="subscriptionNote" class="settings-note" data-i18n="settings.subscriptions.note">Record what you actually pay for each AI account. Hover an account's plan label on the AI Tool Limits page to see what you recorded here.</p>
-            <div id="subscriptionList" class="opencode-profile-list"></div>
-            <div id="subscriptionAddForm" class="opencode-add-form">
-              <button id="subscriptionAddToggle" class="opencode-add-summary" type="button" aria-expanded="false" aria-controls="subscriptionAddDetails">
+            <div id="subscriptionList" class="subscription-profile-list"></div>
+            <div id="subscriptionAddForm" class="subscription-add-form">
+              <button id="subscriptionAddToggle" class="subscription-add-summary" type="button" aria-expanded="false" aria-controls="subscriptionAddDetails">
                 <svg class="add-icon" width="14" height="14" viewBox="0 0 14 14" fill="none">
                   <path d="M7 1v12M1 7h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
                 </svg>
                 <span data-i18n="settings.subscriptions.add">Add subscription</span>
               </button>
-              <div id="subscriptionAddDetails" class="opencode-add-details accordion-animated-container hidden">
-                <div class="accordion-animation-inner opencode-add-body subscription-add-body">
+              <div id="subscriptionAddDetails" class="subscription-add-details accordion-animated-container hidden">
+                <div class="accordion-animation-inner subscription-add-body">
                   <div class="settings-row">
                     <label for="subscriptionProviderInput" data-i18n="settings.subscriptions.provider">Provider</label>
                     <select id="subscriptionProviderInput"></select>

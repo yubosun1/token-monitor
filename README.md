@@ -23,7 +23,7 @@
 
 - **界面**：原版渲染层跑在 WKWebView 中，外观与 Electron 版一致；外壳为原生 Swift，支持暗色玻璃拟物材质与流畅过渡。
 - **用量采集**：追踪本机 8 个客户端 —— Claude Code、Codex、Kimi、WorkBuddy（经 tokscale 引擎）+ Proma、Hanako、Antigravity、DeepSeek Harness（原生 Swift 解析器与跨工作区会话同步）。
-- **AI 限额**：DeepSeek 余额 + OpenCode 配额 + Kimi 会员额度（保留原版界面与订阅记录功能）。
+- **AI 限额**：DeepSeek 余额 + Kimi 会员额度（保留原版界面与订阅记录功能，支持 Google 等多服务商订阅登记）。
 - **统计口径**：今日/本月/全部按**本地时区自然日/自然月**划分，用量按**消息/事件自身时间戳**归日（跨午夜的会话会正确拆到两天），与 tokscale 的 `bucketTimezone` 配置保持一致。
 - **性能与内存控制**：
   - 隐藏 30 秒后自动回收窗口的 WebView（WebContent 进程完全退出，后台常驻仅 ~15MB），重开重建仅 ~0.2s；
@@ -56,13 +56,13 @@
 # 产物: dist/Token Monitor.app（ad-hoc 签名，仅供本机使用）
 ```
 
-安装：把 `dist/Token Monitor.app` 拷贝到 `/Applications/`（替换旧版本）即可。凭证（DeepSeek API Key、OpenCode Cookie、Kimi 凭证）自动沿用 `~/Library/Application Support/Token Monitor/credentials.json`；用量统计从首次运行起全新开始。
+安装：把 `dist/Token Monitor.app` 拷贝到 `/Applications/`（替换旧版本）即可。凭证（DeepSeek API Key、Kimi 凭证）自动沿用 `~/Library/Application Support/Token Monitor/credentials.json`；用量统计从首次运行起全新开始。
 
 ## 常用命令
 
 ```bash
 ./native-app/scripts/build-app.sh                      # 构建 .app
-./native-app/scripts/check-fixtures.sh                 # 采集/聚合逻辑 fixture 检查 (333 项测试)
+./native-app/scripts/check-fixtures.sh                 # 采集/聚合逻辑 fixture 检查 (400 项测试)
 TOKEN_MONITOR_DIAG=1 ./dist/Token\ Monitor.app/Contents/MacOS/TokenMonitor   # 带诊断日志运行
 ```
 
@@ -89,7 +89,7 @@ TOKEN_MONITOR_DIAG=1 ./dist/Token\ Monitor.app/Contents/MacOS/TokenMonitor   # �
 | 文件 | 说明 |
 |---|---|
 | `settings.native.json` | 原生版设置（独立于旧 Electron 版的 `settings.json`，互不干扰） |
-| `credentials.json` | DeepSeek API Key / OpenCode Cookie / Kimi 凭证（沿用旧版） |
+| `credentials.json` | DeepSeek API Key / Kimi 凭证（沿用旧版） |
 | `ledger.db` | SQLite 用量台账：防删除保留 + 会话明细（当前 schema v3：按 (会话,日期,模型) 精确聚合；升级迁移会清空重建历史日数据，并清理旧版遗留的 tokscale 会话累计行，避免总统计被冻结的旧快照抬高） |
 | `deepseek-balance-v2.json` | DeepSeek 余额缓存 |
 | `pricing-cache.json` | 模型单价缓存（6 小时 TTL） |
