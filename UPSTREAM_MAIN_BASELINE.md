@@ -1,19 +1,44 @@
 # Upstream Main Review Baseline
 
 - Upstream remote: `https://github.com/Javis603/token-monitor.git`
-- Local `main` synchronized through: `6121585f5d5e7fa98385f8a5ac7f8639660e4965`
-- Upstream subject: `chore: release v0.48.0`
-- Reviewed on: `2026-08-26`
+- Local `main` synchronized through: `7c74e61fd8f9d592e647f14107738746a51e49ff`
+- Upstream subject: `chore: release v0.49.0`
+- Reviewed on: `2026-08-28`
 - Native branch: `macos-native`
 
 This is a review baseline, not a claim that `macos-native` contains every
 upstream change. For the next upstream review, start with:
 
 ```text
-6121585f5d5e7fa98385f8a5ac7f8639660e4965..upstream/main
+7c74e61fd8f9d592e647f14107738746a51e49ff..upstream/main
 ```
 
 ## Reviewed Compatibility Notes
+
+Range `6121585f..7c74e61f` (v0.49.0) reviewed on 2026-08-28:
+
+- `a3dd42d4` `fix(installer): grant AppContainer read access to the install directory (#522)`:
+  Windows-only NSIS installer + Chromium sandbox ACL, not applicable.
+- `6e27a0e3` `fix(settings): preserve normalized values on update (#441)`:
+  Not applicable — touches `src/electron/main.js` and `windowBehavior.js`, which do not
+  exist on `macos-native`; window behavior lives in `SettingsStore.swift` with no
+  equivalent re-spread bug pattern.
+- `df48ed2c` `chore(deps): update js-yaml to 4.3.2 (#436)`:
+  Lockfile-only security bump (GHSA-5p4m-2wfm-xmqj); branch has no `package.json` /
+  js-yaml dependency.
+- `582596e0`, `566e6578` `feat(volcengine)`: track Agent Plan alongside Coding Plan and
+  show its daily quota (#490, #532):
+  Skipped — Volcengine provider not enabled on `macos-native`.
+- `12bf86aa` `fix(grok): read WSL credentials for limits (#530)`:
+  Skipped — WSL-only path and grok provider not enabled.
+- `e4305f81` `fix(trae): handle untouched and feature-only entitlement packs (#515)`:
+  Skipped — Trae provider not enabled (earlier trae limits were deferred).
+- `3e82f76a` `feat(cursor): add managed multi-account support (#523)`:
+  Skipped — Cursor provider not enabled on `macos-native`.
+- `3e80f82b` `chore(tokscale): retire the vendored override for upstream 4.14.0 (#517)`:
+  Skipped — branch has no vendored tokscale pin (`scripts/vendor/tokscale.json` absent);
+  tokscale is a standalone Swift build.
+- `7c74e61f` `chore: release v0.49.0`: release metadata, skipped.
 
 Range `7ad2acce..6121585f` (v0.48.0) reviewed on 2026-08-26:
 
