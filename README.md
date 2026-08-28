@@ -22,7 +22,7 @@
 ## 特性
 
 - **界面**：原版渲染层跑在 WKWebView 中，外观与 Electron 版一致；外壳为原生 Swift，支持暗色玻璃拟物材质与流畅过渡。
-- **用量采集**：追踪本机 8 个客户端 —— Claude Code、Codex、Kimi、WorkBuddy（经 tokscale 引擎）+ Proma、Hanako、Antigravity、DeepSeek Harness（原生 Swift 解析器与跨工作区会话同步）。
+- **用量采集**：追踪本机 8 个客户端 —— Claude Code、Codex、WorkBuddy（经 tokscale 引擎）+ Kimi、Proma、Hanako、Antigravity、DeepSeek Harness（原生 Swift 解析器与跨工作区会话同步）。
 - **AI 限额**：DeepSeek 余额 + Kimi 会员额度（保留原版界面与订阅记录功能，支持 Google 等多服务商订阅登记）。
 - **统计口径**：今日/本月/全部按**本地时区自然日/自然月**划分，用量按**消息/事件自身时间戳**归日（跨午夜的会话会正确拆到两天），与 tokscale 的 `bucketTimezone` 配置保持一致。
 - **性能与内存控制**：
@@ -72,7 +72,7 @@ TOKEN_MONITOR_DIAG=1 ./dist/Token\ Monitor.app/Contents/MacOS/TokenMonitor   # �
 |---|---|---|
 | Claude Code | `~/.claude/projects`、`~/.claude/transcripts` | tokscale 引擎 |
 | Codex | `~/.codex/sessions` | tokscale 引擎 |
-| Kimi | `~/.kimi/sessions`、kimi-code sessions | tokscale 引擎 |
+| Kimi | `~/.kimi/sessions`、`~/.kimi-code/sessions` | 原生 Swift 解析器 |
 | WorkBuddy | `~/.workbuddy/projects`、`~/.workbuddy/sessions` | tokscale 引擎 |
 | Proma | `~/.proma/agent-sessions` | 原生 Swift 解析器（按消息时间戳归日） |
 | Hanako | `~/.hanako/agents/*/{sessions,activity}` | 原生 Swift 解析器（多 Agent 递归扫描，跨文件消息去重） |
@@ -126,7 +126,7 @@ assets/icons/              客户端图标
 
 - 界面主题固定为默认外观；项目分组视图（projects）已移除（不做按项目统计）。
 - 模型单价由 tokscale 内置价格库自动检测（`pricing-cache.json`，6 小时 TTL）；个别条目（如 k3-256k）已内置修正，如需调整可在「设置 → 采集 → 自定义模型定价」中覆盖（写入 `~/.config/tokscale/custom-pricing.json`）。
-- 会话详情弹窗对 Proma/Hanako/DSH 及 tokscale 类客户端有数据；逐消息详情覆盖范围以代码为准。
+- 会话详情弹窗对 Proma/Hanako/Kimi/Antigravity/DSH 及 tokscale 类客户端有数据；逐消息详情覆盖范围以代码为准。
 - 版本号沿用 0.44.0-native，不提供自动更新。
 
 ## 常见问题
