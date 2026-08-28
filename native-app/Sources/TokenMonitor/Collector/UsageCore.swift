@@ -73,22 +73,33 @@ enum UsageCore {
         return raw.isEmpty ? nil : canonicalModelName(raw)
     }
 
-    /// Canonical model id for aggregation and display: a leading
-    /// vendor/supplier prefix is stripped so the same model routed through
-    /// different KimiCode suppliers merges into one stat instead of
-    /// splitting (e.g. `kimi-code/k3-256k`, `rightcode/gpt-5.6-luna` and
-    /// `opencode-go/deepseek-v4-flash` all aggregate as their bare model
-    /// id). Only the token after the last `/` is kept; names without a
-    /// slash pass through unchanged. The input is expected to already be
-    /// trimmed + lowercased (callers normalize first); this function is
-    /// defensive about it regardless.
+    /// Canonical model id for aggregation and display:
+    /// 1. A leading vendor/supplier prefix is stripped so the same model routed through
+    ///    different KimiCode suppliers merges into one stat instead of
+    ///    splitting (e.g. `kimi-code/k3-256k`, `rightcode/gpt-5.6-luna` and
+    ///    `opencode-go/deepseek-v4-flash` all aggregate as their bare model
+    ///    id). Only the token after the last `/` is kept; names without a
+    ///    slash pass through unchanged.
+    /// 2. Known model aliases and variant suffixes are normalized to their canonical
+    ///    base model id so usage is aggregated together:
+    ///    - `gemini-3.7-flash-high` and `gemini-flash-safety-le2` -> `gemini-3.7-flash`
+    ///    - `glm-5.2-x` -> `glm-5.2`
+    /// The input is expected to already be trimmed + lowercased (callers normalize
+    /// first); this function is defensive about it regardless.
     static func canonicalModelName(_ raw: String) -> String {
         var s = raw.trimmingCharacters(in: .whitespaces).lowercased()
         if let slash = s.lastIndex(of: "/") {
             let tail = String(s[s.index(after: slash)...]).trimmingCharacters(in: .whitespaces)
             if !tail.isEmpty { s = tail }
         }
-        return s
+        switch s {
+        case "gemini-3.7-flash-high", "gemini-flash-safety-le2":
+            return "gemini-3.7-flash"
+        case "glm-5.2-x":
+            return "glm-5.2"
+        default:
+            return s
+        }
     }
 
     static func normalizeProviderName(_ value: Any?) -> String? {
@@ -205,7 +216,7 @@ enum UsageCore {
         return UsageRow(
             client: entry.client,
             sessionId: entry.sessionId,
-            model: entry.model,
+            model: entry.model.flatMap(normalizeModelName),
             provider: entry.provider,
             input: entry.input,
             output: entry.output,

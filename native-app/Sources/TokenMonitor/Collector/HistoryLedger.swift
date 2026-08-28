@@ -57,7 +57,10 @@ final class HistoryLedger {
     /// winning the component-wise max merge forever, inflating today/month/
     /// allTime totals. Adapter rows survive (they are re-overwritten with the
     /// corrected aggregates on the next derive).
-    private static let ledgerSchemaVersion: Int32 = 3
+    /// v4: merges model variant aliases into their canonical base models
+    /// (`gemini-3.7-flash-high` and `gemini-flash-safety-le2` -> `gemini-3.7-flash`,
+    /// `glm-5.2-x` -> `glm-5.2`) in both session_ledger and daily_history_ledger.
+    private static let ledgerSchemaVersion: Int32 = 4
 
     /// Internal (not private) so the fixture checker can assert the migration
     /// advanced the schema version.
@@ -103,6 +106,99 @@ final class HistoryLedger {
             let clients = Self.legacyTokscaleClients.map { "'\($0)'" }.joined(separator: ",")
             if sqlite3_exec(db, "DELETE FROM session_ledger WHERE client IN (\(clients));", nil, nil, nil) != SQLITE_OK {
                 NSLog("[HistoryLedger] migration v2: failed to clear legacy tokscale rows: %s", sqlite3_errmsg(db))
+                succeeded = false
+            }
+        }
+        if version < 4 {
+            // v3 → v4: merge model variant aliases into their canonical base models
+            // in both session_ledger and daily_history_ledger.
+            let sessionMergeSQL = """
+            CREATE TEMPORARY TABLE IF NOT EXISTS _tmp_session_merge AS
+            SELECT
+                session_id,
+                client,
+                date,
+                CASE
+                    WHEN model_id IN ('gemini-3.7-flash-high', 'gemini-flash-safety-le2') THEN 'gemini-3.7-flash'
+                    WHEN model_id = 'glm-5.2-x' THEN 'glm-5.2'
+                    ELSE model_id
+                END AS model_id,
+                MAX(provider) AS provider,
+                SUM(input_tokens) AS input_tokens,
+                SUM(output_tokens) AS output_tokens,
+                SUM(cache_read_tokens) AS cache_read_tokens,
+                SUM(cache_write_tokens) AS cache_write_tokens,
+                SUM(reasoning_tokens) AS reasoning_tokens,
+                SUM(message_count) AS message_count,
+                SUM(cost_usd) AS cost_usd,
+                MIN(started_at_ms) AS started_at_ms,
+                MAX(last_used_at_ms) AS last_used_at_ms,
+                MAX(project_id) AS project_id,
+                MAX(project_label) AS project_label,
+                SUM(timed_tokens) AS timed_tokens,
+                SUM(timed_duration_ms) AS timed_duration_ms,
+                MAX(updated_at_ms) AS updated_at_ms
+            FROM session_ledger
+            WHERE model_id IN ('gemini-3.7-flash-high', 'gemini-flash-safety-le2', 'gemini-3.7-flash', 'glm-5.2-x', 'glm-5.2')
+            GROUP BY session_id, client, date, 4;
+
+            DELETE FROM session_ledger
+            WHERE model_id IN ('gemini-3.7-flash-high', 'gemini-flash-safety-le2', 'gemini-3.7-flash', 'glm-5.2-x', 'glm-5.2');
+
+            INSERT INTO session_ledger (
+                session_id, client, date, model_id, provider,
+                input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens,
+                message_count, cost_usd, started_at_ms, last_used_at_ms, project_id, project_label,
+                timed_tokens, timed_duration_ms, updated_at_ms
+            )
+            SELECT
+                session_id, client, date, model_id, provider,
+                input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens,
+                message_count, cost_usd, started_at_ms, last_used_at_ms, project_id, project_label,
+                timed_tokens, timed_duration_ms, updated_at_ms
+            FROM _tmp_session_merge;
+
+            DROP TABLE IF EXISTS _tmp_session_merge;
+            """
+
+            let dailyMergeSQL = """
+            CREATE TEMPORARY TABLE IF NOT EXISTS _tmp_daily_merge AS
+            SELECT
+                date,
+                client,
+                CASE
+                    WHEN model_id IN ('gemini-3.7-flash-high', 'gemini-flash-safety-le2') THEN 'gemini-3.7-flash'
+                    WHEN model_id = 'glm-5.2-x' THEN 'glm-5.2'
+                    ELSE model_id
+                END AS model_id,
+                SUM(tokens) AS tokens,
+                SUM(cost_usd) AS cost_usd,
+                SUM(messages) AS messages,
+                MAX(active_time_ms) AS active_time_ms,
+                MAX(updated_at_ms) AS updated_at_ms
+            FROM daily_history_ledger
+            WHERE model_id IN ('gemini-3.7-flash-high', 'gemini-flash-safety-le2', 'gemini-3.7-flash', 'glm-5.2-x', 'glm-5.2')
+            GROUP BY date, client, 3;
+
+            DELETE FROM daily_history_ledger
+            WHERE model_id IN ('gemini-3.7-flash-high', 'gemini-flash-safety-le2', 'gemini-3.7-flash', 'glm-5.2-x', 'glm-5.2');
+
+            INSERT INTO daily_history_ledger (
+                date, client, model_id, tokens, cost_usd, messages, active_time_ms, updated_at_ms
+            )
+            SELECT
+                date, client, model_id, tokens, cost_usd, messages, active_time_ms, updated_at_ms
+            FROM _tmp_daily_merge;
+
+            DROP TABLE IF EXISTS _tmp_daily_merge;
+            """
+
+            if sqlite3_exec(db, sessionMergeSQL, nil, nil, nil) != SQLITE_OK {
+                NSLog("[HistoryLedger] migration v4 session_ledger failed: %s", sqlite3_errmsg(db))
+                succeeded = false
+            }
+            if sqlite3_exec(db, dailyMergeSQL, nil, nil, nil) != SQLITE_OK {
+                NSLog("[HistoryLedger] migration v4 daily_history_ledger failed: %s", sqlite3_errmsg(db))
                 succeeded = false
             }
         }
@@ -584,7 +680,8 @@ final class HistoryLedger {
             autoreleasepool {
                 let sessionId = String(cString: sqlite3_column_text(stmt, 0))
                 let client = String(cString: sqlite3_column_text(stmt, 1))
-                let modelId = String(cString: sqlite3_column_text(stmt, 3))
+                let rawModelId = String(cString: sqlite3_column_text(stmt, 3))
+                let modelId = UsageCore.normalizeModelName(rawModelId) ?? rawModelId
                 let provider = String(cString: sqlite3_column_text(stmt, 4))
                 let input = sqlite3_column_double(stmt, 5)
                 let output = sqlite3_column_double(stmt, 6)
@@ -842,7 +939,8 @@ final class HistoryLedger {
             autoreleasepool {
                 let sessionId = String(cString: sqlite3_column_text(stmt, 0))
                 let client = String(cString: sqlite3_column_text(stmt, 1))
-                let modelId = String(cString: sqlite3_column_text(stmt, 3))
+                let rawModelId = String(cString: sqlite3_column_text(stmt, 3))
+                let modelId = UsageCore.normalizeModelName(rawModelId) ?? rawModelId
                 let provider = String(cString: sqlite3_column_text(stmt, 4))
                 let input = sqlite3_column_double(stmt, 5)
                 let output = sqlite3_column_double(stmt, 6)

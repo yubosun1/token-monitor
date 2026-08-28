@@ -294,7 +294,8 @@ enum Adapters {
         // grouped rows must be ordered deterministically.
         var grouped: [String: UsageCore.UsageRow] = [:]
         for row in filtered {
-            let key = "\(row.sessionId ?? "unknown")\u{0}\(row.model ?? "")"
+            let modelId = UsageCore.normalizeModelName(row.model ?? "") ?? ""
+            let key = "\(row.sessionId ?? "unknown")\u{0}\(modelId)"
             if var existing = grouped[key] {
                 existing.input += row.input
                 existing.output += row.output
@@ -310,6 +311,7 @@ enum Adapters {
                 grouped[key] = existing
             } else {
                 var copy = row
+                copy.model = modelId
                 copy.messageCount = row.messageCount > 0 ? row.messageCount : 1
                 grouped[key] = copy
             }
@@ -428,7 +430,7 @@ enum Adapters {
                 best = UsageCore.UsageRow(
                     client: "proma",
                     sessionId: sessionId,
-                    model: (msg["model"] as? String) ?? (obj["_channelModelId"] as? String) ?? "unknown",
+                    model: UsageCore.normalizeModelName((msg["model"] as? String) ?? (obj["_channelModelId"] as? String) ?? "") ?? "unknown",
                     provider: "proma",
                     input: input,
                     output: output,
@@ -557,7 +559,7 @@ enum Adapters {
             result.rows.append(UsageCore.UsageRow(
                 client: "hanako",
                 sessionId: sessionId,
-                model: (msg["model"] as? String) ?? (obj["modelId"] as? String) ?? "unknown",
+                model: UsageCore.normalizeModelName((msg["model"] as? String) ?? (obj["modelId"] as? String) ?? "") ?? "unknown",
                 provider: "hanako",
                 input: input,
                 output: output,
@@ -696,7 +698,8 @@ enum Adapters {
         for obj in parseJsonlLines(data) {
             guard (obj["type"] as? String) == "usage" else { continue }
             let sessionId = (obj["sessionId"] as? String) ?? (obj["session_id"] as? String) ?? fallbackSessionId
-            let modelId = (obj["modelId"] as? String) ?? (obj["model_id"] as? String) ?? (obj["model"] as? String) ?? "gemini-3.7-flash"
+            let rawModel = (obj["modelId"] as? String) ?? (obj["model_id"] as? String) ?? (obj["model"] as? String) ?? "gemini-3.7-flash"
+            let modelId = UsageCore.normalizeModelName(rawModel) ?? "gemini-3.7-flash"
             let input = UsageCore.doubleValue(obj["input"] ?? obj["inputTokens"] ?? obj["input_tokens"])
             let output = UsageCore.doubleValue(obj["output"] ?? obj["outputTokens"] ?? obj["output_tokens"])
             let cacheRead = UsageCore.doubleValue(obj["cacheRead"] ?? obj["cacheReadTokens"] ?? obj["cache_read"] ?? obj["cache_read_tokens"])
@@ -1461,7 +1464,7 @@ enum Adapters {
         return UsageCore.UsageRow(
             client: "dsh",
             sessionId: sessionId,
-            model: model,
+            model: UsageCore.normalizeModelName(model) ?? model,
             provider: "dsh",
             input: UsageCore.doubleValue(usage["inputTokens"]),
             output: UsageCore.doubleValue(usage["outputTokens"]),

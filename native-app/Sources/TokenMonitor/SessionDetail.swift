@@ -767,7 +767,8 @@ enum SessionDetailCore {
 
         for obj in Adapters.parseJsonlLines(data) {
             guard (obj["type"] as? String) == "usage" else { continue }
-            let modelId = (obj["modelId"] as? String) ?? (obj["model_id"] as? String) ?? (obj["model"] as? String) ?? "gemini-3.7-flash"
+            let rawModel = (obj["modelId"] as? String) ?? (obj["model_id"] as? String) ?? (obj["model"] as? String) ?? "gemini-3.7-flash"
+            let modelId = UsageCore.normalizeModelName(rawModel) ?? "gemini-3.7-flash"
             let inTk = UsageCore.doubleValue(obj["input"] ?? obj["inputTokens"] ?? obj["input_tokens"])
             let outTk = UsageCore.doubleValue(obj["output"] ?? obj["outputTokens"] ?? obj["output_tokens"])
             let crTk = UsageCore.doubleValue(obj["cacheRead"] ?? obj["cacheReadTokens"] ?? obj["cache_read"] ?? obj["cache_read_tokens"])
@@ -895,8 +896,20 @@ enum SessionDetailCore {
         var minStart: Double = 0
         var maxUsed: Double = 0
 
-        var models: [[String: Any]] = []
+        struct ModelAccumulator {
+            var totalTokens: Double = 0
+            var inputTokens: Double = 0
+            var outputTokens: Double = 0
+            var cacheReadTokens: Double = 0
+            var cacheWriteTokens: Double = 0
+            var reasoningTokens: Double = 0
+            var costUsd: Double = 0
+            var messageCount: Int = 0
+        }
+
+        var modelMap: [String: ModelAccumulator] = [:]
         for r in rows {
+            let modelId = UsageCore.normalizeModelName(r.model ?? "") ?? "unknown"
             let inTk = r.input
             let outTk = r.output
             let crTk = r.cacheRead
@@ -918,21 +931,34 @@ enum SessionDetailCore {
             if r.startedAt > 0 && (minStart == 0 || r.startedAt < minStart) { minStart = r.startedAt }
             if r.lastUsedAt > 0 && r.lastUsedAt > maxUsed { maxUsed = r.lastUsedAt }
 
-            let mTotalInput = inTk + crTk + cwTk
-            let mCacheHitRate = mTotalInput > 0 ? (crTk / mTotalInput * 100.0) : 0.0
+            var acc = modelMap[modelId] ?? ModelAccumulator()
+            acc.totalTokens += mTokens
+            acc.inputTokens += inTk
+            acc.outputTokens += outTk
+            acc.cacheReadTokens += crTk
+            acc.cacheWriteTokens += cwTk
+            acc.reasoningTokens += rzTk
+            acc.costUsd += cost
+            acc.messageCount += msgs
+            modelMap[modelId] = acc
+        }
 
+        var models: [[String: Any]] = []
+        for (mId, acc) in modelMap {
+            let mTotalInput = acc.inputTokens + acc.cacheReadTokens + acc.cacheWriteTokens
+            let mCacheHitRate = mTotalInput > 0 ? (acc.cacheReadTokens / mTotalInput * 100.0) : 0.0
             models.append([
-                "modelId": r.model ?? "unknown",
-                "totalTokens": Int(mTokens.rounded()),
+                "modelId": mId,
+                "totalTokens": Int(acc.totalTokens.rounded()),
                 "percent": 0.0,
-                "inputTokens": Int(inTk.rounded()),
-                "outputTokens": Int(outTk.rounded()),
-                "cacheReadTokens": Int(crTk.rounded()),
-                "cacheWriteTokens": Int(cwTk.rounded()),
-                "reasoningTokens": Int(rzTk.rounded()),
-                "costUsd": cost,
+                "inputTokens": Int(acc.inputTokens.rounded()),
+                "outputTokens": Int(acc.outputTokens.rounded()),
+                "cacheReadTokens": Int(acc.cacheReadTokens.rounded()),
+                "cacheWriteTokens": Int(acc.cacheWriteTokens.rounded()),
+                "reasoningTokens": Int(acc.reasoningTokens.rounded()),
+                "costUsd": acc.costUsd,
                 "cacheHitRate": (mCacheHitRate * 10).rounded() / 10.0,
-                "messageCount": msgs
+                "messageCount": acc.messageCount
             ])
         }
 

@@ -90,7 +90,7 @@ TOKEN_MONITOR_DIAG=1 ./dist/Token\ Monitor.app/Contents/MacOS/TokenMonitor   # �
 |---|---|
 | `settings.native.json` | 原生版设置（独立于旧 Electron 版的 `settings.json`，互不干扰） |
 | `credentials.json` | DeepSeek API Key / Kimi 凭证（沿用旧版） |
-| `ledger.db` | SQLite 用量台账：防删除保留 + 会话明细（当前 schema v3：按 (会话,日期,模型) 精确聚合；升级迁移会清空重建历史日数据，并清理旧版遗留的 tokscale 会话累计行，避免总统计被冻结的旧快照抬高） |
+| `ledger.db` | SQLite 用量台账：防删除保留 + 会话明细（当前 schema v4：按 (会话,日期,模型) 精确聚合；升级迁移自动合并 gemini 与 glm 变体别名到规范基础模型） |
 | `deepseek-balance-v2.json` | DeepSeek 余额缓存 |
 | `pricing-cache.json` | 模型单价缓存（6 小时 TTL） |
 | `diag/` | 诊断模式（`TOKEN_MONITOR_DIAG=1`）下的统计快照转储 |

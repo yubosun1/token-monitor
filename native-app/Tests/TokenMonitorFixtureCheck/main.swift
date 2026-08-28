@@ -365,10 +365,16 @@ func runChecks() {
         checkEqual(UsageCore.canonicalModelName("kimi-code/k3-256k"), "k3-256k", "canonical strips kimi-code prefix")
         checkEqual(UsageCore.canonicalModelName("RightCode/gpt-5.6-luna"), "gpt-5.6-luna", "canonical lowercases prefix")
         checkEqual(UsageCore.canonicalModelName("deepseek-v4-flash"), "deepseek-v4-flash", "canonical leaves bare names untouched")
+        checkEqual(UsageCore.canonicalModelName("gemini-3.7-flash-high"), "gemini-3.7-flash", "canonical maps gemini-3.7-flash-high")
+        checkEqual(UsageCore.canonicalModelName("gemini-flash-safety-le2"), "gemini-3.7-flash", "canonical maps gemini-flash-safety-le2")
+        checkEqual(UsageCore.canonicalModelName("google/gemini-3.7-flash-high"), "gemini-3.7-flash", "canonical strips prefix and maps gemini-3.7-flash-high")
+        checkEqual(UsageCore.canonicalModelName("google/gemini-flash-safety-le2"), "gemini-3.7-flash", "canonical strips prefix and maps gemini-flash-safety-le2")
+        checkEqual(UsageCore.canonicalModelName("glm-5.2-x"), "glm-5.2", "canonical maps glm-5.2-x")
+        checkEqual(UsageCore.canonicalModelName("zai/glm-5.2-x"), "glm-5.2", "canonical strips prefix and maps glm-5.2-x")
         checkEqual(UsageCore.normalizeModelName("opencode-go/deepseek-v4-flash"), "deepseek-v4-flash", "normalizeModelName canonicalizes")
         checkEqual(UsageCore.normalizeModelName(nil), nil, "normalizeModelName nil stays nil")
 
-        // Aggregation merges prefixed + bare usage of the same model.
+        // Aggregation merges prefixed + bare usage of the same model, and merges aliases.
         func modelRow(_ model: String, _ input: Double) -> UsageCore.UsageRow {
             stateRow(client: "proma", session: "s-prefix", model: model, input: input, output: 0, startedAt: "2026-08-15T10:00:00+08:00")
         }
@@ -378,6 +384,19 @@ func runChecks() {
         checkEqual(models.count, 1, "prefixed + bare merge to one model")
         checkEqual(UsageCore.intValue(models["gpt-5.6-luna"]), 350, "merged model token total")
         check(models["rightcode/gpt-5.6-luna"] == nil, "no prefixed key survives")
+
+        let aliasRows = [
+            modelRow("gemini-3.7-flash-high", 100),
+            modelRow("gemini-flash-safety-le2", 200),
+            modelRow("gemini-3.7-flash", 300),
+            modelRow("glm-5.2-x", 400),
+            modelRow("glm-5.2", 500)
+        ]
+        let aliasPeriod = UsageCore.extractPeriod(entries: aliasRows)
+        let aModels = aliasPeriod["models"] as! [String: Any]
+        checkEqual(aModels.count, 2, "gemini variants and glm variants merge to respective base models")
+        checkEqual(UsageCore.intValue(aModels["gemini-3.7-flash"]), 600, "merged gemini-3.7-flash token total")
+        checkEqual(UsageCore.intValue(aModels["glm-5.2"]), 900, "merged glm-5.2 token total")
 
         // History contributions carry the canonical model id too.
         let contributions = Adapters.historyContributions(rows: rows, client: "proma", pricingByModel: [:], timeZone: FixtureHarness.timeZone)
@@ -2459,7 +2478,7 @@ func runHistoryLedgerTests() {
         migrated.recordTokscaleDays([cleanDay])
         let rebuilt = migrated.fetchHistoryDays(clients: nil)
         checkEqual(rebuilt.first?.tokens ?? 0, 10, "L9.2: rebuilt history accumulates after migration")
-        checkEqual(migrated.currentUserVersion(), 3, "L9.3: user_version advanced to the current schema")
+        checkEqual(migrated.currentUserVersion(), 4, "L9.3: user_version advanced to the current schema")
     }
 
     // L10: v2 → v3 migration purges the v1-era tokscale session rows that a
@@ -2522,10 +2541,95 @@ func runHistoryLedgerTests() {
         let adapterRows = migrated.querySessionRows(clients: ["proma"])
         checkEqual(adapterRows.count, 1, "L10.2: adapter rows survive the v3 migration")
         checkEqual(adapterRows.first?.input ?? 0, 500, "L10.3: adapter row values intact")
-        checkEqual(migrated.currentUserVersion(), 3, "L10.4: user_version advanced to 3")
+        checkEqual(migrated.currentUserVersion(), 4, "L10.4: user_version advanced to 4")
         // Periods no longer include the frozen tokscale snapshot.
         let periods = migrated.fetchPeriods(clients: ["codex", "proma"], now: Date(timeIntervalSince1970: 1787700000), allTimeSince: 0)
         checkEqual(UsageCore.intValue(periods.allTime["totalTokens"]), 700, "L10.5: allTime reflects only adapter rows after purge")
+    }
+
+    // L11: v3 → v4 migration merges model variant aliases into canonical base models
+    // (gemini-3.7-flash-high & gemini-flash-safety-le2 -> gemini-3.7-flash, glm-5.2-x -> glm-5.2).
+    do {
+        let legacy = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("tm-ledger-v3-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: legacy) }
+        let dbPath = legacy.appendingPathComponent("ledger.db")
+        var raw: OpaquePointer?
+        let openRC = sqlite3_open_v2(dbPath.path, &raw, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nil)
+        let v3SQL = """
+        CREATE TABLE IF NOT EXISTS session_ledger (
+            session_id TEXT NOT NULL,
+            client TEXT NOT NULL,
+            date TEXT NOT NULL,
+            model_id TEXT NOT NULL,
+            provider TEXT NOT NULL DEFAULT '',
+            input_tokens REAL NOT NULL DEFAULT 0,
+            output_tokens REAL NOT NULL DEFAULT 0,
+            cache_read_tokens REAL NOT NULL DEFAULT 0,
+            cache_write_tokens REAL NOT NULL DEFAULT 0,
+            reasoning_tokens REAL NOT NULL DEFAULT 0,
+            message_count REAL NOT NULL DEFAULT 0,
+            cost_usd REAL NOT NULL DEFAULT 0.0,
+            started_at_ms REAL NOT NULL DEFAULT 0.0,
+            last_used_at_ms REAL NOT NULL DEFAULT 0.0,
+            project_id TEXT NOT NULL DEFAULT '',
+            project_label TEXT NOT NULL DEFAULT '',
+            timed_tokens REAL NOT NULL DEFAULT 0,
+            timed_duration_ms REAL NOT NULL DEFAULT 0,
+            updated_at_ms REAL NOT NULL DEFAULT 0,
+            PRIMARY KEY (session_id, client, date, model_id)
+        );
+        CREATE TABLE IF NOT EXISTS daily_history_ledger (
+            date TEXT NOT NULL,
+            client TEXT NOT NULL,
+            model_id TEXT NOT NULL,
+            tokens REAL NOT NULL DEFAULT 0,
+            cost_usd REAL NOT NULL DEFAULT 0.0,
+            messages REAL NOT NULL DEFAULT 0.0,
+            active_time_ms REAL NOT NULL DEFAULT 0.0,
+            updated_at_ms REAL NOT NULL DEFAULT 0,
+            PRIMARY KEY (date, client, model_id)
+        );
+        INSERT INTO session_ledger (session_id, client, date, model_id, input_tokens, output_tokens, updated_at_ms)
+        VALUES ('s-gemini-1','antigravity','2026-08-01','gemini-3.7-flash-high',100,50,1787600000000);
+        INSERT INTO session_ledger (session_id, client, date, model_id, input_tokens, output_tokens, updated_at_ms)
+        VALUES ('s-gemini-1','antigravity','2026-08-01','gemini-flash-safety-le2',200,80,1787700000000);
+        INSERT INTO session_ledger (session_id, client, date, model_id, input_tokens, output_tokens, updated_at_ms)
+        VALUES ('s-glm-1','dsh','2026-08-01','glm-5.2-x',300,120,1787800000000);
+        INSERT INTO daily_history_ledger (date, client, model_id, tokens, cost_usd, messages, updated_at_ms)
+        VALUES ('2026-08-01','antigravity','gemini-3.7-flash-high',150,0.01,2,1787600000000);
+        INSERT INTO daily_history_ledger (date, client, model_id, tokens, cost_usd, messages, updated_at_ms)
+        VALUES ('2026-08-01','antigravity','gemini-flash-safety-le2',280,0.02,3,1787700000000);
+        INSERT INTO daily_history_ledger (date, client, model_id, tokens, cost_usd, messages, updated_at_ms)
+        VALUES ('2026-08-01','dsh','glm-5.2-x',420,0.03,4,1787800000000);
+        """
+        let execRC = raw.map { sqlite3_exec($0, v3SQL, nil, nil, nil) } ?? -1
+        XCTAssertSQLITE(openRC == SQLITE_OK && execRC == SQLITE_OK)
+        XCTAssertSQLITE(sqlite3_exec(raw, "PRAGMA user_version = 3;", nil, nil, nil) == SQLITE_OK)
+        sqlite3_close(raw)
+
+        let migrated = HistoryLedger(dbURL: dbPath)
+        checkEqual(migrated.currentUserVersion(), 4, "L11.1: user_version advanced to 4")
+
+        let geminiRows = migrated.querySessionRows(clients: ["antigravity"])
+        checkEqual(geminiRows.count, 1, "L11.2: gemini alias session rows merged into one")
+        checkEqual(geminiRows.first?.model ?? "", "gemini-3.7-flash", "L11.3: session row model is gemini-3.7-flash")
+        checkEqual(geminiRows.first?.input ?? 0, 300, "L11.4: input tokens merged (100 + 200)")
+        checkEqual(geminiRows.first?.output ?? 0, 130, "L11.5: output tokens merged (50 + 80)")
+
+        let glmRows = migrated.querySessionRows(clients: ["dsh"])
+        checkEqual(glmRows.count, 1, "L11.6: glm-5.2-x session row renamed")
+        checkEqual(glmRows.first?.model ?? "", "glm-5.2", "L11.7: session row model is glm-5.2")
+        checkEqual(glmRows.first?.input ?? 0, 300, "L11.8: glm input preserved")
+
+        let days = migrated.fetchHistoryDays(clients: nil)
+        checkEqual(days.count, 1, "L11.9: one history day")
+        let day = days.first!
+        checkEqual(day.perModel["gemini-3.7-flash"]?.tokens ?? 0, 430, "L11.10: daily history gemini variants merged (150 + 280)")
+        checkEqual(day.perModel["glm-5.2"]?.tokens ?? 0, 420, "L11.11: daily history glm-5.2 merged")
+        check(day.perModel["gemini-3.7-flash-high"] == nil, "L11.12: old gemini-3.7-flash-high key absent")
+        check(day.perModel["gemini-flash-safety-le2"] == nil, "L11.13: old gemini-flash-safety-le2 key absent")
+        check(day.perModel["glm-5.2-x"] == nil, "L11.14: old glm-5.2-x key absent")
     }
 }
 
