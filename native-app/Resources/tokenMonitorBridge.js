@@ -10,14 +10,24 @@
   var pending = new Map();
   var seq = 0;
   var listeners = {};
+  // Safety net against a promise that never resolves (e.g. the web view is
+  // torn down between postMessage and the native async reply): reject after
+  // a generous deadline so `pending` cannot leak and callers can recover.
+  var INVOKE_TIMEOUT_MS = 120000;
 
   function invoke(method, args) {
     return new Promise(function (resolve, reject) {
       var id = ++seq;
-      pending.set(id, { resolve: resolve, reject: reject });
+      var timer = setTimeout(function () {
+        if (pending.delete(id)) {
+          reject(new Error('bridge invoke timeout: ' + method));
+        }
+      }, INVOKE_TIMEOUT_MS);
+      pending.set(id, { resolve: resolve, reject: reject, timer: timer });
       try {
         window.webkit.messageHandlers.bridge.postMessage({ id: id, method: method, args: args || [] });
       } catch (e) {
+        clearTimeout(timer);
         pending.delete(id);
         reject(e);
       }
@@ -39,11 +49,11 @@
 
   window.__tmResolve = function (id, value) {
     var p = pending.get(id);
-    if (p) { pending.delete(id); p.resolve(value); }
+    if (p) { pending.delete(id); clearTimeout(p.timer); p.resolve(value); }
   };
   window.__tmReject = function (id, error) {
     var p = pending.get(id);
-    if (p) { pending.delete(id); p.reject(error instanceof Error ? error : new Error(String(error))); }
+    if (p) { pending.delete(id); clearTimeout(p.timer); p.reject(error instanceof Error ? error : new Error(String(error))); }
   };
   window.__tmPush = function (event, payload) {
     var set = listeners[event];

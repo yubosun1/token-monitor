@@ -34,7 +34,7 @@ final class LimitsRuntime {
         // First refresh shortly after launch so the Home limits module has
         // data without waiting a full interval.
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
-            self?.refresh()
+            self?.refresh(forced: false)
         }
     }
 
@@ -53,7 +53,7 @@ final class LimitsRuntime {
         timer?.invalidate()
         let interval = refreshInterval()
         let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
-            self?.refresh()
+            self?.refresh(forced: false)
         }
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
@@ -77,19 +77,33 @@ final class LimitsRuntime {
     }
 
     func refreshNow() {
-        refresh()
+        refresh(forced: true)
     }
 
-    private func refresh() {
+    private func refresh(forced: Bool) {
         queue.async { [weak self] in
-            self?.performRefresh()
+            self?.performRefresh(forced: forced)
         }
     }
 
-    private func performRefresh() {
+    /// Bursts of refresh requests (credential change + window activation +
+    /// the timer can land within the same second) each ran a full network
+    /// poll because the serial queue defeats the `refreshing` guard. Coalesce
+    /// timer-driven polls; explicit `refreshNow` calls always run.
+    private var lastRefreshCompletedAt: Date?
+    private let minTimerRefreshGap: TimeInterval = 2
+
+    private func performRefresh(forced: Bool) {
         guard !refreshing else { return }
+        if !forced, let last = lastRefreshCompletedAt,
+           Date().timeIntervalSince(last) < minTimerRefreshGap {
+            return
+        }
         refreshing = true
-        defer { refreshing = false }
+        defer {
+            refreshing = false
+            lastRefreshCompletedAt = Date()
+        }
 
         let settings = core.settings.snapshot()
         guard settings["limitsEnabled"] as? Bool ?? true else { return }

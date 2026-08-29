@@ -29,14 +29,17 @@ final class BridgeCore {
     let settings = SettingsStore.shared
 
     private let lock = NSLock()
-    private var pushers: [UUID: (String, Any) -> Void] = [:]
+    /// Pushers receive the payload already JSON-serialized: a fan-out to N
+    /// web views used to run JSONSerialization N times per push (the stats
+    /// payload can be hundreds of KB), now it runs once.
+    private var pushers: [UUID: (String, String) -> Void] = [:]
 
     var pusherCount: Int {
         lock.lock(); defer { lock.unlock() }
         return pushers.count
     }
 
-    func registerPusher(_ pusher: @escaping (String, Any) -> Void) -> () -> Void {
+    func registerPusher(_ pusher: @escaping (String, String) -> Void) -> () -> Void {
         let id = UUID()
         lock.lock(); defer { lock.unlock() }
         pushers[id] = pusher
@@ -48,10 +51,11 @@ final class BridgeCore {
     }
 
     func push(_ event: String, _ payload: Any) {
+        let json = jsonString(payload)
         lock.lock()
         let snapshot = Array(pushers.values)
         lock.unlock()
-        for pusher in snapshot { pusher(event, payload) }
+        for pusher in snapshot { pusher(event, json) }
     }
 
     /// Envelope for stats pushes, matching the wire contract the renderer
@@ -60,13 +64,21 @@ final class BridgeCore {
     /// app.js `onStatsPush`, which only accepts `payload.data.stats`).
     /// Pushing the bare stats dict made every live push invisible to the
     /// widget: it stayed on whatever `stats:get` returned at page load.
+    ///
+    /// The full 370-day `history` is stripped from pushes and getStats: the
+    /// widget only reads `historyPreview`, the dashboard fetches via
+    /// `dashboard:getHistory` + `dashboard:historyChanged`, and history
+    /// dominated the serialized payload. `stats:get` returns the same
+    /// stripped frame, so boot and the 5-minute poll no longer pay for it
+    /// either.
     func statsPushPayload(_ stats: [String: Any]) -> [String: Any] {
+        let pushStats = BridgeCore.statsWithoutHistory(stats)
         return [
             "event": "stats",
             "data": [
                 "type": "stats",
                 "reason": "local",
-                "stats": stats,
+                "stats": pushStats,
                 "at": DateFormatUtil.iso8601.string(from: Date())
             ]
         ]
@@ -94,15 +106,23 @@ final class BridgeCore {
         return snapshot
     }
 
+    /// The empty period shape must match the wire contract the renderer
+    /// consumes (same shape as every real period), or the cold-start frame
+    /// breaks readers that assume `models`/`sessions`/`clientCosts` are
+    /// objects. Reuse the collector's canonical empty period.
     func emptyPeriod() -> [String: Any] {
-        return [
-            "totalTokens": 0, "totalCost": 0, "costUsd": 0,
-            "totalInput": 0, "totalOutput": 0,
-            "totalCacheRead": 0, "totalCacheWrite": 0,
-            "totalReasoning": 0, "totalMessages": 0,
-            "sessions": [Any](), "clients": [Any](), "models": [Any](),
-            "clientCosts": [Any](), "modelCosts": [Any]()
-        ]
+        return UsageCore.emptyPeriod()
+    }
+
+    /// Copy of a stats frame without the 370-day history graph: neither
+    /// window consumes it from stats frames (the widget only reads
+    /// `historyPreview`, the dashboard fetches via `dashboard:getHistory`),
+    /// and it dominates serialized size. Shared by `stats:get` and every
+    /// `stats:push` envelope.
+    static func statsWithoutHistory(_ stats: [String: Any]) -> [String: Any] {
+        var copy = stats
+        copy["history"] = nil
+        return copy
     }
 
     func emptyStats() -> [String: Any] {
@@ -166,7 +186,8 @@ final class BridgeCore {
             if options["refreshPricing"] as? Bool == true {
                 Collector.shared.refreshNow()
             }
-            return Collector.shared.latestStats() ?? emptyStats()
+            let latest = Collector.shared.latestStats() ?? emptyStats()
+            return BridgeCore.statsWithoutHistory(latest)
 
         case "app:getInfo":
             let osVersion = ProcessInfo.processInfo.operatingSystemVersion
@@ -386,13 +407,18 @@ final class Bridge: NSObject, WKScriptMessageHandler {
     private let core = BridgeCore.shared
     private var unregisterPusher: (() -> Void)?
 
+    /// Whether this web view wants `stats:push` fan-out. The dashboard has
+    /// no `onStatsPush` listener (it polls `dashboard:getHistory` instead),
+    /// so delivering the largest recurring push to it is pure overhead.
+    var deliversStatsPush = true
+
     func attach(to webView: WKWebView, window: NSWindow) {
         self.webView = webView
         self.window = window
         webView.configuration.userContentController.add(self, name: "bridge")
-        unregisterPusher = core.registerPusher { [weak self] event, payload in
+        unregisterPusher = core.registerPusher { [weak self] event, json in
             guard let self, let webView = self.webView else { return }
-            let json = jsonString(payload)
+            if event == "stats:push" && !self.deliversStatsPush { return }
             // Pushers run on collector/limits background queues; WKWebView
             // only tolerates evaluateJavaScript on the main thread.
             DispatchQueue.main.async {

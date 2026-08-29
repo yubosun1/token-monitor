@@ -172,20 +172,28 @@ enum Adapters {
                 return cached.urls
             }
             fileCacheLock.unlock()
-            let urls = enumerateJsonlFiles(url: url, recursive: recursive)
+            let urls = enumerateJsonlFiles(url: url, recursive: recursive, client: client)
             fileCacheLock.lock()
             fileListCache[key] = (stamp, urls)
             fileCacheLock.unlock()
             return urls
         }
-        return enumerateJsonlFiles(url: url, recursive: recursive)
+        return enumerateJsonlFiles(url: url, recursive: recursive, client: client)
     }
 
-    private static func enumerateJsonlFiles(url: URL, recursive: Bool) -> [URL] {
+    private static func enumerateJsonlFiles(url: URL, recursive: Bool, client: String) -> [URL] {
+        // Mirror SourceScanner.fingerprint's enumeration exactly (it skips
+        // hidden entries for every client except antigravity): a session file
+        // only the reader sees would be counted into stats, yet its change
+        // could never move the fingerprint, so the rows would go stale until
+        // an unrelated file changed.
+        var options: FileManager.DirectoryEnumerationOptions =
+            client == "antigravity" ? [] : [.skipsHiddenFiles]
+        if !recursive { options.insert(.skipsSubdirectoryDescendants) }
         guard let enumerator = FileManager.default.enumerator(
             at: url,
             includingPropertiesForKeys: [.isRegularFileKey],
-            options: recursive ? [] : [.skipsSubdirectoryDescendants]
+            options: options
         ) else { return [] }
         var files: [URL] = []
         for case let file as URL in enumerator {
@@ -755,14 +763,21 @@ enum Adapters {
         var rows: [UsageCore.UsageRow] = []
         var seenSessionDirs = Set<String>()
 
+        var allDirs: [URL] = []
         for sessionsRoot in kimiRoots {
             let sessionDirs = findKimiSessionDirs(at: sessionsRoot)
             for sDir in sessionDirs {
                 let dirPath = sDir.path
                 guard seenSessionDirs.insert(dirPath).inserted else { continue }
-                autoreleasepool {
-                    rows.append(contentsOf: parseKimiSessionDir(sDir))
-                }
+                allDirs.append(sDir)
+            }
+        }
+        // Bound the dir-level parse cache to live session dirs so deleted
+        // sessions don't pin their parsed rows in memory forever.
+        pruneParseCache(client: "kimi", activePaths: Set(allDirs.map { $0.path }))
+        for sDir in allDirs {
+            autoreleasepool {
+                rows.append(contentsOf: parseKimiSessionDir(sDir))
             }
         }
         return sortRows(rows)
@@ -797,7 +812,45 @@ enum Adapters {
         return sessionDirs
     }
 
+    /// Composite stamp over everything a Kimi session dir's parse consumes
+    /// (the dir itself, state.json, wire.jsonl and agents/*/wire.jsonl):
+    /// max mtime + summed size. Any content or context change moves it, so
+    /// the parse cache can skip unchanged dirs instead of re-reading every
+    /// wire.jsonl whenever any session in the root changed.
+    private static func kimiSessionDirStamp(_ dir: URL) -> (Date, Int)? {
+        var latest: Date?
+        var totalSize = 0
+        func include(_ url: URL) {
+            guard let stamp = fileStamp(url) else { return }
+            if latest == nil || stamp.0 > latest! { latest = stamp.0 }
+            totalSize += stamp.1
+        }
+        include(dir)
+        include(dir.appendingPathComponent("state.json"))
+        include(dir.appendingPathComponent("wire.jsonl"))
+        if let agentsDir = try? FileManager.default.contentsOfDirectory(
+            at: dir.appendingPathComponent("agents"),
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) {
+            for agentDir in agentsDir {
+                include(agentDir.appendingPathComponent("wire.jsonl"))
+            }
+        }
+        guard let latest else { return nil }
+        return (latest, totalSize)
+    }
+
     static func parseKimiSessionDir(_ dir: URL) -> [UsageCore.UsageRow] {
+        if let stamp = kimiSessionDirStamp(dir) {
+            return cachedValue("kimi|\(dir.path)", stamp: stamp) {
+                parseKimiSessionDirUncached(dir)
+            }
+        }
+        return parseKimiSessionDirUncached(dir)
+    }
+
+    private static func parseKimiSessionDirUncached(_ dir: URL) -> [UsageCore.UsageRow] {
         let fm = FileManager.default
         var sessionId = dir.lastPathComponent
         var title = ""
@@ -857,14 +910,17 @@ enum Adapters {
                     guard type == "usage.record" else { continue }
                     usageObj = line["usage"] as? JSON
                     modelRaw = line["model"] as? String
-                    timeMs = UsageCore.doubleValue(line["time"])
+                    // timestampMs (not doubleValue): tolerates a seconds-based
+                    // or string timestamp if a future wire revision changes
+                    // the unit; ms values pass through unchanged.
+                    timeMs = UsageCore.timestampMs(line["time"])
                 } else if type == "context.append_loop_event",
                           let event = line["event"] as? JSON,
                           (event["type"] as? String) == "step.end",
                           let evUsage = event["usage"] as? JSON {
                     usageObj = evUsage
                     modelRaw = (event["model"] as? String) ?? (line["model"] as? String)
-                    timeMs = UsageCore.doubleValue(line["time"])
+                    timeMs = UsageCore.timestampMs(line["time"])
                 }
 
                 guard let usage = usageObj else { continue }

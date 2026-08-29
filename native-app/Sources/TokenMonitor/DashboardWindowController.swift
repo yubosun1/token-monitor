@@ -276,11 +276,40 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
 
     private func saveBounds() {
         guard let window else { return }
+        boundsSaveDirty = false
         let frame = window.frame
         BridgeCore.shared.settings.update([boundsKey: [
             "x": Double(frame.origin.x), "y": Double(frame.origin.y),
             "width": Double(frame.width), "height": Double(frame.height)
         ]])
+    }
+
+    /// didMove/didResize fire continuously during a drag or resize, and each
+    /// saveBounds used to rewrite the whole settings JSON synchronously —
+    /// dozens of disk writes per second of dragging. Coalesce into one write
+    /// 400ms after the last change.
+    private var boundsSaveWork: DispatchWorkItem?
+    private var boundsSaveDirty = false
+
+    private func scheduleSaveBounds() {
+        boundsSaveDirty = true
+        boundsSaveWork?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self, self.boundsSaveDirty else { return }
+            self.boundsSaveWork = nil
+            self.saveBounds()
+        }
+        boundsSaveWork = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: item)
+    }
+
+    /// Flush a pending debounced save before the window goes away
+    /// (idle teardown / explicit close), so the last frame is not lost.
+    private func flushPendingBoundsSave() {
+        guard boundsSaveDirty else { return }
+        boundsSaveWork?.cancel()
+        boundsSaveWork = nil
+        saveBounds()
     }
 
     func startBoundsTracking() {
@@ -289,14 +318,14 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
         let diagBounds = ProcessInfo.processInfo.environment["TOKEN_MONITOR_DIAG"] != nil
         settingsObserver = center.addObserver(forName: NSWindow.didResizeNotification, object: window, queue: .main) { [weak self] _ in
             if diagBounds { NSLog("[diag] bounds resize frame=%@", NSStringFromRect(window.frame)) }
-            self?.saveBounds()
+            self?.scheduleSaveBounds()
         }
         // Store the move observer's token too: an unstored token deallocates
         // immediately, which silently unregisters the observer (the
         // block-based API unregisters when the token is released).
         moveObserver = center.addObserver(forName: NSWindow.didMoveNotification, object: window, queue: .main) { [weak self] _ in
             if diagBounds { NSLog("[diag] bounds move frame=%@", NSStringFromRect(window.frame)) }
-            self?.saveBounds()
+            self?.scheduleSaveBounds()
         }
     }
 
@@ -425,6 +454,9 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
     /// window. Callers (AppDelegate) drop their strong reference right
     /// after, which deallocates the controller and its WebView.
     func tearDown() {
+        // Persist the last frame before the window goes away (covers the
+        // debounced-bounds-save window, see scheduleSaveBounds).
+        flushPendingBoundsSave()
         for observer in autoHideObservers { NotificationCenter.default.removeObserver(observer) }
         autoHideObservers.removeAll()
         for observer in visibilityObservers { NotificationCenter.default.removeObserver(observer) }
@@ -785,6 +817,10 @@ final class DashboardViewWindowController: GlassWindowController {
         // centering, third-party snap tools) ignore borderless windows; the
         // widget popover stays borderless, the dashboard opts in.
         super.init(boundsKey: "dashboardBounds", defaultSize: NSSize(width: 920, height: 720), titled: true)
+        // The dashboard never listens to stats:push (it polls
+        // dashboard:getHistory and reacts to dashboard:historyChanged), so
+        // skip the largest recurring push for this web view.
+        bridge.deliversStatsPush = false
         loadPage("dashboard")
         restoreBounds()
         startBoundsTracking()
