@@ -56,6 +56,12 @@ html, body {
   user-select: none;
   -webkit-user-select: none;
 }
+/* The document's own type size. Without it the fallback is the browser's 16px —
+   roughly double this UI's body text — so any element that forgets a font-size
+   renders unmistakably wrong rather than merely inheriting. Set on `body`, not
+   `html`, so `rem` keeps its conventional 16px meaning. The few glyph buttons
+   that do want 16px now say so; everything else already declares its own size. */
+body { font-size: 11px; }
 button, input, select { font: inherit; }
 button:focus, button:focus-visible { outline: none; }
 input, textarea, [contenteditable="true"] {
@@ -478,6 +484,9 @@ html.is-mac-legacy .shell {
 }
 .settings-panel::-webkit-scrollbar { width: 0; height: 0; }
 .settings-panel.hidden {
+  /* Animates out rather than disappearing, so it must keep its box. Higher
+     specificity than the blanket `.hidden`, and matching weight to beat it. */
+  display: block !important;
   max-height: 0;
   padding-top: 0;
   padding-bottom: 0;
@@ -557,7 +566,6 @@ html.is-mac-legacy .shell {
 }
 .settings-panel .checkbox-label.is-disabled .settings-item-title { color: var(--muted); }
 .settings-group { display: grid; min-width: 0; gap: 8px; }
-.settings-group.hidden, .settings-subgroup.hidden, .settings-actions button.hidden { display: none; }
 .settings-collection-cadence {
   grid-template-columns: minmax(0, 1fr);
 }
@@ -600,10 +608,8 @@ html.is-mac-legacy .shell {
 .export-auto-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
 .export-auto-head .export-auto-toggle { flex: 1 1 auto; min-width: 0; }
 .export-status-pill { flex: 0 0 auto; }
-.export-status-pill.hidden { display: none; }
 .export-status-pill.is-active { color: var(--success); border-color: rgba(var(--success-rgb), 0.5); background: rgba(var(--success-rgb), 0.08); }
 .export-auto-details { display: grid; gap: 8px; }
-.export-auto-details.hidden { display: none; }
 .export-dir-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .export-dir-actions { flex: 0 0 auto; }
 .export-dir-path { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11px; }
@@ -626,7 +632,6 @@ html.is-mac-legacy .shell {
 .settings-item + .settings-item {
   border-top: 1px solid rgba(var(--line-rgb), 0.06);
 }
-.settings-panel .settings-item.hidden { display: none; }
 .settings-item-text {
   flex: 1 1 auto;
   min-width: 0;
@@ -948,7 +953,6 @@ span.settings-note.settings-item-desc {
   font-size: 10px;
   line-height: 1.35;
 }
-.maintenance-version-item.hidden { display: none; }
 .maintenance-version-item strong {
   min-width: 0;
   color: var(--text);
@@ -1127,7 +1131,6 @@ span.settings-note.settings-item-desc {
   align-items: end;
   gap: 8px;
 }
-.codex-workspace-selection.hidden { display: none; }
 .codex-workspace-selection label {
   display: grid;
   gap: 5px;
@@ -1394,7 +1397,6 @@ span.settings-note.settings-item-desc {
 .hub-address-row .icon-button { width: 26px; height: 26px; flex: 0 0 auto; font-size: 12px; }
 .settings-note.hub-warning { color: var(--orange); }
 .currency-rate-row { display: grid; gap: 4px; min-width: 0; }
-.currency-rate-row.hidden, .currency-rate-manual-field.hidden { display: none; }
 /* The rate row is a sub-setting of the Currency row: keep them as one unseparated pair. */
 .settings-subgroup > .settings-item + .currency-rate-row { margin-top: 0; }
 .currency-rate-manual-field { display: flex; align-items: center; gap: 8px; min-width: 0; padding-bottom: 2px; }
@@ -1478,6 +1480,8 @@ span.settings-note.settings-item-desc {
   gap: 4px;
 }
 .tool-header-action {
+  /* Its label is a glyph, sized independently of the body text around it. */
+  font-size: 16px;
   display: inline-grid;
   place-items: center;
   width: 24px;
@@ -2164,6 +2168,8 @@ span.settings-note.settings-item-desc {
   opacity: 0.9;
 }
 .reset-appearance-button {
+  /* Glyph label, same reason as .tool-header-action. */
+  font-size: 16px;
   width: 24px;
   height: 24px;
   padding: 0;
@@ -2443,9 +2449,6 @@ html.is-windows .settings-panel select option {
   flex-direction: column;
   gap: 2px;
 }
-.period-menu.hidden {
-  display: none !important;
-}
 .period-menu-item {
   display: flex;
   align-items: center;
@@ -2539,7 +2542,6 @@ html.is-windows .settings-panel select option {
   white-space: nowrap;
   opacity: 0.85;
 }
-.total-compact.hidden { display: none; }
 .cost { margin-top: 6px; color: var(--muted); font-size: 12px; }
 .view-back-row {
   position: relative;
@@ -2551,7 +2553,6 @@ html.is-windows .settings-panel select option {
   margin-bottom: -2px;
   padding: 0;
 }
-.view-back-row.hidden { display: none; }
 .back-home-button {
   display: inline-flex;
   height: 26px;
@@ -2597,7 +2598,6 @@ html.is-windows .settings-panel select option {
   padding-right: 2px;
   scrollbar-width: none;
 }
-.breakdown.hidden { display: none; }
 .breakdown::-webkit-scrollbar { width: 0; height: 0; }
 .breakdown-incomplete-hint {
   margin: 0;
@@ -2620,7 +2620,6 @@ html.is-windows .settings-panel select option {
   padding-right: 2px;
   scrollbar-width: none;
 }
-.home-panel.hidden { display: none; }
 .home-panel::-webkit-scrollbar { width: 0; height: 0; }
 .home-module {
   display: grid;
@@ -3203,7 +3202,6 @@ html.is-windows .settings-panel select option {
 .row-detail {
   opacity: 0.84;
 }
-.row-subtitle.hidden, .row-detail.hidden { display: none; }
 .row-metrics { display: grid; flex: 0 0 auto; gap: 2px; min-width: max-content; text-align: right; }
 .row-value { color: var(--text); white-space: nowrap; }
 .row-cost { color: var(--muted); font-size: 10px; white-space: nowrap; }
@@ -3298,7 +3296,6 @@ html.is-windows .settings-panel select option {
   scrollbar-width: none;
 }
 .limits-panel::-webkit-scrollbar { width: 0; height: 0; }
-.limits-panel.hidden { display: none; }
 .limit-row {
   display: grid;
   gap: 10px;
@@ -3866,12 +3863,6 @@ html.is-windows .limit-live-badge {
 .subscription-field-note {
   margin-top: -2px;
 }
-/* This stylesheet has no blanket `.hidden { display: none }` — every hidden
-   thing declares its own rule — so a bare `hidden` class on these wrappers left
-   both kinds of field on screen at once. */
-.subscription-kind-fields.hidden {
-  display: none;
-}
 /* The ledger stands where a labelled field would, so it keeps the form's left
    edge rather than indenting to the control column. Its currency select is
    parked on the same line by setSubscriptionFormMode(). */
@@ -4284,6 +4275,9 @@ html.is-windows .limit-live-badge {
   will-change: opacity, transform, filter;
 }
 .view-switcher-menu.hidden {
+  /* Animates out rather than disappearing, so it must keep its box. Higher
+     specificity than the blanket `.hidden`, and matching weight to beat it. */
+  display: grid !important;
   visibility: hidden;
   opacity: 0;
   pointer-events: none;
@@ -4387,8 +4381,6 @@ html.is-windows .limit-live-badge {
   .home-panel { display: none; }
 }
 
-#deepseekManualPanel.hidden,
-#deepseekErrorMessage.hidden { display: none; }
 #deepseekManualPanel {
   min-width: 0;
 }
@@ -4424,9 +4416,7 @@ html.is-windows .limit-live-badge {
 }
 .session-detail { display: flex; flex: 1; min-height: 0; flex-direction: column; gap: 6px; overflow: hidden auto; scrollbar-width: none; font-size: 12px; }
 .session-detail::-webkit-scrollbar { width: 0; height: 0; }
-.session-detail.hidden { display: none; }
 .detail-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; }
-.detail-head.hidden { display: none; }
 .detail-back { background: transparent; border: 0; color: var(--muted, #8a8a90); font: inherit; cursor: pointer; padding: 0; }
 .detail-sort { background: transparent; border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; color: var(--muted, #8a8a90); font: inherit; font-size: 11px; cursor: pointer; padding: 2px 8px; margin-block: -4px; }
 .detail-note { color: var(--muted, #8a8a90); padding: 16px 4px; text-align: center; }
@@ -4440,7 +4430,6 @@ html.is-windows .limit-live-badge {
 .detail-ex-metrics { text-align: right; white-space: nowrap; display: flex; flex-direction: column; }
 .detail-ex-cost, .detail-turn-cost { font-size: 10px; color: var(--muted, #8a8a90); }
 .detail-turns { margin: 4px 0 4px 20px; padding-left: 12px; border-left: 2px solid rgba(255,255,255,0.08); }
-.detail-turns.hidden { display: none; }
 .detail-turn { display: flex; align-items: baseline; justify-content: space-between; padding: 4px 0; }
 .detail-turn-label { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .detail-turn-split, .detail-turn-tools { font-size: 10px; color: var(--muted, #8a8a90); }
@@ -4825,7 +4814,6 @@ html.is-windows .limit-live-badge {
 }
 
 .trends-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; padding-right: 2px; overflow: hidden; }
-.trends-panel.hidden { display: none; }
 .trends-cap { flex: none; display: flex; align-items: center; justify-content: space-between; font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; opacity: 0.6; }
 .trends-open-hint { opacity: 0.75; cursor: pointer; font-size: 13px; }
 .trends-spark { flex: 1 1 auto; min-height: 0; display: flex; cursor: pointer; border-radius: 8px; padding: 6px 4px; transition: background 0.12s ease; }
@@ -4926,11 +4914,6 @@ html.is-windows .limit-live-badge {
   margin-top: 8px;
 }
 
-.custom-pricing-form.hidden { display: none; }
-
-.custom-pricing-form input.hidden,
-.custom-pricing-form .settings-note.hidden { display: none; }
-
 .custom-pricing-approx {
   margin-left: 8px;
   opacity: 0.7;
@@ -4983,8 +4966,6 @@ html.is-windows .limit-live-badge {
   font-size: 11px;
   text-align: center;
 }
-.opencode-empty.hidden,
-.subscription-empty.hidden { display: none; }
 .profile-item,
 .opencode-profile-item {
   display: grid;
@@ -5036,12 +5017,6 @@ html.is-windows .limit-live-badge {
   color: var(--muted);
   font-size: 9px;
   line-height: 1.2;
-}
-.profile-item .profile-name.hidden,
-.profile-item .profile-name-input.hidden,
-.opencode-profile-item .profile-name.hidden,
-.opencode-profile-item .profile-name-input.hidden {
-  display: none;
 }
 .profile-item .profile-name-input,
 .opencode-profile-item .profile-name-input {
@@ -5217,4 +5192,21 @@ html.is-windows .limit-live-badge {
   .settings-panel .limit-provider-row { transition: none; }
   .tool-preference-row { transition: none; }
   .tool-preference-main .cursor-disclosure-icon { transition: none; }
+}
+
+/* One rule for hiding. Before this, each hidden thing carried its own
+   `display: none` and a new one that forgot simply stayed on screen — a trap
+   this stylesheet had already fallen into twice and papered over with comments.
+   `!important` is load-bearing, not laziness: layout here is written with
+   descendant selectors (`.settings-panel .settings-item`, `.settings-panel
+   label`, …) that outrank a lone class, so without it a blanket rule loses to
+   the component on 300+ elements — measured, which is how this rule got here.
+   Hiding is a utility that must beat layout by design, the same call Bootstrap
+   makes for `.d-none`; to un-hide something you remove the class, you do not
+   out-specify it. `[hidden]` joins it because the attribute means exactly this.
+   The handful of elements that animate out instead of disappearing override it
+   from their own, more specific, `.hidden` rule. */
+.hidden,
+[hidden] {
+  display: none !important;
 }
