@@ -1,16 +1,16 @@
 # Upstream Main Review Baseline
 
 - Upstream remote: `https://github.com/Javis603/token-monitor.git`
-- Local `main` synchronized through: `05a5bf6cab3ae70e02248b69f168df4551fca523`
-- Upstream subject: `feat(settings): search the tracked-tools and limit-provider lists (#590)`
-- Reviewed on: `2026-09-03`
+- Local `main` synchronized through: `0b17b1ec53ccd60508a645144ccb7db74027168c`
+- Upstream subject: `chore: release v0.53.0`
+- Reviewed on: `2026-09-04`
 - Native branch: `macos-native`
 
 This is a review baseline, not a claim that `macos-native` contains every
 upstream change. For the next upstream review, start with:
 
 ```text
-f8fc74f9b642d18dcbaa0cfde683ee91aec00122..05a5bf6cab3ae70e02248b69f168df4551fca523
+05a5bf6cab3ae70e02248b69f168df4551fca523..0b17b1ec53ccd60508a645144ccb7db74027168c
 ```
 
 ## Reviewed Compatibility Notes
@@ -19,36 +19,26 @@ Only the most recent review round is kept here. Each new review must
 replace the previous `Range ...` section, not append to it; older rounds
 live in git history only.
 
-Range `f8fc74f9..05a5bf6c` (v0.52.0) reviewed on 2026-09-03:
+Range `05a5bf6c..0b17b1ec` (v0.53.0) reviewed on 2026-09-04:
 
-- `d0a2b696` `fix(limits): align info icons with text`:
-  Ported to `macos-native` (`src/electron/renderer/styles.css`). Removed the
-  `transform: translateY(-1px)` from `.limit-detail-tooltip-wrap` so info icons
-  align with text.
-- `bd1fe833` `fix(limits): seed initial providers from detected tools (#566)`:
-  Skipped — `macos-native` limits are handled natively in Swift (`SettingsStore.swift`,
-  `KimiLimits.swift`, `DeepseekBalance.swift`) for DeepSeek and Kimi only, with no Node
-  tool-discovery seeding pipeline.
-- `f2cc6655` `fix(settings): disable Hub Save for unchanged drafts (#445)`:
-  Skipped — Hub synchronization and related settings UI were completely removed on
-  `macos-native`.
-- `36307e7e` `feat(export): add daily model CSV (#573)`:
-  Skipped — `macos-native` does not retain the Node-side CSV/JSON export engine (`exporter.js`);
-  session and usage history is kept in the native SQLite ledger (`ledger.db`).
-- `da4da77e` `feat(codex): allow hiding additional quotas (#577)`:
-  Skipped — Codex limits not enabled on `macos-native`.
-- `a00c5c62`, `29e57134` `feat(zed): add dashboard billing limits (#580)` and UI fix:
-  Skipped — Zed limits are not implemented on `macos-native` (Swift limits pipeline covers
-  DeepSeek/Kimi only).
-- `c540bec3` `feat(window): hide the taskbar/Dock icon (#587)`:
-  Skipped — `macos-native` was architected as an `LSUIElement` accessory app from the start
-  (`Info.plist`), living exclusively in the menu bar with no Dock icon.
-- `be197e44` `feat(models): rank models by tokens or cost (#585)`:
-  Deferred per maintainer decision — `macos-native` trimmed `usageAttributionRows.js` and
-  sorts models directly by token count; cost ranking requires porting barScaleMax and
-  extending `SettingsStore.swift`.
-- `05a5bf6c` `feat(settings): search the tracked-tools and limit-provider lists (#590)`:
-  Skipped — upstream needs list searching for its 27 clients and 23 limit providers,
-  whereas `macos-native` is trimmed to 8 clients and 2 limit providers where a search
-  filter is unnecessary overhead.
-- `a2ff67a5` `chore: release v0.52.0`: release metadata, skipped.
+- `689a8f6b` `refactor(renderer): one base type size and one rule for hiding (#593)`:
+  Ported to `macos-native` (`src/electron/renderer/styles.css`, `dashboard.css`).
+  Replaced scattered per-element `.hidden` rules with a blanket `.hidden, [hidden] { display: none !important; }`
+  rule, added base font size `body { font-size: 11px; }`, set explicit `font-size: 16px;` on glyph buttons,
+  and preserved display modes with `!important` on animated-out containers (`.settings-panel.hidden`,
+  `.view-switcher-menu.hidden`).
+- `dc20dc9a` `fix(cursor): probe the home-relative Tokscale cache (#563)`:
+  Skipped — Windows-only home-relative cache probe fix for Node-side `collector.js`,
+  which does not exist on `macos-native`.
+- `f0d29620` `chore(deps): update tokscale to 4.15.1 (#596)`:
+  Skipped — upstream tokscale bump addresses Cursor upstream connection changes,
+  Command Code v3, and DSH summary counts in the tokscale CLI. In `macos-native`,
+  Cursor and Command Code are not tracked, DSH is decoded natively in Swift
+  (`Adapters.swift`), and the vendored tokscale 4.13.0 binary remains stable for
+  Claude/Codex/WorkBuddy session scanning.
+- `00ded791` `docs(readme): use animated third-party icon`:
+  Skipped — upstream Electron README asset change; `macos-native` maintains its
+  own dedicated README.
+- `3d053449` `fix(renderer): map Muse models to Meta icon (#598)`:
+  Skipped per maintainer decision — Meta / Muse models not used or tracked.
+- `0b17b1ec` `chore: release v0.53.0`: release metadata, skipped.
