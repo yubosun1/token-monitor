@@ -3713,7 +3713,6 @@ html.is-windows .limit-live-badge {
   height: 14px;
   flex: 0 0 14px;
   place-items: center;
-  transform: translateY(-1px);
 }
 .limit-detail-tooltip-trigger {
   display: inline-grid;
