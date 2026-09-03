@@ -233,6 +233,7 @@ Object.assign(elsMap, {
   backHomeButton: document.getElementById('backHomeButton'),
   startupGroup: document.getElementById('startupGroup'),
   startAtLoginInput: document.getElementById('startAtLoginInput'),
+  showTrayIconInput: document.getElementById('showTrayIconInput'),
   startupNote: document.getElementById('startupNote'),
   resetClientDisplayOrderButton: document.getElementById('resetClientDisplayOrderButton'),
   showAllClientsButton: document.getElementById('showAllClientsButton'),
@@ -6284,6 +6285,9 @@ function syncSettingsForm() {
     els.startAtLoginInput.disabled = !state.appInfo?.loginItemSupported;
     els.startAtLoginInput.checked = Boolean(state.settings.startAtLogin && state.appInfo?.loginItemSupported);
   }
+  if (els.showTrayIconInput) {
+    els.showTrayIconInput.checked = state.settings?.showTrayIcon !== false;
+  }
   if (els.startupNote) {
     els.startupNote.textContent = !state.appInfo?.loginItemSupported
       ? t('settings.startup.available')
@@ -8571,6 +8575,7 @@ window.addEventListener('resize', () => { if (!numberAnimHandle) fitTotalNumber(
 els.windowToggleShortcutValue?.addEventListener('click', startWindowShortcutRecording);
 els.windowToggleShortcutClearButton?.addEventListener('click', () => setWindowToggleShortcut('').catch(() => {}));
 els.startAtLoginInput?.addEventListener('change', () => saveSettings({ startAtLogin: els.startAtLoginInput.checked }));
+els.showTrayIconInput?.addEventListener('change', () => saveSettings({ showTrayIcon: els.showTrayIconInput.checked }));
 els.compactTokensInput?.addEventListener('change', () => { saveSettings({ compactTokens: els.compactTokensInput.checked }); render(); });
 els.refreshButton.addEventListener('click', () => {
   // Only this button asks for a history rescan and a self-sync: `{ force: true }` is

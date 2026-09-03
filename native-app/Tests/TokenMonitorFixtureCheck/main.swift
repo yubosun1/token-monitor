@@ -1977,6 +1977,7 @@ func runAntigravityTests() {
         let defaults = SettingsStore.defaults()
         checkEqual(defaults["windowBehavior"] as? String ?? "", "floating", "A7 windowBehavior defaults to floating")
         checkEqual(defaults["dashboardPinned"] as? Bool ?? true, false, "A7 dashboardPinned defaults to false")
+        checkEqual(defaults["showTrayIcon"] as? Bool ?? false, true, "A7 showTrayIcon defaults to true")
     }
     // A8: Stale Antigravity sync lock cleanup
     do {

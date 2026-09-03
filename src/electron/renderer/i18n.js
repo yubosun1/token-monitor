@@ -739,6 +739,7 @@
       'settings.windowBehavior.desktop': '固定在桌面',
       'settings.windowBehavior.buttonTitle': '当前：{current}；点击切换为 {next}',
       'settings.display.showTrayIcon': '显示托盘／菜单栏图标',
+      'settings.display.showTrayIconNote': '隐藏后可通过全局快捷键（默认 ⌘E）呼出或隐藏窗口。',
       'settings.display.windowShortcut': '快捷键',
       'settings.display.windowShortcutNote': '录制全局快捷键，用来显示或隐藏窗口。',
       'settings.display.windowShortcutListening': '按下快捷键，Esc 取消。',

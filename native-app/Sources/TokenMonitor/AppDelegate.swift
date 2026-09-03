@@ -5,6 +5,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, BridgeDelegate {
     private var mainWindowController: DashboardWindowController?
     private var dashboardWindowController: DashboardViewWindowController?
     private var windowVisibilityObserver: NSObjectProtocol?
+    private var settingsObserver: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // A second launch that lost the single-instance lock asks us to
@@ -18,7 +19,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, BridgeDelegate {
         // via window.tokenMonitor.openDashboard() → dashboard:open → delegate.
         BridgeCore.shared.delegate = self
         buildMainMenu()
-        buildStatusItem()
+        updateStatusItemVisibility()
+        settingsObserver = NotificationCenter.default.addObserver(
+            forName: SettingsStore.changedNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            if let keys = note.userInfo?["keys"] as? [String], keys.contains("showTrayIcon") {
+                self?.updateStatusItemVisibility()
+            }
+        }
         // Global toggle hotkey (Carbon; works while the LSUIElement app is in
         // the background, like the Electron globalShortcut it replaces).
         ShortcutController.shared.onToggle = { [weak self] in self?.toggleMainWindow() }
@@ -229,7 +239,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, BridgeDelegate {
 
     // MARK: - Status item
 
+    private func updateStatusItemVisibility() {
+        let showTrayIcon = BridgeCore.shared.settings.snapshot()["showTrayIcon"] as? Bool ?? true
+        if showTrayIcon {
+            if statusItem == nil {
+                buildStatusItem()
+            }
+        } else {
+            if let item = statusItem {
+                NSStatusBar.system.removeStatusItem(item)
+                statusItem = nil
+            }
+        }
+    }
+
     private func buildStatusItem() {
+        guard statusItem == nil else { return }
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = item.button {
             let icon = NSImage(contentsOf: Bundle.main.url(forResource: "tray-token-monitor", withExtension: "png")!)
