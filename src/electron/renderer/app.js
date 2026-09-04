@@ -8584,7 +8584,11 @@ els.refreshButton.addEventListener('click', () => {
   // on every one of them.
   refreshStats({ force: true, forceHistory: true, forceSelfSync: true, refreshPricing: true, feedback: true });
 });
-els.pinButton?.addEventListener('click', () => {
+els.pinButton?.addEventListener('click', (event) => {
+  // Pointer focus would keep .window-actions:focus-within true after the cursor
+  // leaves, pinning the hover-only controls open. Keyboard activation keeps
+  // focus so the controls remain reachable without a pointer.
+  if (event.detail > 0) els.pinButton.blur();
   const pinned = state.settings?.windowPinned === true;
   saveSettings({ windowPinned: !pinned, windowBehavior: !pinned ? 'floating' : 'normal' });
 });
@@ -8592,7 +8596,10 @@ els.windowBehaviorInput?.addEventListener('change', () => {
   const pinned = els.windowBehaviorInput.value === 'floating';
   saveSettings({ windowPinned: pinned, windowBehavior: els.windowBehaviorInput.value });
 });
-els.closeButton.addEventListener('click', () => window.tokenMonitor.close());
+els.closeButton?.addEventListener('click', (event) => {
+  if (event.detail > 0) els.closeButton.blur();
+  window.tokenMonitor.close();
+});
 els.trendsPanel.addEventListener('click', (event) => {
   if (event.target.closest('.trends-spark, .trends-open-hint')) window.tokenMonitor.openDashboard();
 });
