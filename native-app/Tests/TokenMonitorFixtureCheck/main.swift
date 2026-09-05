@@ -3289,6 +3289,49 @@ func t53DshTornTailTests() {
     Adapters.dropClientCaches(["dsh"])
 }
 
+// MARK: - DSH touch-only stamp tests
+
+/// A touch-only change (mtime advanced, size unchanged) must advance the
+/// stamp IN the stored dictionary entry: the stream then becomes stable
+/// and the idle sweep can free it. Without the write-back the stored
+/// stamp lags forever, the stream never looks idle, and the state
+/// dictionary grows without bound.
+func t55DshTouchOnlyStampTests() {
+    let fm = FileManager.default
+    let dir = fm.temporaryDirectory.appendingPathComponent("tm-dsh-touch-\(UUID().uuidString)")
+    let s1 = dir.appendingPathComponent("session-1")
+    try! fm.createDirectory(at: s1, withIntermediateDirectories: true)
+    defer {
+        Adapters.dropClientCaches(["dsh"])
+        try? fm.removeItem(at: dir)
+    }
+    let f1 = s1.appendingPathComponent("session.jsonl.zstd")
+    try! compressZstd(dshSessionLines(100)).write(to: f1)
+    let r1 = Adapters.cachedSessionFileRows(f1)
+    checkEqual(r1.rows.count, 1, "t55 head parses")
+    checkEqual(Adapters.dshIncrementalStateCount, 1, "t55 fresh session holds a stream")
+
+    // Touch: same content, new mtime. The feed finds an empty tail and
+    // must persist the advanced stamp.
+    try! fm.setAttributes([.modificationDate: Date().addingTimeInterval(10)], ofItemAtPath: f1.path)
+    let r2 = Adapters.cachedSessionFileRows(f1)
+    checkEqual(r2.rows.count, 1, "t55 touch-only read keeps the rows")
+    checkEqual(Adapters.dshIncrementalStateCount, 1, "t55 touch-only read keeps the stream")
+
+    // The touching host pattern: repeated touch-only ticks. Each must
+    // advance the stored stamp, so a sweep far past the now-current mtime
+    // sees a stable idle stream and frees it.
+    checkEqual(Adapters.freeIdleDshStreams(now: Date().addingTimeInterval(3600)), 1,
+               "t55 touch-only stream becomes stable and is swept")
+    checkEqual(Adapters.dshIncrementalStateCount, 0, "t55 touch-only stream freed")
+
+    // The sweep freed the state; rows are still served (the touch made the
+    // parse-cache stamp stale, so the re-read re-derives them once).
+    let r3 = Adapters.cachedSessionFileRows(f1)
+    checkEqual(r3.rows.count, 1, "t55 rows still served after the sweep")
+    Adapters.dropClientCaches(["dsh"])
+}
+
 func XCTAssertSQLITE(_ condition: Bool) {
     check(condition, "sqlite operation succeeded")
 }
@@ -3309,6 +3352,7 @@ runMemoryLeakAndCacheTests()
 runHistoryLedgerTests()
 runTokscaleDecodeTests()
 t53DshTornTailTests()
+t55DshTouchOnlyStampTests()
 print("fixture checks: \(checkCount) checks, \(failureCount) failures")
 if failureCount > 0 { exit(1) }
 

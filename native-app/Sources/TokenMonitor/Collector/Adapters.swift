@@ -1375,7 +1375,16 @@ enum Adapters {
         defer { try? handle.close() }
         try? handle.seek(toOffset: UInt64(state.compressedOffset))
         guard let tail = try? handle.readToEnd(), !tail.isEmpty else {
+            // Touch-only change (mtime advanced, size unchanged): nothing to
+            // decode, but the advanced stamp must be written back to the
+            // dictionary entry — otherwise the stored stamp never catches up
+            // with the file, the stream looks perpetually non-stable, and
+            // freeIdleDshStreams never releases it (unbounded memory on
+            // hosts with touch-only log files).
             state.stamp = stamp
+            fileCacheLock.lock()
+            dshIncrementalStates[file.path] = state
+            fileCacheLock.unlock()
             return DshFileResult(rows: state.rows, events: state.totalEvents)
         }
         fileCacheLock.lock()
