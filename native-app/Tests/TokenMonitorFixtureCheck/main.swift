@@ -3691,6 +3691,19 @@ func t64BalanceStorePermissionTests() {
     checkEqual(posixPermissions(of: storePath), 0o600, "t64 balance store is 0600")
 }
 
+func t65DeepseekKeyNormalizeTests() {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("tm-deepseek-key-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let store = CredentialStore(fileURL: dir.appendingPathComponent("credentials.json"))
+
+    store.setDeepseekApiKey("  \"sk-quoted-key\"  ")
+    checkEqual(store.deepseekApiKey(), "sk-quoted-key", "t65 double-quoted pasted key is stripped")
+    store.setDeepseekApiKey(" 'sk-single-quoted' ")
+    checkEqual(store.deepseekApiKey(), "sk-single-quoted", "t65 single-quoted pasted key is stripped")
+    store.setDeepseekApiKey("\nsk-padded\t")
+    checkEqual(store.deepseekApiKey(), "sk-padded", "t65 whitespace-padded pasted key is trimmed")
+}
+
 func posixPermissions(of path: String) -> Int {
     ((try? FileManager.default.attributesOfItem(atPath: path))?[.posixPermissions] as? NSNumber)?.intValue ?? -1
 }
@@ -3722,6 +3735,7 @@ t60StaleLockErrorPatternTests()
 t62ZeroBalanceKeepsHistoryTests()
 t63CredentialsFilePermissionTests()
 t64BalanceStorePermissionTests()
+t65DeepseekKeyNormalizeTests()
 print("fixture checks: \(checkCount) checks, \(failureCount) failures")
 if failureCount > 0 { exit(1) }
 

@@ -90,7 +90,7 @@ final class CredentialStore {
             var credentials = document["credentials"] as? [String: Any] ?? [:]
             var providers = credentials["providers"] as? [String: Any] ?? [:]
             var deepseek = providers["deepseek"] as? [String: Any] ?? [:]
-            deepseek["apiKey"] = key.trimmingCharacters(in: .whitespaces)
+            deepseek["apiKey"] = KimiLimits.normalizedAPIKey(key)
             providers["deepseek"] = deepseek
             credentials["providers"] = providers
             document["credentials"] = credentials
