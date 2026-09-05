@@ -3206,6 +3206,89 @@ func runTokscaleDecodeTests() {
     }
 }
 
+// MARK: - DSH torn delta tail tests
+
+/// A delta that ends mid-line must not lose the line: the raw bytes are
+/// buffered and prepended to the next delta, and a delta ending mid-
+/// UTF-8-character must not drop the whole delta either.
+func t53DshTornTailTests() {
+    let fm = FileManager.default
+    let dir = fm.temporaryDirectory.appendingPathComponent("tm-dsh-torn-\(UUID().uuidString)")
+    let s1 = dir.appendingPathComponent("session-1")
+    try! fm.createDirectory(at: s1, withIntermediateDirectories: true)
+    defer {
+        Adapters.dropClientCaches(["dsh"])
+        try? fm.removeItem(at: dir)
+    }
+    let f1 = s1.appendingPathComponent("session.jsonl.zstd")
+    try! compressZstd(dshSessionLines(100)).write(to: f1)
+    _ = Adapters.cachedSessionFileRows(f1)
+    checkEqual(Adapters.dshIncrementalStateCount, 1, "t53 head holds a streaming state")
+
+    // Split helpers: cut a full line inside the two-byte é (C3 A9) so the
+    // halves rejoin cleanly once prepended.
+    func splitInsideMultibyte(_ line: String) -> (first: Data, second: Data) {
+        let bytes = Array(line.utf8)
+        let splitAt = bytes.firstIndex(of: 0xC3)! + 1   // just after the lead byte
+        return (Data(bytes[0..<splitAt]), Data(bytes[splitAt...]))
+    }
+
+    let seq5Line = "{\"type\":\"assistant/chunk\",\"seq\":5,\"time\":\"2026-08-15T10:06:00+08:00\",\"data\":{\"turn\":6,\"step\":1,\"chunk\":{\"type\":\"usage\",\"usage\":{\"inputTokens\":900,\"outputTokens\":50,\"cacheReadTokens\":0,\"cacheWriteTokens\":0}},\"label\":\"caf\u{E9}\"}}\n"
+    let (seq5First, seq5Second) = splitInsideMultibyte(seq5Line)
+
+    // t53a: delta 1 = one COMPLETE line (seq 3) followed by the first half
+    // of the seq 5 line, so the delta output ends mid-character. The
+    // completed line must survive (the previous strict UTF-8 decode
+    // returned nil for this whole delta and dropped seq 3 forever), while
+    // the half-line yields nothing yet.
+    let h1 = try! FileHandle(forWritingTo: f1)
+    try! h1.seekToEnd()
+    h1.write(compressZstd("{\"type\":\"assistant/chunk\",\"seq\":3,\"time\":\"2026-08-15T10:05:00+08:00\",\"data\":{\"turn\":5,\"step\":1,\"chunk\":{\"type\":\"usage\",\"usage\":{\"inputTokens\":800,\"outputTokens\":50,\"cacheReadTokens\":0,\"cacheWriteTokens\":0}}}}\n"))
+    try! h1.close()
+    let h2 = try! FileHandle(forWritingTo: f1)
+    try! h2.seekToEnd()
+    h2.write(compressZstd(String(decoding: seq5First, as: UTF8.self)))
+    try! h2.close()
+    let afterFirst = Adapters.cachedSessionFileRows(f1)
+    checkEqual(afterFirst.rows.count, 1, "t53a mid-character delta keeps only completed lines")
+    checkEqual(afterFirst.rows[0].input, 100, "t53a head row untouched")
+
+    // t53b: delta 2 starts with the second half of the split é and brings
+    // the finishes for both pending usage events. The buffered lead byte
+    // is prepended, the seq 5 line parses, and both rows resolve.
+    let h3 = try! FileHandle(forWritingTo: f1)
+    try! h3.seekToEnd()
+    h3.write(compressZstd(String(decoding: seq5Second, as: UTF8.self)
+        + "{\"type\":\"assistant/chunk\",\"seq\":4,\"time\":\"2026-08-15T10:05:05+08:00\",\"data\":{\"turn\":5,\"step\":1,\"chunk\":{\"type\":\"finish\",\"replayState\":{\"model\":\"deepseek-chat\"}}}}\n"
+        + "{\"type\":\"assistant/chunk\",\"seq\":6,\"time\":\"2026-08-15T10:06:05+08:00\",\"data\":{\"turn\":6,\"step\":1,\"chunk\":{\"type\":\"finish\",\"replayState\":{\"model\":\"deepseek-chat\"}}}}\n"))
+    try! h3.close()
+    let afterSecond = Adapters.cachedSessionFileRows(f1)
+    checkEqual(afterSecond.rows.count, 3, "t53b torn lines completed across deltas")
+    checkEqual(afterSecond.rows[1].input, 800, "t53b seq3 usage from the torn delta kept")
+    checkEqual(afterSecond.rows[2].input, 900, "t53b seq5 usage spanning the multibyte split counted")
+    checkEqual(afterSecond.rows[2].model, "deepseek-chat", "t53b split-line event resolved to a model")
+
+    // t53c: a delta that is ONLY a partial line (no newline at all) parses
+    // nothing and keeps the bytes; the later completion brings the event in.
+    let seq7Line = "{\"type\":\"assistant/chunk\",\"seq\":7,\"time\":\"2026-08-15T10:07:00+08:00\",\"data\":{\"turn\":7,\"step\":1,\"chunk\":{\"type\":\"usage\",\"usage\":{\"inputTokens\":1200,\"outputTokens\":50,\"cacheReadTokens\":0,\"cacheWriteTokens\":0}}}}\n"
+    let seq7Bytes = Array(seq7Line.utf8)
+    let h4 = try! FileHandle(forWritingTo: f1)
+    try! h4.seekToEnd()
+    h4.write(compressZstd(String(decoding: Data(seq7Bytes[0..<(seq7Bytes.count - 3)]), as: UTF8.self)))   // drops "}}\n
+    try! h4.close()
+    let afterFirstHalf = Adapters.cachedSessionFileRows(f1)
+    checkEqual(afterFirstHalf.rows.count, 3, "t53c fully-partial delta adds nothing")
+    let h5 = try! FileHandle(forWritingTo: f1)
+    try! h5.seekToEnd()
+    h5.write(compressZstd(String(decoding: Data(seq7Bytes[(seq7Bytes.count - 3)...]), as: UTF8.self)
+        + "{\"type\":\"assistant/chunk\",\"seq\":8,\"time\":\"2026-08-15T10:07:05+08:00\",\"data\":{\"turn\":7,\"step\":1,\"chunk\":{\"type\":\"finish\",\"replayState\":{\"model\":\"deepseek-chat\"}}}}\n"))
+    try! h5.close()
+    let afterCompletion = Adapters.cachedSessionFileRows(f1)
+    checkEqual(afterCompletion.rows.count, 4, "t53c line completed by the next delta")
+    checkEqual(afterCompletion.rows[3].input, 1200, "t53c fully-partial line's event counted")
+    Adapters.dropClientCaches(["dsh"])
+}
+
 func XCTAssertSQLITE(_ condition: Bool) {
     check(condition, "sqlite operation succeeded")
 }
@@ -3225,6 +3308,7 @@ runAntigravityTests()
 runMemoryLeakAndCacheTests()
 runHistoryLedgerTests()
 runTokscaleDecodeTests()
+t53DshTornTailTests()
 print("fixture checks: \(checkCount) checks, \(failureCount) failures")
 if failureCount > 0 { exit(1) }
 

@@ -1351,6 +1351,7 @@ enum Adapters {
             headerCreatedAt: parsed.headerCreatedAt,
             lastTime: parsed.lastTime,
             pendingEvents: [],
+            leftoverBytes: Data(),
             rows: parsed.rows,
             totalEvents: parsed.events
         )
@@ -1396,8 +1397,28 @@ enum Adapters {
             freeDshStream(&state)
             return dshFullParseAndInit(file, key: "dsh|\(file.path)", stamp: stamp)
         }
-        if !output.isEmpty, let text = String(data: output, encoding: .utf8) {
-            parseDeltaLines(text, state: &state)
+        if !output.isEmpty {
+            // A delta can end mid-line (or mid-UTF-8-character). Buffer the
+            // raw bytes after the last newline and prepend them to the next
+            // feed, so a line split across appends is still parsed once its
+            // terminator arrives — instead of the completed half-line being
+            // silently dropped, or String(data:encoding:) returning nil on
+            // a split multibyte character and discarding the whole delta.
+            var combined = state.leftoverBytes
+            combined.append(output)
+            state.leftoverBytes = Data()
+            if let boundary = combined.lastIndex(of: 0x0A) {
+                let complete = combined[combined.startIndex...boundary]
+                let remainder = combined[combined.index(after: boundary)...]
+                state.leftoverBytes = Data(remainder)
+                if !complete.isEmpty {
+                    // Tolerant decode: replace any invalid sequences instead
+                    // of dropping every completed line in the delta.
+                    parseDeltaLines(String(decoding: complete, as: UTF8.self), state: &state)
+                }
+            } else {
+                state.leftoverBytes = combined
+            }
         }
         if diag {
             NSLog("[dsh] delta %@ tail=%d bytes events=%d rows=%d", file.lastPathComponent, tail.count, state.totalEvents, state.rows.count)
@@ -1535,6 +1556,13 @@ enum Adapters {
         var headerCreatedAt: Double
         var lastTime: Double
         var pendingEvents: [PendingDshEvent]
+        /// Raw bytes of the last delta that did not end on a line boundary
+        /// (possibly cut mid-UTF-8-character). Prepended to the next delta
+        /// so a line split across appends is still parsed once its
+        /// terminator arrives; kept as raw bytes so a multibyte split is
+        /// safe. Dropping it (idle sweep, truncation) only costs one full
+        /// re-parse, same as losing the stream itself.
+        var leftoverBytes: Data
         var rows: [UsageCore.UsageRow]
         var totalEvents: Int
     }
