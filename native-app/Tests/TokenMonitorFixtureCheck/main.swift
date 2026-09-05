@@ -3874,6 +3874,103 @@ func runSessionDetailCoreTests() {
         let none = SessionDetailCore.readKimiSessionBreakdown(sessionId: kid, period: "today", now: lateNow)
         check(none == nil, "D4 empty period falls back to notFound")
     }
+
+    // D5: fallback session lookup matches the file/dir name exactly (or the
+    // known "<id>-<hash>" / "session_<id>" layouts) — a session id that is a
+    // substring of another name must not capture the lookalike's data.
+    do {
+        let cal = Calendar.current
+        guard let now = cal.date(from: DateComponents(year: 2026, month: 6, day: 15, hour: 10)) else {
+            check(false, "D5 fixture date constructible")
+            return
+        }
+        let ms = Int(now.timeIntervalSince1970 * 1000)
+        let cleanId = "tm-sess-\(UUID().uuidString.prefix(8))"
+        let decoyStem = cleanId + "2" // contains cleanId, is not it
+        let targetStem = cleanId + "-xyz"
+
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("tm-sd-match-\(UUID().uuidString)")
+        let sessionsDir = tempDir.appendingPathComponent("antigravity-cache/sessions")
+        try! FileManager.default.createDirectory(at: sessionsDir, withIntermediateDirectories: true)
+        let previousConfigDir = ProcessInfo.processInfo.environment["TOKSCALE_CONFIG_DIR"]
+        defer {
+            if let previousConfigDir {
+                setenv("TOKSCALE_CONFIG_DIR", previousConfigDir, 1)
+            } else {
+                unsetenv("TOKSCALE_CONFIG_DIR")
+            }
+            try? FileManager.default.removeItem(at: tempDir)
+        }
+        setenv("TOKSCALE_CONFIG_DIR", tempDir.path, 1)
+
+        // Negative: only the lookalike exists — the reader must not fall
+        // back to it (a substring match would serve the decoy's data).
+        try! "{\"type\":\"usage\",\"modelId\":\"tm-decoy-model\",\"input\":777,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"timestamp\":\(ms)}\n"
+            .data(using: .utf8)!
+            .write(to: sessionsDir.appendingPathComponent("\(decoyStem).jsonl"))
+        let missing = SessionDetailCore.readAntigravitySessionBreakdown(sessionId: cleanId, period: "total", now: now)
+        check(missing == nil, "D5 antigravity lookalike file is not served for the shorter id")
+
+        // Positive with a decoy present: the <id>-<hash> target is resolved
+        // and the lookalike is not.
+        try! "{\"type\":\"usage\",\"modelId\":\"tm-target-model\",\"input\":111,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"timestamp\":\(ms)}\n"
+            .data(using: .utf8)!
+            .write(to: sessionsDir.appendingPathComponent("\(targetStem).jsonl"))
+        let found = SessionDetailCore.readAntigravitySessionBreakdown(sessionId: cleanId, period: "total", now: now)
+        check(found != nil, "D5 antigravity <id>-<hash> file resolved")
+        checkEqual(UsageCore.intValue(found?["totalTokens"]), 111, "D5 antigravity target file's tokens served")
+        let foundModels = found?["models"] as? [[String: Any]] ?? []
+        checkEqual(foundModels.first?["modelId"] as? String ?? "", "tm-target-model", "D5 antigravity decoy model never surfaces")
+    }
+
+    // D5 kimi: same exclusivity for session dir names.
+    do {
+        let cal = Calendar.current
+        guard let now = cal.date(from: DateComponents(year: 2026, month: 6, day: 15, hour: 10)) else {
+            check(false, "D5 kimi fixture date constructible")
+            return
+        }
+        let ms = Int(now.timeIntervalSince1970 * 1000)
+        let cleanId = "tm-kimi-\(UUID().uuidString.prefix(8))"
+        let decoyDirName = cleanId + "2"
+
+        let tempRoot = FileManager.default.temporaryDirectory.appendingPathComponent("tm-sd-match-kimi-\(UUID().uuidString)")
+        let decoyDir = tempRoot.appendingPathComponent("sessions/\(decoyDirName)")
+        try! FileManager.default.createDirectory(at: decoyDir.appendingPathComponent("agents/main"), withIntermediateDirectories: true)
+        let previousKimiHome = ProcessInfo.processInfo.environment["KIMI_CODE_HOME"]
+        defer {
+            if let previousKimiHome {
+                setenv("KIMI_CODE_HOME", previousKimiHome, 1)
+            } else {
+                unsetenv("KIMI_CODE_HOME")
+            }
+            try? FileManager.default.removeItem(at: tempRoot)
+        }
+        setenv("KIMI_CODE_HOME", tempRoot.path, 1)
+        try! """
+        {"id":"\(decoyDirName)","createdAt":\(ms),"updatedAt":\(ms)}
+        """.data(using: .utf8)!.write(to: decoyDir.appendingPathComponent("state.json"))
+        try! "{\"type\":\"usage.record\",\"model\":\"kimi-code/tm-decoy-model\",\"usage\":{\"inputOther\":777},\"time\":\(ms)}\n"
+            .data(using: .utf8)!
+            .write(to: decoyDir.appendingPathComponent("agents/main/wire.jsonl"))
+        let missing = SessionDetailCore.readKimiSessionBreakdown(sessionId: cleanId, period: "total", now: now)
+        check(missing == nil, "D5 kimi lookalike dir is not served for the shorter id")
+
+        // The "session_<id>" layout resolves exactly.
+        let prefixedDir = tempRoot.appendingPathComponent("sessions/session_\(cleanId)")
+        try! FileManager.default.createDirectory(at: prefixedDir.appendingPathComponent("agents/main"), withIntermediateDirectories: true)
+        try! """
+        {"id":"\(cleanId)","createdAt":\(ms),"updatedAt":\(ms)}
+        """.data(using: .utf8)!.write(to: prefixedDir.appendingPathComponent("state.json"))
+        try! "{\"type\":\"usage.record\",\"model\":\"kimi-code/tm-target-model\",\"usage\":{\"inputOther\":333},\"time\":\(ms)}\n"
+            .data(using: .utf8)!
+            .write(to: prefixedDir.appendingPathComponent("agents/main/wire.jsonl"))
+        let found = SessionDetailCore.readKimiSessionBreakdown(sessionId: cleanId, period: "total", now: now)
+        check(found != nil, "D5 kimi session_<id> dir resolved")
+        checkEqual(UsageCore.intValue(found?["totalTokens"]), 333, "D5 kimi target dir's tokens served")
+        let foundModels = found?["models"] as? [[String: Any]] ?? []
+        checkEqual(foundModels.first?["modelId"] as? String ?? "", "tm-target-model", "D5 kimi decoy model never surfaces")
+    }
 }
 
 func t65DeepseekKeyNormalizeTests() {

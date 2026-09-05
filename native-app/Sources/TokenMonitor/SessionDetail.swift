@@ -739,8 +739,12 @@ enum SessionDetailCore {
         for root in roots {
             guard let files = try? fm.contentsOfDirectory(at: URL(fileURLWithPath: root), includingPropertiesForKeys: nil) else { continue }
             for file in files where file.pathExtension == "jsonl" {
-                let name = file.lastPathComponent
-                if name.contains(cleanId) {
+                // Cache files are named "<sessionId>.jsonl" or
+                // "<sessionId>-<hash>.jsonl"; a substring match let a
+                // shorter session id capture a lookalike file (e.g. "abc"
+                // matched "abc2.jsonl"), so match the whole stem exactly.
+                let stem = file.deletingPathExtension().lastPathComponent
+                if stem == cleanId || stem.hasPrefix(cleanId + "-") {
                     targetFile = file
                     break
                 }
@@ -877,7 +881,10 @@ enum SessionDetailCore {
             let sessionDirs = Adapters.findKimiSessionDirs(at: root)
             for sDir in sessionDirs {
                 let name = sDir.lastPathComponent
-                if name == sessionId || name == cleanId || name.contains(cleanId) {
+                // Exact name (or the "session_<id>" layout) only: a
+                // substring match let a shorter session id claim a
+                // lookalike dir ("abc" matched "abc2").
+                if name == sessionId || name == cleanId || name == "session_" + cleanId {
                     let rows = Adapters.parseKimiSessionDir(sDir)
                     guard !rows.isEmpty else { continue }
                     return buildModelBreakdownFromRows(client: "kimi", sessionId: sessionId, period: period, rows: rows, now: now)
