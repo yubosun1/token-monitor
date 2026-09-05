@@ -17,10 +17,15 @@ final class HistoryLedger {
     private let lock = NSRecursiveLock()
     private let dbURL: URL
 
-    // In-memory query caches to prevent repeated full-table allocations on every tick
-    private var isDirty = true
+    // In-memory query caches to prevent repeated full-table allocations on every tick.
+    // Each cache has its own dirty flag because fetchPeriods and fetchHistoryDays run
+    // back-to-back on every collector tick: a shared flag would let the first fetch
+    // rebuild its cache, clear the flag, and leave the second fetch serving a stale
+    // cache forever. Writes set both flags; each fetch clears its own.
+    private var periodsDirty = true
     private var cachedPeriods: (today: [String: Any], month: [String: Any], allTime: [String: Any])?
     private var cachedPeriodsKey = ""
+    private var historyDaysDirty = true
     private var cachedHistoryDays: [HistoryCore.Day]?
     private var cachedHistoryDaysKey = ""
 
@@ -374,7 +379,8 @@ final class HistoryLedger {
         }
         guard !grouped.isEmpty else { return }
 
-        isDirty = true
+        periodsDirty = true
+        historyDaysDirty = true
         let nowMs = now.timeIntervalSince1970 * 1000
         let sql = """
         INSERT INTO session_ledger (
@@ -481,7 +487,8 @@ final class HistoryLedger {
         }
         guard !grouped.isEmpty else { return }
 
-        isDirty = true
+        periodsDirty = true
+        historyDaysDirty = true
         let nowMs = now.timeIntervalSince1970 * 1000
         let sql = """
         INSERT INTO daily_history_ledger (
@@ -529,7 +536,8 @@ final class HistoryLedger {
         defer { lock.unlock() }
         guard let db else { return }
 
-        isDirty = true
+        periodsDirty = true
+        historyDaysDirty = true
         let nowMs = now.timeIntervalSince1970 * 1000
         let sql = """
         INSERT INTO daily_history_ledger (
@@ -880,7 +888,7 @@ final class HistoryLedger {
         let cacheKey = "\(clients.sorted().joined(separator: ","))|\(dayKey)|\(monthKey)|\(allTimeSinceKey)"
 
         lock.lock()
-        if !isDirty, cachedPeriodsKey == cacheKey, let cached = cachedPeriods {
+        if !periodsDirty, cachedPeriodsKey == cacheKey, let cached = cachedPeriods {
             lock.unlock()
             return cached
         }
@@ -899,7 +907,7 @@ final class HistoryLedger {
         lock.lock()
         cachedPeriods = result
         cachedPeriodsKey = cacheKey
-        isDirty = false
+        periodsDirty = false
         lock.unlock()
 
         return result
@@ -992,7 +1000,7 @@ final class HistoryLedger {
         let cacheKey = clients?.sorted().joined(separator: ",") ?? "*"
 
         lock.lock()
-        if !isDirty, cachedHistoryDaysKey == cacheKey, let cached = cachedHistoryDays {
+        if !historyDaysDirty, cachedHistoryDaysKey == cacheKey, let cached = cachedHistoryDays {
             lock.unlock()
             return cached
         }
@@ -1061,6 +1069,7 @@ final class HistoryLedger {
         let result = dayMap.values.sorted { $0.date < $1.date }
         cachedHistoryDays = result
         cachedHistoryDaysKey = cacheKey
+        historyDaysDirty = false
         lock.unlock()
         return result
     }

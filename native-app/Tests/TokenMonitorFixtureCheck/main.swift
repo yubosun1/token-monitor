@@ -2727,6 +2727,36 @@ func runHistoryLedgerTests() {
         check(day.perModel["gemini-flash-safety-le2"] == nil, "L11.13: old gemini-flash-safety-le2 key absent")
         check(day.perModel["glm-5.2-x"] == nil, "L11.14: old glm-5.2-x key absent")
     }
+
+    // L12: fetchHistoryDays cache invalidation must not be cleared by a
+    // fetchPeriods rebuild. The two caches used to share one dirty flag:
+    // fetchPeriods rebuilt its own cache, cleared the flag, and the next
+    // fetchHistoryDays served the startup snapshot forever (every later
+    // tokscale graph scan vanished from trends until restart).
+    do {
+        let dayA = HistoryCore.Day(date: "2026-08-30", tokens: 111, cost: 0.1, messages: 2)
+        ledger.recordTokscaleDays([dayA])
+        let first = ledger.fetchHistoryDays(clients: nil)
+        check(first.contains { $0.date == "2026-08-30" }, "L12.1: first history read sees recorded day")
+
+        // A later scan records more days...
+        let dayB = HistoryCore.Day(date: "2026-08-31", tokens: 222, cost: 0.2, messages: 3)
+        ledger.recordTokscaleDays([dayB])
+        // ...and the periods cache is rebuilt in between (the exact tick
+        // order that used to leave fetchHistoryDays with a stale cache).
+        _ = ledger.fetchPeriods(clients: ["claude"], now: Date(timeIntervalSince1970: 1787610000), allTimeSince: 0)
+        let second = ledger.fetchHistoryDays(clients: nil)
+        check(second.contains { $0.date == "2026-08-31" }, "L12.2: history refreshed after record + fetchPeriods rebuild")
+        let dayBReadBack = second.first { $0.date == "2026-08-31" }
+        checkEqual(dayBReadBack?.tokens ?? 0, 222, "L12.3: fetched day carries the new values")
+
+        // The inverse ordering also stays fresh: a record after a history
+        // read must not be hidden by a later periods rebuild.
+        let dayC = HistoryCore.Day(date: "2026-09-01", tokens: 333, cost: 0.3, messages: 4)
+        ledger.recordTokscaleDays([dayC])
+        let third = ledger.fetchHistoryDays(clients: nil)
+        check(third.contains { $0.date == "2026-09-01" }, "L12.4: history refreshed after record without fetchPeriods")
+    }
 }
 
 func XCTAssertSQLITE(_ condition: Bool) {
