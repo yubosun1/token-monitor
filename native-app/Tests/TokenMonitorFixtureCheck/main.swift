@@ -3300,6 +3300,38 @@ func t54HanakoDedupTests() {
     }
 }
 
+// MARK: - Kimi mixed-format wire tests
+
+/// A wire file that mixes usage.record lines with legacy
+/// context.append_loop_event step.end records counts BOTH: the per-line
+/// dispatch must not let one usage.record silence the legacy lines.
+func t58KimiMixedFormatTests() {
+    let tempKimiDir = FileManager.default.temporaryDirectory.appendingPathComponent("tm-kimi-mixed-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: tempKimiDir) }
+    let sessionDir = tempKimiDir.appendingPathComponent("wd_mix_1/session_mix_1")
+    let agentsMainDir = sessionDir.appendingPathComponent("agents/main")
+    try! FileManager.default.createDirectory(at: agentsMainDir, withIntermediateDirectories: true)
+    try! """
+    {"id":"session_mix_1","title":"mixed","cwd":"/tmp","createdAt":1787680000000,"updatedAt":1787685000000}
+    """.data(using: .utf8)!.write(to: sessionDir.appendingPathComponent("state.json"))
+    let mixedWire = """
+    {"type":"usage.record","model":"kimi-code/k3-256k","usage":{"inputOther":2000,"output":500,"inputCacheRead":18000,"inputCacheCreation":0},"time":1787681000000}
+    {"type":"context.append_loop_event","time":1787682000000,"model":"kimi-code/k3-256k","event":{"type":"step.end","usage":{"inputOther":4000,"output":800,"inputCacheRead":5000,"inputCacheCreation":0}}}
+    {"type":"context.append_loop_event","time":1787683000000,"event":{"type":"step.end","usage":{"inputOther":6000,"output":900,"inputCacheRead":1000,"inputCacheCreation":0}}}
+    {"type":"context.append_loop_event","time":1787684000000,"event":{"type":"step.end"}}
+    {"type":"context.append_loop_event","time":1787685000000,"event":{"type":"step.start"}}
+    """
+    try! mixedWire.data(using: .utf8)!.write(to: agentsMainDir.appendingPathComponent("wire.jsonl"))
+
+    let rows = Adapters.parseKimiSessionDir(sessionDir)
+    checkEqual(rows.count, 3, "t58 mixed-format wire counts usage.record + step.end usage lines")
+    checkEqual(rows[0].input, 2000, "t58 usage.record line counted")
+    checkEqual(rows[1].input, 4000, "t58 step.end line without own model counted")
+    checkEqual(rows[2].input, 6000, "t58 model-less step.end line counted via fallback")
+    checkEqual(rows[1].model, "k3-256k", "t58 step.end model falls back to the line model")
+    checkEqual(rows[2].model, "k3-256k", "t58 model-less step.end uses normalization fallback")
+}
+
 // MARK: - DSH torn delta tail tests
 
 /// A delta that ends mid-line must not lose the line: the raw bytes are
@@ -3449,6 +3481,7 @@ t53DshTornTailTests()
 t54HanakoDedupTests()
 t55DshTouchOnlyStampTests()
 t57JsonlBomTests()
+t58KimiMixedFormatTests()
 print("fixture checks: \(checkCount) checks, \(failureCount) failures")
 if failureCount > 0 { exit(1) }
 
