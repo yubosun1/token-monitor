@@ -592,19 +592,26 @@ final class Collector {
         let dayKey = Self.dayKey(now)
         let monthKey = Self.monthKey(now)
         let allTimeSince = allTimeSinceMs(settings)
+        let tokscaleClients = clients.filter { tokscaleClientIds.contains($0) }
 
         let forced = kind == .fullForced
             || refreshPricing
             || ProcessInfo.processInfo.environment["TOKEN_MONITOR_FORCE_RESCAN"] != nil
         // Cheap ticks escalate to a full source check once
-        // collectionIntervalMs has elapsed since the last completed check
-        // — except the very first startup tick, which must stay cheap.
+        // collectionIntervalMs has elapsed since the last completed check —
+        // except the very first startup tick, which must stay cheap. A
+        // day/month rollover escalates unconditionally: the cached snapshot
+        // still describes yesterday, so its "today" would keep showing
+        // yesterday's full-day totals for up to a whole interval.
         let fullCheck: Bool
         switch kind {
         case .full, .fullForced:
             fullCheck = true
         case .cheap:
-            fullCheck = statsCache != nil && now.timeIntervalSince(lastFullCheckAt) >= fullInterval()
+            let tokscaleDayRolledOver = !tokscaleClients.isEmpty
+                && tokscaleSnapshot.map { $0.dayKey != dayKey || $0.monthKey != monthKey } ?? false
+            fullCheck = statsCache != nil
+                && (now.timeIntervalSince(lastFullCheckAt) >= fullInterval() || tokscaleDayRolledOver)
         }
         // Pricing is intentionally local-only during routine collection.
         // Only a user-driven refresh is allowed to contact a pricing source.
@@ -707,7 +714,6 @@ final class Collector {
 
         // Tokscale: one source check per collectionIntervalMs; reuse the
         // snapshot when nothing changed, retry only the failed part.
-        let tokscaleClients = clients.filter { tokscaleClientIds.contains($0) }
         var tokscaleChanged = false
         if fullCheck {
             lastFullCheckAt = now
@@ -744,11 +750,24 @@ final class Collector {
                     // stores the value and clears the failure count, failure
                     // keeps the last-known-good value but marks the part for
                     // retry and advances only its own backoff.
+                    // A day/month rollover is the one context change that must
+                    // NOT inherit the old periods: yesterday's "today" is the
+                    // wrong value for the new day and would masquerade as the
+                    // current day's usage until a retry succeeds. today/month
+                    // fall back to empty (honest zero) instead; allTime stays
+                    // last-known-good because it is a cumulative window whose
+                    // old value remains a valid lower bound.
+                    let rollover = tokscaleSnapshot.map { $0.dayKey != dayKey || $0.monthKey != monthKey } ?? false
+                    var fallbackPeriods = tokscaleSnapshot?.periods ?? Self.emptyTokscalePeriods()
+                    if rollover {
+                        fallbackPeriods["today"] = UsageCore.emptyPeriod()
+                        fallbackPeriods["month"] = UsageCore.emptyPeriod()
+                    }
                     var next = TokscaleSnapshot(
                         fingerprint: fp.signature, clients: sortedClients,
                         allTimeSinceMs: allTimeSince, dayKey: dayKey, monthKey: monthKey,
                         pricingGeneration: pricingGeneration,
-                        periods: tokscaleSnapshot?.periods ?? Self.emptyTokscalePeriods(),
+                        periods: fallbackPeriods,
                         periodsSuccess: false,
                         graphDays: tokscaleSnapshot?.graphDays ?? [],
                         graphActiveTime: tokscaleSnapshot?.graphActiveTime,

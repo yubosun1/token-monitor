@@ -1417,6 +1417,87 @@ func runCollectorStateTests() {
         checkEqual(world.tokscaleGraphSpawns, 2, "T16 manual refresh forces a cache-only graph scan")
     }
 
+    // T18a: a day rollover escalates the next cheap tick to a full tokscale
+    // rescan even inside collectionIntervalMs — otherwise the cached
+    // snapshot keeps describing yesterday and "today" shows yesterday's
+    // full-day totals for up to a whole interval.
+    do {
+        let world = FakeCollectorWorld(
+            now: shanghaiDate(2026, 8, 15, 23, 58),
+            settings: stateSettings(clients: "proma,claude", collectionIntervalMs: 300000)
+        )
+        world.rowsByClient["proma"] = [
+            stateRow(client: "proma", session: "s1", model: "model-a", input: 100, output: 50, startedAt: "2026-08-15T10:00:00+08:00")
+        ]
+        world.tokscalePeriods = ["today": periodWithTokens(100), "month": periodWithTokens(100), "allTime": periodWithTokens(100)]
+        world.tokscaleGraph = ([], nil)
+        let (collector, queue) = world.makeCollector()
+        collector.requestRefresh(.full, reason: .startup)
+        world.waitIdle(collector, queue)
+        checkEqual(world.tokscaleFingerprintChecks, 1, "T18a startup checks tokscale once")
+        checkEqual(UsageCore.intValue(world.period(collector, "today")["totalTokens"]), 250, "T18a yesterday today (adapter 150 + tokscale 100)")
+        checkEqual(collector.tokscaleSnapshot?.dayKey, "2026-08-15", "T18a snapshot carries yesterday's day key")
+
+        // 3 minutes later (inside the 300s interval) the day has changed:
+        // the cheap tick must escalate and rescan the new day's buckets.
+        world.now = shanghaiDate(2026, 8, 16, 0, 1)
+        world.tokscalePeriods = [
+            "today": UsageCore.emptyPeriod(),
+            "month": periodWithTokens(100),
+            "allTime": periodWithTokens(100)
+        ]
+        collector.requestRefresh(.cheap, reason: .timer)
+        world.waitIdle(collector, queue)
+        checkEqual(world.tokscaleFingerprintChecks, 2, "T18a midnight cheap tick escalates to a full source check")
+        checkEqual(world.tokscalePeriodSpawns, 2, "T18a new-day context rescans periods")
+        checkEqual(collector.tokscaleSnapshot?.dayKey, "2026-08-16", "T18a snapshot advanced to the new day")
+        checkEqual(UsageCore.intValue(world.period(collector, "today")["totalTokens"]), 0, "T18a today is empty on the new day")
+        checkEqual(UsageCore.intValue(world.period(collector, "allTime")["totalTokens"]), 250, "T18a allTime keeps the cumulative total")
+    }
+
+    // T18b: when the rollover rescan fails, the new context must not inherit
+    // yesterday's today/month as fallback values (that would show yesterday's
+    // full-day total as today until a retry succeeds); today/month fall back
+    // to empty and allTime keeps the last-known-good cumulative. The failed
+    // part then retries alone after its backoff.
+    do {
+        let world = FakeCollectorWorld(
+            now: shanghaiDate(2026, 8, 15, 23, 58),
+            settings: stateSettings(clients: "proma,claude", collectionIntervalMs: 300000)
+        )
+        world.rowsByClient["proma"] = [
+            stateRow(client: "proma", session: "s1", model: "model-a", input: 100, output: 50, startedAt: "2026-08-15T10:00:00+08:00")
+        ]
+        world.tokscalePeriods = ["today": periodWithTokens(100), "month": periodWithTokens(100), "allTime": periodWithTokens(100)]
+        world.tokscaleGraph = ([], nil)
+        let (collector, queue) = world.makeCollector()
+        collector.requestRefresh(.full, reason: .startup)
+        world.waitIdle(collector, queue)
+
+        // Midnight + scan failure: the escalated cheap tick hits a dead period
+        // scan. Yesterday's today must NOT survive into the new context.
+        world.now = shanghaiDate(2026, 8, 16, 0, 1)
+        world.tokscalePeriods = nil
+        collector.requestRefresh(.cheap, reason: .timer)
+        world.waitIdle(collector, queue)
+        checkEqual(collector.tokscaleSnapshot?.periodsSuccess, false, "T18b rollover period failure resets validity")
+        checkEqual(UsageCore.intValue((collector.tokscaleSnapshot?.periods["today"] ?? [:])["totalTokens"]), 0, "T18b yesterday today not carried into the new context")
+        checkEqual(UsageCore.intValue((collector.tokscaleSnapshot?.periods["allTime"] ?? [:])["totalTokens"]), 100, "T18b allTime last-known-good preserved")
+        checkEqual(UsageCore.intValue(world.period(collector, "today")["totalTokens"]), 0, "T18b today shows zero after a failed rollover scan")
+        checkEqual(UsageCore.intValue(world.period(collector, "allTime")["totalTokens"]), 250, "T18b merged allTime survives the failure")
+
+        // After the interval and the periods backoff: the failed part retries
+        // alone and recovers; the healthy graph is not re-run.
+        world.now = world.now.addingTimeInterval(301)
+        world.tokscalePeriods = ["today": periodWithTokens(50), "month": periodWithTokens(50), "allTime": periodWithTokens(150)]
+        collector.requestRefresh(.cheap, reason: .timer)
+        world.waitIdle(collector, queue)
+        checkEqual(world.tokscalePeriodSpawns, 3, "T18b failed periods retried after backoff")
+        checkEqual(world.tokscaleGraphSpawns, 2, "T18b successful graph not re-run")
+        checkEqual(collector.tokscaleSnapshot?.periodsSuccess, true, "T18b periods validity recovered")
+        checkEqual(UsageCore.intValue(world.period(collector, "today")["totalTokens"]), 50, "T18b today recovered on retry")
+    }
+
     // T19: with every client disabled the wire shape stays empty even when
     // a persistent ledger holds rows. The ledger fallback is consulted only
     // for a non-empty client set: fetchPeriods([])/fetchHistoryDays([])
