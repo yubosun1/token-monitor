@@ -12,7 +12,12 @@ enum DeepseekBalance {
     static let retentionMs: Int64 = 40 * 24 * 60 * 60 * 1000
     static let storeVersion = 2
 
+    /// Test seam: fixture checks redirect the persistence target into a
+    /// sandbox directory.
+    static var storePathOverride: String?
+
     private static var storePath: String {
+        if let storePathOverride { return storePathOverride }
         return CredentialStore.shared.fileURL.deletingLastPathComponent()
             .appendingPathComponent("deepseek-balance-v2.json").path
     }
@@ -178,9 +183,22 @@ enum DeepseekBalance {
         let monthSinceTracking: Bool
     }
 
-    private static func recordConsumption(accountKey: String, currency: String, paid: Double, now: Int64) -> Spend {
+    static func recordConsumption(accountKey: String, currency: String, paid: Double, now: Int64) -> Spend {
         let store = readJson(storePath) ?? (readJson(legacyStorePath) ?? JSON())
-        var entry = normalizedCompactEntry(store[accountKey], currency: currency, now: now)
+        let existing = store[accountKey] as? JSON ?? JSON()
+        // Pin the tracked currency: when the funded row falls to zero or
+        // disappears, selectFundedRow falls back to another currency row
+        // (USD first). Recording under the flipped currency would make
+        // normalizedCompactEntry treat the entry as fresh and wipe the
+        // consumption history. Keep the currency of the existing entry so
+        // history survives balance troughs; real DeepSeek accounts are
+        // single-currency, so a genuine account switch is rare and only
+        // mislabels future drops rather than losing them.
+        let existingCurrency = existing["currency"] as? String ?? ""
+        let pinnedCurrency = (existing["version"] as? Int == storeVersion && !existingCurrency.isEmpty)
+            ? existingCurrency
+            : currency
+        var entry = normalizedCompactEntry(existing, currency: pinnedCurrency, now: now)
 
         var changed = false
         if entry["lastPaid"] is NSNull {

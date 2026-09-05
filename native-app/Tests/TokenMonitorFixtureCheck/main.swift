@@ -3620,6 +3620,45 @@ func t60StaleLockErrorPatternTests() {
                "t60 database lock mentioned with other text still ignored")
 }
 
+func t62ZeroBalanceKeepsHistoryTests() {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("tm-limits-history-\(UUID().uuidString)")
+    try! FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let storePath = dir.appendingPathComponent("deepseek-balance-v2.json").path
+    DeepseekBalance.storePathOverride = storePath
+    defer { DeepseekBalance.storePathOverride = nil }
+    let account = "t62-account"
+
+    // Day 1: funded CNY row at 100, then a 60 drop to 40.
+    let day1 = Int64(1_760_000_000_000)
+    var spend = DeepseekBalance.recordConsumption(accountKey: account, currency: "CNY", paid: 100, now: day1)
+    checkClose(spend.allTimeSpend, 0, "t62 fresh account starts at zero spend")
+    spend = DeepseekBalance.recordConsumption(accountKey: account, currency: "CNY", paid: 40, now: day1 + 3_600_000)
+    checkClose(spend.allTimeSpend, 60, "t62 drop records consumption")
+
+    // Balance hits zero: selectFundedRow falls back to the USD row, so the
+    // next record arrives under a different currency. That must NOT wipe the
+    // recorded history — the entry stays pinned to its original currency and
+    // the final drop (40) is recorded on top of the earlier 60.
+    spend = DeepseekBalance.recordConsumption(accountKey: account, currency: "USD", paid: 0, now: day1 + 24 * 3_600_000)
+    checkClose(spend.allTimeSpend, 100, "t62 zero balance keeps all-time history")
+    let persisted = (try? JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: storePath)))) as? [String: Any]
+    let entry = persisted?[account] as? [String: Any]
+    checkEqual(entry?["currency"] as? String, "CNY", "t62 entry keeps its pinned currency")
+    let daily = entry?["dailySpend"] as? [String: Any] ?? [:]
+    checkClose(daily.values.reduce(0.0) { $0 + (($1 as? NSNumber)?.doubleValue ?? 0) }, 100,
+               "t62 daily spend survives zero balance")
+
+    // A funded row reappearing in another currency (row switch) also
+    // preserves history; paid going up means no further drop.
+    spend = DeepseekBalance.recordConsumption(accountKey: account, currency: "USD", paid: 50, now: day1 + 48 * 3_600_000)
+    checkClose(spend.allTimeSpend, 100, "t62 funded-row switch keeps history")
+
+    // A genuinely new account still starts clean.
+    spend = DeepseekBalance.recordConsumption(accountKey: "t62-other", currency: "USD", paid: 9, now: day1)
+    checkClose(spend.allTimeSpend, 0, "t62 separate account unaffected")
+}
+
 runChecks()
 runKimiTests()
 runCollectorStateTests()
@@ -3644,6 +3683,7 @@ t58KimiMixedFormatTests()
 t61DrainTimeoutGrandchildTests()
 t59AntigravityLockCleanupTests()
 t60StaleLockErrorPatternTests()
+t62ZeroBalanceKeepsHistoryTests()
 print("fixture checks: \(checkCount) checks, \(failureCount) failures")
 if failureCount > 0 { exit(1) }
 
