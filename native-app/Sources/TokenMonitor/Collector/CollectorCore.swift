@@ -614,10 +614,11 @@ final class Collector {
         // gate: on an idle machine no fingerprint changes and the gated
         // free paths never run, so without this the retained dsh decoder
         // streams (~2.5 MB per session file) were held from launch until
-        // the next source change — i.e. effectively forever.
-        let freedStreams = Adapters.freeIdleDshStreams(now: now)
-        if freedStreams > 0 {
-            PerfDiag.log(String(format: "dsh: freed %d idle decoder stream(s)", freedStreams))
+        // the next source change, and the parse cache pinned every file
+        // ever parsed — i.e. effectively forever.
+        let maintenance = Adapters.performIdleMaintenance(now: now)
+        if maintenance.freedStreams > 0 || maintenance.evictedEntries > 0 {
+            PerfDiag.log(String(format: "idle maintenance: freed %d dsh stream(s), evicted %d parse cache entrie(s)", maintenance.freedStreams, maintenance.evictedEntries))
         }
         for client in adapterClientIds where clients.contains(client) {
             autoreleasepool {

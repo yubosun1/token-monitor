@@ -1618,6 +1618,44 @@ func runDshIdleSweepTests() {
     checkEqual(Adapters.dshIncrementalStateCount, 1, "T16d old session retains no stream")
 }
 
+// MARK: - Parse cache retention tests
+
+/// Parse cache entries for files idle beyond the retention window are
+/// evicted; fresh files and live incremental sessions stay, and an
+/// evicted file re-derives identical rows from disk on next read.
+func runParseCacheEvictionTests() {
+    let fm = FileManager.default
+    let dir = fm.temporaryDirectory.appendingPathComponent("tm-cache-evict-\(UUID().uuidString)")
+    let s1 = dir.appendingPathComponent("session-old")
+    let s2 = dir.appendingPathComponent("session-fresh")
+    try! fm.createDirectory(at: s1, withIntermediateDirectories: true)
+    try! fm.createDirectory(at: s2, withIntermediateDirectories: true)
+    defer {
+        Adapters.dropClientCaches(["dsh"])
+        try? fm.removeItem(at: dir)
+    }
+    Adapters.dropClientCaches(["dsh"])
+    let old = s1.appendingPathComponent("session.jsonl.zstd")
+    let fresh = s2.appendingPathComponent("session.jsonl.zstd")
+    try! compressZstd(dshSessionLines(100)).write(to: old)
+    try! fm.setAttributes([.modificationDate: Date().addingTimeInterval(-8 * 24 * 3600)], ofItemAtPath: old.path)
+    try! compressZstd(dshSessionLines(200)).write(to: fresh)
+
+    _ = Adapters.cachedSessionFileRows(old)
+    _ = Adapters.cachedSessionFileRows(fresh)
+    checkEqual(Adapters.dshParseCachePaths().count, 2, "T17 both sessions cached")
+    checkEqual(Adapters.dshIncrementalStateCount, 1, "T17 only the fresh session holds a stream")
+
+    let evicted = Adapters.evictIdleParseCacheEntries()
+    check(evicted >= 1, "T17 idle entries evicted")
+    checkEqual(Adapters.dshParseCachePaths(), Set([fresh.path]), "T17 old session evicted, fresh kept")
+
+    // Re-reading an evicted file re-derives rows from disk: results are
+    // unchanged, only the cache refills.
+    let r = Adapters.cachedSessionFileRows(old)
+    checkEqual(r.rows.first?.input ?? 0, 100, "T17 evicted session re-parses correctly")
+}
+
 // MARK: - DSH fork seedLength tests
 
 /// A forked session's log starts with a byte-for-byte copy of its parent's
@@ -2700,6 +2738,7 @@ runKimiTests()
 runCollectorStateTests()
 runDshCacheTests()
 runDshIdleSweepTests()
+runParseCacheEvictionTests()
 runDshForkSeedTests()
 runDshCorruptFrameTests()
 runVisibilityTests()

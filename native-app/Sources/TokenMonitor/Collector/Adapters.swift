@@ -45,6 +45,12 @@ enum Adapters {
     /// faster than this keeps its stream; a slower one pays one full
     /// re-parse per append, same as before the incremental path existed.
     private static let dshStreamGrace: TimeInterval = 120
+    /// Parse cache retention for files that stopped changing: idle file
+    /// entries older than this are evicted once per eviction interval so
+    /// long-lived processes don't pin an ever-growing parsed history.
+    private static let parseCacheRetention: TimeInterval = 7 * 24 * 3600
+    private static let parseCacheEvictionInterval: TimeInterval = 24 * 3600
+    private static var lastParseCacheEvictionAt = Date.distantPast
     /// Per-file streaming state for incremental re-reads of actively
     /// appending dsh sessions (see DshIncrementalState). Guarded by
     /// fileCacheLock; an entry is dropped after the session stops changing
@@ -151,6 +157,51 @@ enum Adapters {
             fileCacheLock.unlock()
         }
         return freed
+    }
+
+    /// Evict parse cache entries for files idle beyond the retention
+    /// window. Entries are otherwise held for the process lifetime
+    /// (pruned only when files vanish or a client is disabled), so a
+    /// growing on-disk history pinned every parsed row in memory
+    /// forever. Evicted rows are re-derived from disk on the next source
+    /// change, so results never change — only idle memory does. dsh
+    /// files with a live incremental state are skipped: an actively
+    /// appending session's entry is refreshed by its deltas. Callers
+    /// wanting the cadence gate go through performIdleMaintenance;
+    /// direct calls always run (test seam).
+    @discardableResult
+    static func evictIdleParseCacheEntries(now: Date = Date()) -> Int {
+        fileCacheLock.lock()
+        let entries = parseCache
+        let liveDsh = Set(dshIncrementalStates.keys)
+        fileCacheLock.unlock()
+        var evicted = 0
+        for (key, entry) in entries {
+            guard now.timeIntervalSince(entry.stamp.0) > parseCacheRetention else { continue }
+            if key.hasPrefix("dsh|"), liveDsh.contains(String(key.dropFirst(4))) { continue }
+            fileCacheLock.lock()
+            if let current = parseCache[key],
+               current.stamp.0 == entry.stamp.0, current.stamp.1 == entry.stamp.1 {
+                parseCache[key] = nil
+                evicted += 1
+            }
+            fileCacheLock.unlock()
+        }
+        return evicted
+    }
+
+    /// Per-tick housekeeping, independent of source-change gating: idle
+    /// dsh decoder streams every tick, retention-bound parse cache once
+    /// per eviction interval. See freeIdleDshStreams for why this must
+    /// not sit behind the fingerprint gate.
+    static func performIdleMaintenance(now: Date = Date()) -> (freedStreams: Int, evictedEntries: Int) {
+        let freed = freeIdleDshStreams(now: now)
+        fileCacheLock.lock()
+        let due = now.timeIntervalSince(lastParseCacheEvictionAt) >= parseCacheEvictionInterval
+        if due { lastParseCacheEvictionAt = now }
+        fileCacheLock.unlock()
+        let evicted = due ? evictIdleParseCacheEntries(now: now) : 0
+        return (freed, evicted)
     }
 
     private static func fileStamp(_ url: URL) -> (mtime: Date, size: Int)? {
