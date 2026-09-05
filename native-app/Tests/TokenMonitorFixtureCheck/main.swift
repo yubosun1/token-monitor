@@ -3659,6 +3659,29 @@ func t62ZeroBalanceKeepsHistoryTests() {
     checkClose(spend.allTimeSpend, 0, "t62 separate account unaffected")
 }
 
+func t63CredentialsFilePermissionTests() {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("tm-credentials-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let store = CredentialStore(fileURL: dir.appendingPathComponent("credentials.json"))
+
+    // First write: the file must already be 0600 right after the rename
+    // (chmod happens on the temp file before it replaces the store).
+    store.setKimiApiKey("kimi-key-1")
+    check(FileManager.default.fileExists(atPath: store.fileURL.path), "t63 credentials file exists after write")
+    checkEqual(posixPermissions(of: store.fileURL.path), 0o600, "t63 credentials file is 0600 after first write")
+
+    // Overwriting an existing file that was left at 0644 (e.g. by the old
+    // write-then-chmod path) re-locks it to 0600.
+    try! FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: store.fileURL.path)
+    store.setDeepseekApiKey("sk-existing")
+    checkEqual(posixPermissions(of: store.fileURL.path), 0o600, "t63 overwritten credentials file is 0600")
+    checkEqual(store.deepseekApiKey(), "sk-existing", "t63 round-trip read after overwrite")
+}
+
+func posixPermissions(of path: String) -> Int {
+    ((try? FileManager.default.attributesOfItem(atPath: path))?[.posixPermissions] as? NSNumber)?.intValue ?? -1
+}
+
 runChecks()
 runKimiTests()
 runCollectorStateTests()
@@ -3684,6 +3707,7 @@ t61DrainTimeoutGrandchildTests()
 t59AntigravityLockCleanupTests()
 t60StaleLockErrorPatternTests()
 t62ZeroBalanceKeepsHistoryTests()
+t63CredentialsFilePermissionTests()
 print("fixture checks: \(checkCount) checks, \(failureCount) failures")
 if failureCount > 0 { exit(1) }
 

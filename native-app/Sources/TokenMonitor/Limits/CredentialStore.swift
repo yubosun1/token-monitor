@@ -10,10 +10,15 @@ final class CredentialStore {
     let fileURL: URL
     private let lock = NSLock()
 
-    init() {
+    convenience init() {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let dir = support.appendingPathComponent("Token Monitor", isDirectory: true)
-        fileURL = dir.appendingPathComponent("credentials.json")
+        self.init(fileURL: dir.appendingPathComponent("credentials.json"))
+    }
+
+    /// Test seam: fixture checks redirect the store into a sandbox directory.
+    init(fileURL: URL) {
+        self.fileURL = fileURL
     }
 
     private func readDocument() -> [String: Any] {
@@ -28,8 +33,27 @@ final class CredentialStore {
         do {
             try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             let data = try JSONSerialization.data(withJSONObject: document, options: [.prettyPrinted, .sortedKeys])
-            try data.write(to: fileURL, options: .atomic)
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+            // Write to a temp file and chmod it to 0600 BEFORE the atomic
+            // rename: a post-rename chmod leaves the credentials file at the
+            // umask default (0644) during the rename window.
+            let tempURL = fileURL.appendingPathExtension("tmp-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: tempURL) }
+            try data.write(to: tempURL)
+            do {
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: tempURL.path)
+            } catch {
+                NSLog("[credentials] chmod 0600 failed, keeping previous file: %@", String(describing: error))
+                return
+            }
+            _ = try FileManager.default.replaceItemAt(fileURL, withItemAt: tempURL)
+            // replaceItemAt keeps the replaced file's attributes on some
+            // filesystems, so re-lock the final file after the rename. The
+            // fresh-file case is already covered by the pre-rename chmod.
+            do {
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+            } catch {
+                NSLog("[credentials] post-rename chmod 0600 failed: %@", String(describing: error))
+            }
         } catch {
             NSLog("[credentials] write failed: %@", String(describing: error))
         }
