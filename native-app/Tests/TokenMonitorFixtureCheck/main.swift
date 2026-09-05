@@ -3332,6 +3332,42 @@ func t58KimiMixedFormatTests() {
     checkEqual(rows[2].model, "k3-256k", "t58 model-less step.end uses normalization fallback")
 }
 
+// MARK: - Recursive listing cache tests
+
+/// A recursive listing must not be validated by the ROOT's mtime: adding a
+/// file deep in the tree (hanako session dirs) leaves the root stamp
+/// unchanged, and a cached listing would miss it forever. Recursive scans
+/// bypass the list cache; non-recursive scans keep using it.
+func t56RecursiveListingTests() {
+    let fm = FileManager.default
+    let tempDir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("tm-recursive-\(UUID().uuidString)")
+    defer { try? fm.removeItem(at: tempDir) }
+    let sub = tempDir.appendingPathComponent("sub", isDirectory: true)
+    let deep = sub.appendingPathComponent("deep", isDirectory: true)
+    try! fm.createDirectory(at: deep, withIntermediateDirectories: true)
+
+    // Seed the listing and the (bypassed) cache key with one file.
+    try! Data("{\"type\":\"x\"}\n".utf8).write(to: tempDir.appendingPathComponent("a.jsonl"))
+    let first = Adapters.jsonlFiles(root: tempDir.path, recursive: true, client: "hanako")
+    checkEqual(first.count, 1, "t56 recursive listing sees the seed file")
+
+    // A new file two levels deep: the root directory's mtime does not
+    // change, yet the next listing must include it. (With the old
+    // root-stamp cache this returned the stale 1-file listing.)
+    try! Data("{\"type\":\"x\"}\n".utf8).write(to: deep.appendingPathComponent("b.jsonl"))
+    let second = Adapters.jsonlFiles(root: tempDir.path, recursive: true, client: "hanako")
+    check(second.contains { $0.lastPathComponent == "b.jsonl" }, "t56 deep added file is seen by the next listing")
+
+    // Non-recursive scans still cache: a new DIRECT child moves the root
+    // mtime, so the unchanged+new child set is served from the cache.
+    let flat1 = Adapters.jsonlFiles(root: tempDir.path, recursive: false, client: "proma")
+    try! Data("{\"type\":\"x\"}\n".utf8).write(to: tempDir.appendingPathComponent("c.jsonl"))
+    let flat2 = Adapters.jsonlFiles(root: tempDir.path, recursive: false, client: "proma")
+    check(flat2.contains { $0.lastPathComponent == "c.jsonl" }, "t56 non-recursive cache is still valid for direct children")
+    _ = flat1
+    Adapters.dropClientCaches(["hanako", "proma"])
+}
+
 // MARK: - DSH torn delta tail tests
 
 /// A delta that ends mid-line must not lose the line: the raw bytes are
@@ -3480,6 +3516,7 @@ runTokscaleDecodeTests()
 t53DshTornTailTests()
 t54HanakoDedupTests()
 t55DshTouchOnlyStampTests()
+t56RecursiveListingTests()
 t57JsonlBomTests()
 t58KimiMixedFormatTests()
 print("fixture checks: \(checkCount) checks, \(failureCount) failures")

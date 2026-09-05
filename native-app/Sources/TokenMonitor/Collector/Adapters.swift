@@ -251,6 +251,14 @@ enum Adapters {
 
     static func jsonlFiles(root: String, recursive: Bool, client: String) -> [URL] {
         let url = URL(fileURLWithPath: root)
+        // A directory's mtime advances only when entries directly under it
+        // are added or removed, so the root's stamp cannot validate a
+        // RECURSIVE listing: a new session file deep in the tree (hanako
+        // session dirs) would be missed by a cached listing. Only
+        // non-recursive listings are cached.
+        guard !recursive else {
+            return enumerateJsonlFiles(url: url, recursive: true, client: client)
+        }
         // Key MUST include the actual root + recursive flag + client: the
         // stamp check below is only valid within one (root, recursive) pair,
         // a literal key made every adapter's directory listing miss on every
