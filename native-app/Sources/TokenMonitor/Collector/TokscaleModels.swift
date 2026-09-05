@@ -1,5 +1,84 @@
 import Foundation
 
+// MARK: - Lossy array decoding
+
+/// Decodes an array element-wise so one malformed row cannot nullify an
+/// entire scan. `JSONDecoder` decodes a whole array atomically — a single
+/// bad element fails the whole decode — which `(try? ...) ?? []` at the
+/// array level turned into "success with zero data"; the collector then
+/// replaced last-known-good periods/graph days with zeros.
+///
+/// The raw array is captured as this value tree and each element is
+/// re-decoded independently. Bad rows are skipped with one diag line each;
+/// when a non-empty raw array yields no valid rows the decode throws, so
+/// the caller treats the response as failed and keeps the last-known-good
+/// snapshot (with backoff retry) instead of recording zeros.
+private enum JSONValue: Decodable {
+    case object([String: JSONValue])
+    case array([JSONValue])
+    case string(String)
+    case number(Double)
+    case bool(Bool)
+    case null
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if c.decodeNil() {
+            self = .null
+        } else if let b = try? c.decode(Bool.self) {
+            self = .bool(b)
+        } else if let n = try? c.decode(Double.self) {
+            self = .number(n)
+        } else if let s = try? c.decode(String.self) {
+            self = .string(s)
+        } else if let a = try? c.decode([JSONValue].self) {
+            self = .array(a)
+        } else if let o = try? c.decode([String: JSONValue].self) {
+            self = .object(o)
+        } else {
+            throw DecodingError.typeMismatch(JSONValue.self, .init(codingPath: decoder.codingPath, debugDescription: "unsupported JSON value"))
+        }
+    }
+
+    var anyValue: Any {
+        switch self {
+        case .object(let o): return o.mapValues(\.anyValue)
+        case .array(let a): return a.map(\.anyValue)
+        case .string(let s): return s
+        case .number(let n): return n
+        case .bool(let b): return b
+        case .null: return NSNull()
+        }
+    }
+}
+
+private enum LossyArray {
+    static func decode<T: Decodable>(_ type: T.Type, from raw: [JSONValue], context: String) throws -> [T] {
+        var out: [T] = []
+        for (i, value) in raw.enumerated() {
+            // Re-serializing each element through JSONSerialization keeps the
+            // per-field leniency of the element's own init(from:) while
+            // isolating a bad row's failure to that row.
+            guard let data = try? JSONSerialization.data(withJSONObject: value.anyValue) else {
+                NSLog("[tokscale] %@ row %d skipped: not JSON-serializable", context, i)
+                continue
+            }
+            if let decoded = try? JSONDecoder().decode(T.self, from: data) {
+                out.append(decoded)
+            } else {
+                NSLog("[tokscale] %@ row %d skipped: decode failed", context, i)
+            }
+        }
+        if !raw.isEmpty && out.isEmpty {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: [],
+                debugDescription: "\(context): all \(raw.count) rows failed to decode"
+            ))
+        }
+        return out
+    }
+}
+
 // MARK: - tokscale CLI response models
 
 /// One row of `tokscale --json --group-by client,session,model`.
@@ -81,7 +160,13 @@ struct TokscaleResponse: Decodable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         groupBy = try c.decodeIfPresent(String.self, forKey: .groupBy)
-        entries = (try? c.decode([TokscaleEntry].self, forKey: .entries)) ?? []
+        // Element-wise decode: one corrupt entry must not silently empty the
+        // scan (the old (try? ...) ?? [] turned any bad row into "success
+        // with zero data"). An array that is non-empty but all-bad throws,
+        // so usage() surfaces the failure and the collector keeps the
+        // last-known-good period with a retry backoff.
+        let rawEntries = (try? c.decode([JSONValue].self, forKey: .entries)) ?? []
+        entries = try LossyArray.decode(TokscaleEntry.self, from: rawEntries, context: "usage")
         totalInput = (try? c.decode(Double.self, forKey: .totalInput)) ?? 0
         totalOutput = (try? c.decode(Double.self, forKey: .totalOutput)) ?? 0
         totalCacheRead = (try? c.decode(Double.self, forKey: .totalCacheRead)) ?? 0
@@ -170,7 +255,12 @@ struct TokscaleGraph: Decodable {
         summary = try c.decodeIfPresent(Summary.self, forKey: .summary)
         timeMetrics = try c.decodeIfPresent(TimeMetrics.self, forKey: .timeMetrics)
             ?? c.decodeIfPresent(TimeMetrics.self, forKey: .time_metrics)
-        contributions = (try? c.decode([Contribution].self, forKey: .contributions)) ?? []
+        // Element-wise decode (see LossyArray): a single corrupt contribution
+        // day must not empty the whole graph. An all-bad array throws so
+        // scanTokscaleGraph keeps last-known-good days instead of zeroing
+        // the history merge.
+        let rawContributions = (try? c.decode([JSONValue].self, forKey: .contributions)) ?? []
+        contributions = try LossyArray.decode(Contribution.self, from: rawContributions, context: "graph")
     }
 }
 

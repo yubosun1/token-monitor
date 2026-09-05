@@ -2759,6 +2759,86 @@ func runHistoryLedgerTests() {
     }
 }
 
+// T-series: tokscale response decoding — one corrupt row must be skipped
+// (not nullify the whole scan), but an all-bad non-empty array must throw
+// so the collector keeps last-known-good data instead of recording zeros.
+func runTokscaleDecodeTests() {
+    print("--- Tokscale lossy decode tests ---")
+    let decoder = JSONDecoder()
+
+    do {
+        // A row whose optional field is present-but-corrupt fails decode;
+        // the sibling row must survive.
+        let json = """
+        {
+          "groupBy": "client,session,model",
+          "entries": [
+            { "client": "claude", "sessionId": "s1", "model": "claude-3", "input": 100, "output": 50, "cost": 0.01 },
+            { "client": "claude", "sessionId": "s2", "model": "claude-3", "input": 200, "output": 50, "cost": 0.01, "performance": "junk" }
+          ],
+          "totalInput": 300, "totalOutput": 100, "totalCost": 0.02
+        }
+        """
+        let response = try! decoder.decode(TokscaleResponse.self, from: Data(json.utf8))
+        checkEqual(response.entries.count, 1, "T1: bad entry row skipped, good row kept")
+        checkEqual(response.entries.first?.sessionId, "s1", "T1: surviving row is the valid one")
+        checkEqual(response.entries.first?.input ?? 0, 100, "T1: surviving row values intact")
+    }
+
+    do {
+        // Every row bad → the decode must throw (upstream treats it as a
+        // failed scan and keeps last-known-good + backed-off retry).
+        let json = """
+        { "entries": [
+            { "input": 1, "performance": "junk" },
+            { "output": 2, "mergedClients": 12345 }
+        ] }
+        """
+        do {
+            _ = try decoder.decode(TokscaleResponse.self, from: Data(json.utf8))
+            check(false, "T2: all-bad entries array must throw")
+        } catch {
+            check(true, "T2: all-bad entries array throws")
+        }
+    }
+
+    do {
+        // A genuinely empty entries array is a legitimate empty scan.
+        let json = "{ \"entries\": [], \"totalInput\": 0 }"
+        do {
+            let response = try decoder.decode(TokscaleResponse.self, from: Data(json.utf8))
+            checkEqual(response.entries.count, 0, "T3: empty entries array decodes to empty")
+        } catch {
+            check(false, "T3: empty entries array must not throw")
+        }
+    }
+
+    do {
+        // Graph contributions follow the same rule.
+        let badGraph = """
+        { "contributions": [ { "date": 123 }, { "date": "2026-08-15", "clients": "oops" } ] }
+        """
+        do {
+            _ = try decoder.decode(TokscaleGraph.self, from: Data(badGraph.utf8))
+            check(false, "T4: all-bad contributions array must throw")
+        } catch {
+            check(true, "T4: all-bad contributions array throws")
+        }
+
+        let mixedGraph = """
+        { "contributions": [
+            { "date": "2026-08-15", "totals": { "tokens": 100 }, "clients": [
+                { "client": "claude", "tokens": { "input": 50, "output": 50 }, "messages": 2 }
+            ] },
+            { "date": 42 }
+        ] }
+        """
+        let graph = try! decoder.decode(TokscaleGraph.self, from: Data(mixedGraph.utf8))
+        checkEqual(graph.contributions.count, 1, "T5: bad contribution skipped, good one kept")
+        checkEqual(graph.contributions.first?.date, "2026-08-15", "T5: surviving contribution is the valid one")
+    }
+}
+
 func XCTAssertSQLITE(_ condition: Bool) {
     check(condition, "sqlite operation succeeded")
 }
@@ -2777,6 +2857,7 @@ runSingleInstanceTests()
 runAntigravityTests()
 runMemoryLeakAndCacheTests()
 runHistoryLedgerTests()
+runTokscaleDecodeTests()
 print("fixture checks: \(checkCount) checks, \(failureCount) failures")
 if failureCount > 0 { exit(1) }
 
