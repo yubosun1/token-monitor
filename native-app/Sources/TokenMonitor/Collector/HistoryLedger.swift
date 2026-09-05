@@ -92,6 +92,16 @@ final class HistoryLedger {
         guard let db else { return }
         let version = currentUserVersion()
         guard version < Self.ledgerSchemaVersion else { return }
+        // The whole migration runs in one IMMEDIATE transaction. The v3→v4
+        // steps DELETE rows keyed by their original model names and re-INSERT
+        // merged rows from temporary tables; a partial run (DELETE succeeded,
+        // INSERT failed) would lose those rows permanently. Every step is
+        // re-entrant, so a failed run rolls back and the next launch retries
+        // cleanly from the same version.
+        if sqlite3_exec(db, "BEGIN IMMEDIATE TRANSACTION;", nil, nil, nil) != SQLITE_OK {
+            NSLog("[HistoryLedger] migration BEGIN failed: %s", sqlite3_errmsg(db))
+            return
+        }
         var succeeded = true
         if version < 2 {
             // v1 → v2: the daily table mixes cartesian-inflated tokscale days
@@ -209,9 +219,26 @@ final class HistoryLedger {
         }
         // Only advance the version when every step completed: a failed
         // migration retries on the next launch instead of being skipped.
-        guard succeeded else { return }
-        sqlite3_exec(db, "PRAGMA user_version = \(Self.ledgerSchemaVersion);", nil, nil, nil)
-        if PerfDiag.enabled {
+        if succeeded {
+            if sqlite3_exec(db, "PRAGMA user_version = \(Self.ledgerSchemaVersion);", nil, nil, nil) != SQLITE_OK {
+                NSLog("[HistoryLedger] migration user_version write failed: %s", sqlite3_errmsg(db))
+                succeeded = false
+            }
+        }
+        if succeeded {
+            if sqlite3_exec(db, "COMMIT;", nil, nil, nil) != SQLITE_OK {
+                NSLog("[HistoryLedger] migration COMMIT failed: %s", sqlite3_errmsg(db))
+                succeeded = false
+                // The transaction may still be open; unwind it so the next
+                // launch starts from a clean, retryable state.
+                if sqlite3_exec(db, "ROLLBACK;", nil, nil, nil) != SQLITE_OK {
+                    NSLog("[HistoryLedger] migration post-COMMIT ROLLBACK failed: %s", sqlite3_errmsg(db))
+                }
+            }
+        } else if sqlite3_exec(db, "ROLLBACK;", nil, nil, nil) != SQLITE_OK {
+            NSLog("[HistoryLedger] migration ROLLBACK failed: %s", sqlite3_errmsg(db))
+        }
+        if succeeded, PerfDiag.enabled {
             PerfDiag.log("ledger schema migrated v\(version) → v\(Self.ledgerSchemaVersion)")
         }
     }
@@ -414,14 +441,23 @@ final class HistoryLedger {
         }
         defer { sqlite3_finalize(stmt) }
 
-        sqlite3_exec(db, "BEGIN TRANSACTION;", nil, nil, nil)
+        // One IMMEDIATE transaction for the whole batch: any step failure
+        // rolls the batch back entirely. A half-written batch would mix old
+        // and new snapshots in the aggregated totals; the writers are
+        // idempotent (overwrite / MAX upsert), so the next tick just
+        // re-records the full batch.
+        if sqlite3_exec(db, "BEGIN IMMEDIATE TRANSACTION;", nil, nil, nil) != SQLITE_OK {
+            NSLog("[HistoryLedger] recordUsageRows: BEGIN failed: %s", sqlite3_errmsg(db))
+            return
+        }
+        var failed = false
         // Sorted keys: deterministic bind order (no functional impact, stable
         // write order in the WAL).
         for key in grouped.keys.sorted(by: {
             ($0.client, $0.sessionId, $0.date, $0.model) < ($1.client, $1.sessionId, $1.date, $1.model)
         }) {
             autoreleasepool {
-                guard let row = grouped[key] else { return }
+                guard !failed, let row = grouped[key] else { return }
                 sqlite3_bind_text(stmt, 1, (key.sessionId as NSString).utf8String, -1, nil)
                 sqlite3_bind_text(stmt, 2, (key.client as NSString).utf8String, -1, nil)
                 sqlite3_bind_text(stmt, 3, (key.date as NSString).utf8String, -1, nil)
@@ -442,11 +478,24 @@ final class HistoryLedger {
                 sqlite3_bind_double(stmt, 18, row.performance?.totalDurationMs ?? 0)
                 sqlite3_bind_double(stmt, 19, nowMs)
 
-                sqlite3_step(stmt)
+                if sqlite3_step(stmt) != SQLITE_DONE {
+                    NSLog("[HistoryLedger] recordUsageRows: step failed: %s", sqlite3_errmsg(db))
+                    failed = true
+                    return
+                }
                 sqlite3_reset(stmt)
             }
         }
-        sqlite3_exec(db, "COMMIT;", nil, nil, nil)
+        if failed {
+            if sqlite3_exec(db, "ROLLBACK;", nil, nil, nil) != SQLITE_OK {
+                NSLog("[HistoryLedger] recordUsageRows: ROLLBACK failed: %s", sqlite3_errmsg(db))
+            }
+        } else if sqlite3_exec(db, "COMMIT;", nil, nil, nil) != SQLITE_OK {
+            NSLog("[HistoryLedger] recordUsageRows: COMMIT failed: %s", sqlite3_errmsg(db))
+            if sqlite3_exec(db, "ROLLBACK;", nil, nil, nil) != SQLITE_OK {
+                NSLog("[HistoryLedger] recordUsageRows: post-COMMIT ROLLBACK failed: %s", sqlite3_errmsg(db))
+            }
+        }
     }
 
     /// Records daily history contributions (e.g. from local adapters or tokscale graph).
@@ -509,10 +558,14 @@ final class HistoryLedger {
         }
         defer { sqlite3_finalize(stmt) }
 
-        sqlite3_exec(db, "BEGIN TRANSACTION;", nil, nil, nil)
+        if sqlite3_exec(db, "BEGIN IMMEDIATE TRANSACTION;", nil, nil, nil) != SQLITE_OK {
+            NSLog("[HistoryLedger] recordHistoryContributions: BEGIN failed: %s", sqlite3_errmsg(db))
+            return
+        }
+        var failed = false
         for key in grouped.keys.sorted(by: { ($0.date, $0.client, $0.model) < ($1.date, $1.client, $1.model) }) {
             autoreleasepool {
-                guard let cell = grouped[key] else { return }
+                guard !failed, let cell = grouped[key] else { return }
                 sqlite3_bind_text(stmt, 1, (key.date as NSString).utf8String, -1, nil)
                 sqlite3_bind_text(stmt, 2, (key.client as NSString).utf8String, -1, nil)
                 sqlite3_bind_text(stmt, 3, (key.model as NSString).utf8String, -1, nil)
@@ -522,11 +575,24 @@ final class HistoryLedger {
                 sqlite3_bind_double(stmt, 7, cell.activeTimeMs)
                 sqlite3_bind_double(stmt, 8, nowMs)
 
-                sqlite3_step(stmt)
+                if sqlite3_step(stmt) != SQLITE_DONE {
+                    NSLog("[HistoryLedger] recordHistoryContributions: step failed: %s", sqlite3_errmsg(db))
+                    failed = true
+                    return
+                }
                 sqlite3_reset(stmt)
             }
         }
-        sqlite3_exec(db, "COMMIT;", nil, nil, nil)
+        if failed {
+            if sqlite3_exec(db, "ROLLBACK;", nil, nil, nil) != SQLITE_OK {
+                NSLog("[HistoryLedger] recordHistoryContributions: ROLLBACK failed: %s", sqlite3_errmsg(db))
+            }
+        } else if sqlite3_exec(db, "COMMIT;", nil, nil, nil) != SQLITE_OK {
+            NSLog("[HistoryLedger] recordHistoryContributions: COMMIT failed: %s", sqlite3_errmsg(db))
+            if sqlite3_exec(db, "ROLLBACK;", nil, nil, nil) != SQLITE_OK {
+                NSLog("[HistoryLedger] recordHistoryContributions: post-COMMIT ROLLBACK failed: %s", sqlite3_errmsg(db))
+            }
+        }
     }
 
     /// Records parsed Tokscale graph days into the daily history ledger.
@@ -558,9 +624,14 @@ final class HistoryLedger {
         }
         defer { sqlite3_finalize(stmt) }
 
-        sqlite3_exec(db, "BEGIN TRANSACTION;", nil, nil, nil)
+        if sqlite3_exec(db, "BEGIN IMMEDIATE TRANSACTION;", nil, nil, nil) != SQLITE_OK {
+            NSLog("[HistoryLedger] recordTokscaleDays: BEGIN failed: %s", sqlite3_errmsg(db))
+            return
+        }
+        var failed = false
         for day in days {
             autoreleasepool {
+                guard !failed else { return }
                 if day.perClient.isEmpty && day.perModel.isEmpty {
                     sqlite3_bind_text(stmt, 1, (day.date as NSString).utf8String, -1, nil)
                     sqlite3_bind_text(stmt, 2, ("unknown" as NSString).utf8String, -1, nil)
@@ -570,7 +641,11 @@ final class HistoryLedger {
                     sqlite3_bind_double(stmt, 6, day.messages)
                     sqlite3_bind_double(stmt, 7, day.activeTimeMs)
                     sqlite3_bind_double(stmt, 8, nowMs)
-                    sqlite3_step(stmt)
+                    if sqlite3_step(stmt) != SQLITE_DONE {
+                        NSLog("[HistoryLedger] recordTokscaleDays: step failed: %s", sqlite3_errmsg(db))
+                        failed = true
+                        return
+                    }
                     sqlite3_reset(stmt)
                 } else if !day.perClientModel.isEmpty {
                     // Exact (client, model) cells: one row per source
@@ -589,7 +664,11 @@ final class HistoryLedger {
                             sqlite3_bind_double(stmt, 6, stats.messages)
                             sqlite3_bind_double(stmt, 7, day.activeTimeMs)
                             sqlite3_bind_double(stmt, 8, nowMs)
-                            sqlite3_step(stmt)
+                            if sqlite3_step(stmt) != SQLITE_DONE {
+                                NSLog("[HistoryLedger] recordTokscaleDays: step failed: %s", sqlite3_errmsg(db))
+                                failed = true
+                                return
+                            }
                             sqlite3_reset(stmt)
                             totalTokens += stats.tokens
                         }
@@ -607,7 +686,11 @@ final class HistoryLedger {
                         sqlite3_bind_double(stmt, 6, day.messages)
                         sqlite3_bind_double(stmt, 7, day.activeTimeMs)
                         sqlite3_bind_double(stmt, 8, nowMs)
-                        sqlite3_step(stmt)
+                        if sqlite3_step(stmt) != SQLITE_DONE {
+                            NSLog("[HistoryLedger] recordTokscaleDays: step failed: %s", sqlite3_errmsg(db))
+                            failed = true
+                            return
+                        }
                         sqlite3_reset(stmt)
                     }
                 } else {
@@ -625,13 +708,26 @@ final class HistoryLedger {
                         sqlite3_bind_double(stmt, 6, cStats.messages)
                         sqlite3_bind_double(stmt, 7, day.activeTimeMs)
                         sqlite3_bind_double(stmt, 8, nowMs)
-                        sqlite3_step(stmt)
+                        if sqlite3_step(stmt) != SQLITE_DONE {
+                            NSLog("[HistoryLedger] recordTokscaleDays: step failed: %s", sqlite3_errmsg(db))
+                            failed = true
+                            return
+                        }
                         sqlite3_reset(stmt)
                     }
                 }
             }
         }
-        sqlite3_exec(db, "COMMIT;", nil, nil, nil)
+        if failed {
+            if sqlite3_exec(db, "ROLLBACK;", nil, nil, nil) != SQLITE_OK {
+                NSLog("[HistoryLedger] recordTokscaleDays: ROLLBACK failed: %s", sqlite3_errmsg(db))
+            }
+        } else if sqlite3_exec(db, "COMMIT;", nil, nil, nil) != SQLITE_OK {
+            NSLog("[HistoryLedger] recordTokscaleDays: COMMIT failed: %s", sqlite3_errmsg(db))
+            if sqlite3_exec(db, "ROLLBACK;", nil, nil, nil) != SQLITE_OK {
+                NSLog("[HistoryLedger] recordTokscaleDays: post-COMMIT ROLLBACK failed: %s", sqlite3_errmsg(db))
+            }
+        }
     }
 
     // MARK: - Query & Aggregation
