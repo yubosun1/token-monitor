@@ -193,16 +193,18 @@ final class Collector {
     // lifecycle directly; they are still written only by the worker queue.
     private var pricingGeneration = 0
     /// Per-model pricing cache: the resolved price plus the tick clock time
-    /// it was fetched. Expired entries re-resolve on full ticks (round-4
-    /// Phase 3.1) so a long-running app sees price changes; cheap ticks only
-    /// read the cache and never spawn.
-    // Internal (not private) so the fixture checker can assert TTL
+    /// it was fetched. Routine ticks keep the last-known-good value
+    /// indefinitely — re-validating an entry would require a source contact,
+    /// which routine collection forbids — and the explicit user refresh
+    /// (forceRefresh) re-fetches every model regardless of this cache.
+    // Internal (not private) so the fixture checker can assert the pricing
     // lifecycle directly; still written only by the worker queue.
     var cachedPricing: [String: (pricing: TokscalePricing, fetchedAt: Date)] = [:]
-    private let pricingTTL: TimeInterval = 6 * 60 * 60
-    /// Per-model retry floor for failed resolves (first resolution and
-    /// expired re-resolution alike); bounded, and a failed expiry keeps the
-    /// last-known-good price instead of zeroing costs.
+    /// Per-model retry floor for failed cache-only lookups: an unresolved
+    /// model is not probed again until the floor passes, so an unknown model
+    /// no longer costs a lookup on every routine tick. A manual refresh
+    /// never consults or records this map — the explicit user path must be
+    /// able to retry immediately.
     private var pricingRetryAfter: [String: Date] = [:]
     /// Canonical signature of the customModelPricing setting: the sidecar
     /// syncs only when this changes (round-4 Phase 3.2), never every tick.
@@ -580,7 +582,8 @@ final class Collector {
         // dictionary traversal order irrelevant, and a failed write records
         // the signature anyway so a cheap tick never retries in a loop.
         let customPricingSig = customPricingSignature(settings["customModelPricing"])
-        if lastCustomPricingSignature != customPricingSig {
+        let customPricingChanged = lastCustomPricingSignature != customPricingSig
+        if customPricingChanged {
             environment.customPricingSync(settings)
             lastCustomPricingSignature = customPricingSig
         }
@@ -593,6 +596,16 @@ final class Collector {
         let monthKey = Self.monthKey(now)
         let allTimeSince = allTimeSinceMs(settings)
         let tokscaleClients = clients.filter { tokscaleClientIds.contains($0) }
+        if customPricingChanged {
+            // The user's prices must win from this tick on, without any
+            // source contact: seed the collector cache straight from the
+            // setting so the cache-only path below never refills these
+            // models from the runner's own (possibly stale, last-launch)
+            // memory cache. Seeding also changes the pricing signature of
+            // every affected derived key, so adapters re-derive their costs
+            // from cached rows on this same tick.
+            seedCustomPricing(from: settings["customModelPricing"], now: now)
+        }
 
         let forced = kind == .fullForced
             || refreshPricing
@@ -614,7 +627,10 @@ final class Collector {
                 && (now.timeIntervalSince(lastFullCheckAt) >= fullInterval() || tokscaleDayRolledOver)
         }
         // Pricing is intentionally local-only during routine collection.
-        // Only a user-driven refresh is allowed to contact a pricing source.
+        // Only a user-driven refresh is allowed to contact a pricing source,
+        // so TTL-expired prices are re-resolved there (forceRefresh) rather
+        // than on a routine full tick — routine ticks serve the
+        // last-known-good value indefinitely.
         let pricingPolicy: PricingPolicy = refreshPricing ? .forceRefresh : .cacheOnly
 
         // Adapter clients: raw cache by fingerprint; derived cache by the
@@ -1032,11 +1048,20 @@ final class Collector {
     // MARK: - Pricing resolution (review round Phase 2)
 
     /// Pricing resolution per tick:
-    ///  - routine ticks use the last-known-good local value and never spawn;
-    ///  - a user refresh always attempts one lookup per distinct model;
+    ///  - routine ticks (.cacheOnly) read the last-known-good local value
+    ///    and never spawn; an unknown model's failed lookup is backed off by
+    ///    pricingRetryAfter so it is not re-attempted on every 15s tick;
+    ///  - a user refresh (.forceRefresh) always attempts one lookup per
+    ///    distinct model, even while a cache-only backoff is pending;
     ///  - any failed lookup keeps the previous price, never zeroing costs.
     /// Resolved pricing feeds the derived signature, so affected clients
     /// re-derive from cached rows on the same tick without a raw re-read.
+    ///
+    /// PricingPolicy.resolve is deliberately never passed here: it may
+    /// spawn a `tokscale pricing` subprocess (a network-capable source),
+    /// and routine collection is local-only by design. A TTL-expired price
+    /// is re-resolved on the explicit user refresh — the only path allowed
+    /// to contact a pricing source.
     private func resolvePricing(
         models: [String],
         policy: PricingPolicy,
@@ -1045,29 +1070,71 @@ final class Collector {
     ) {
         for model in models {
             guard !lookedUpThisTick.contains(model) else { continue }
-            let cached = cachedPricing[model]
-            if let cached {
-                switch policy {
-                case .cacheOnly:
-                    continue
-                case .resolve:
-                    let expired = now.timeIntervalSince(cached.fetchedAt) >= pricingTTL
-                    if !expired { continue }
-                    if let retry = pricingRetryAfter[model], now < retry { continue }
-                case .forceRefresh:
-                    break
-                }
-            } else if policy == .resolve, let retry = pricingRetryAfter[model], now < retry {
-                continue
+            if cachedPricing[model] != nil {
+                // A known price is last-known-good: routine ticks keep it
+                // indefinitely (re-validating would need a source contact),
+                // and only a user refresh re-fetches it.
+                if policy == .cacheOnly { continue }
+            } else if policy == .cacheOnly {
+                // Unknown model on a routine tick: the cache-only lookup
+                // can only return a value a previous lookup persisted, so a
+                // failure is backed off instead of probed every tick.
+                if let retry = pricingRetryAfter[model], now < retry { continue }
             }
             lookedUpThisTick.insert(model)
             if let pricing = environment.pricingLookup(model, policy) {
                 cachedPricing[model] = (pricing, now)
                 pricingRetryAfter.removeValue(forKey: model)
-            } else if policy == .resolve {
+            } else if policy == .cacheOnly {
                 pricingRetryAfter[model] = now.addingTimeInterval(300)
             }
+            // A failed forceRefresh keeps the previous price (or leaves the
+            // model unresolved) and never records a retry: the next explicit
+            // click must be allowed to try again immediately.
         }
+    }
+
+    /// Seed the pricing cache from the customModelPricing setting (per
+    /// million tokens, converted to per-token). Runs only when the setting's
+    /// signature changed and after any purge, so a subsequent cache-only
+    /// tick serves the user's prices instead of re-filling from the runner's
+    /// stale memory cache; the sidecar sync (CustomPricingSidecar) keeps
+    /// serving the tokscale CLI's own period scans.
+    private func seedCustomPricing(from value: Any?, now: Date) {
+        guard let list = value as? [[String: Any]] else { return }
+        for raw in list {
+            guard let modelId = (raw["modelId"] as? String)?.trimmingCharacters(in: .whitespaces),
+                  !modelId.isEmpty else { continue }
+            let inputUnit = Self.customPricingUnit(raw["inputPerM"])
+            let outputUnit = Self.customPricingUnit(raw["outputPerM"])
+            let cacheReadUnit = Self.customPricingUnit(raw["cacheReadPerM"])
+            // Same leniency as the sidecar: a present-but-invalid unit skips
+            // the entry; an entry needs at least one of input/output.
+            if inputUnit.isInvalid || outputUnit.isInvalid || cacheReadUnit.isInvalid { continue }
+            if inputUnit.value == nil && outputUnit.value == nil { continue }
+            let pricing = TokscalePricing.Pricing(
+                inputCostPerToken: inputUnit.value.map { $0 / 1_000_000 },
+                outputCostPerToken: outputUnit.value.map { $0 / 1_000_000 },
+                cacheReadInputTokenCost: cacheReadUnit.value.map { $0 / 1_000_000 },
+                cacheCreationInputTokenCost: nil
+            )
+            // Key by the canonical model name so the seeded entry is found
+            // by resolvePricing/pricingSignature, which iterate canonical
+            // raw model ids.
+            let key = UsageCore.canonicalModelName(modelId)
+            cachedPricing[key] = (TokscalePricing(modelId: modelId, matchedKey: key, source: "custom", pricing: pricing), now)
+            pricingRetryAfter.removeValue(forKey: key)
+        }
+    }
+
+    /// Lenient per-million unit price, mirroring CustomPricingSidecar:
+    /// absent/null/empty is nil, anything non-numeric is marked invalid.
+    private static func customPricingUnit(_ value: Any?) -> (value: Double?, isInvalid: Bool) {
+        guard let value, !(value is NSNull) else { return (nil, false) }
+        if let s = value as? String, s.isEmpty { return (nil, false) }
+        if let n = value as? Double, n.isFinite, n >= 0 { return (n, false) }
+        if let n = value as? Int, n >= 0 { return (Double(n), false) }
+        return (nil, true)
     }
 
     /// Flat price map for the derivation helpers (worker-owned cache).

@@ -1546,6 +1546,104 @@ func runCollectorStateTests() {
         let history = stats["history"] as? [String: Any]
         checkEqual((history?["daily"] as? [Any] ?? []).isEmpty, true, "T19 empty clients history ignores ledger days")
     }
+
+    // T20: a customModelPricing change applies to the very next tick
+    // without any pricing lookup (no source contact), because the collector
+    // seeds its pricing cache straight from the setting; the changed pricing
+    // signature then re-derives adapter costs from cached rows. The runner's
+    // stale in-memory price never wins over the user's explicit override.
+    do {
+        let world = FakeCollectorWorld(
+            now: shanghaiDate(2026, 8, 15, 12, 0),
+            settings: stateSettings(clients: "proma")
+        )
+        // The runner's cache holds a catalog price for model-a; the setting
+        // overrides it with a custom price (input 10c / output 20c per 1M).
+        world.pricingByModel["model-a"] = fakePricing(0.001, 0.002)
+        world.settings["customModelPricing"] = [
+            ["modelId": "model-a", "inputPerM": 10.0, "outputPerM": 20.0]
+        ]
+        world.rowsByClient["proma"] = [
+            stateRow(client: "proma", session: "s1", model: "model-a", input: 100, output: 50, startedAt: "2026-08-15T10:00:00+08:00")
+        ]
+        let (collector, queue) = world.makeCollector()
+        collector.start()
+        world.waitIdle(collector, queue)
+        // 100*10e-6 + 50*20e-6 = 0.002, from the seed — the cache was never
+        // consulted for the custom model.
+        checkClose(UsageCore.doubleValue(world.period(collector, "today")["costUsd"]), 0.002, "T20 custom price applied at first tick")
+        checkEqual(world.pricingLookups["model-a"] ?? 0, 0, "T20 seeded custom price shadows the runner cache")
+
+        // User edits the price: the next tick after the settings change uses
+        // the new value — no lookup, no raw re-read (re-derives cached rows).
+        world.settings["customModelPricing"] = [
+            ["modelId": "model-a", "inputPerM": 20.0, "outputPerM": 20.0]
+        ]
+        NotificationCenter.default.post(
+            name: SettingsStore.changedNotification,
+            object: nil,
+            userInfo: ["keys": ["customModelPricing"]]
+        )
+        world.waitIdle(collector, queue)
+        // 100*20e-6 + 50*20e-6 = 0.003.
+        checkClose(UsageCore.doubleValue(world.period(collector, "today")["costUsd"]), 0.003, "T20 edited custom price applies on the next tick")
+        checkEqual(world.pricingLookups["model-a"] ?? 0, 0, "T20 price change never touches the pricing source")
+        checkEqual(world.rawReads["proma"] ?? 0, 1, "T20 price change re-derives from cached rows")
+
+        // Removing the override returns the model to the last-known-good
+        // cache value (the purge empties the collector cache, so the next
+        // cache-only lookup re-reads the runner's stale-but-valid price).
+        world.settings["customModelPricing"] = [Any]()
+        NotificationCenter.default.post(
+            name: SettingsStore.changedNotification,
+            object: nil,
+            userInfo: ["keys": ["customModelPricing"]]
+        )
+        world.waitIdle(collector, queue)
+        checkClose(UsageCore.doubleValue(world.period(collector, "today")["costUsd"]), 0.2, "T20 removing the override falls back to the cached price")
+        checkEqual(world.pricingLookups["model-a"] ?? 0, 1, "T20 fallback lookup happens once after the override is gone")
+    }
+
+    // T21: an unresolved model's cache-only lookup is backed off — it is not
+    // probed on every routine tick, only again once the retry floor passes;
+    // the explicit refresh still bypasses the floor.
+    do {
+        let world = FakeCollectorWorld(
+            now: shanghaiDate(2026, 8, 15, 12, 0),
+            settings: stateSettings(clients: "proma")
+        )
+        world.pricingByModel["model-a"] = nil
+        world.rowsByClient["proma"] = [
+            stateRow(client: "proma", session: "s1", model: "model-a", input: 100, output: 50, startedAt: "2026-08-15T10:00:00+08:00")
+        ]
+        let (collector, queue) = world.makeCollector()
+        collector.requestRefresh(.cheap, reason: .startup)
+        world.waitIdle(collector, queue)
+        checkEqual(world.pricingLookups["model-a"] ?? 0, 1, "T21 first resolution attempt happens once")
+
+        // Routine ticks inside the backoff window do not probe again.
+        world.now = world.now.addingTimeInterval(15)
+        collector.requestRefresh(.cheap, reason: .timer)
+        world.waitIdle(collector, queue)
+        world.now = world.now.addingTimeInterval(15)
+        collector.requestRefresh(.cheap, reason: .timer)
+        world.waitIdle(collector, queue)
+        checkEqual(world.pricingLookups["model-a"] ?? 0, 1, "T21 unresolved model backs off routine ticks")
+
+        // Past the 300s floor one more cache-only attempt happens.
+        world.now = world.now.addingTimeInterval(301)
+        collector.requestRefresh(.cheap, reason: .timer)
+        world.waitIdle(collector, queue)
+        checkEqual(world.pricingLookups["model-a"] ?? 0, 2, "T21 retry attempted again after the floor")
+
+        // A manual refresh ignores the floor and resolves immediately.
+        world.pricingByModel["model-a"] = fakePricing(0.001, 0.002)
+        world.now = world.now.addingTimeInterval(15)
+        collector.refreshNow()
+        world.waitIdle(collector, queue)
+        checkEqual(world.pricingLookups["model-a"] ?? 0, 3, "T21 manual refresh bypasses the backoff floor")
+        checkClose(UsageCore.doubleValue(world.period(collector, "today")["costUsd"]), 0.2, "T21 backoff clears once pricing resolves")
+    }
 }
 
 // MARK: - DSH cache lifecycle tests (round-4 Phase 5)
