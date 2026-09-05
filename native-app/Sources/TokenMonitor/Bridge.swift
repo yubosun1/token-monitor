@@ -211,7 +211,9 @@ final class BridgeCore {
                 client: args["client"] as? String ?? "",
                 sessionId: args["sessionId"] as? String ?? "",
                 period: args["period"] as? String ?? "total",
-                sessionCost: UsageCore.doubleValue(args["sessionCost"])
+                sessionCost: UsageCore.doubleValue(args["sessionCost"]),
+                startDate: args["startDate"] as? String ?? "",
+                endDate: args["endDate"] as? String ?? ""
             )
 
         case "usage:getCustomPeriod", "getCustomPeriod":

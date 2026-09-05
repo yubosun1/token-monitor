@@ -716,7 +716,7 @@ enum SessionDetailCore {
         return nil
     }
 
-    private static func readAntigravitySessionBreakdown(sessionId: String, period: String) -> JSON? {
+    static func readAntigravitySessionBreakdown(sessionId: String, period: String, now: Date = Date()) -> JSON? {
         let home = NSHomeDirectory()
         let cleanId: String
         if let atIdx = sessionId.firstIndex(of: "@") {
@@ -774,6 +774,10 @@ enum SessionDetailCore {
             let cwTk = UsageCore.doubleValue(obj["cacheWrite"] ?? obj["cacheWriteTokens"] ?? obj["cache_write"] ?? obj["cache_write_tokens"])
             let reTk = UsageCore.doubleValue(obj["reasoning"] ?? obj["reasoningTokens"] ?? obj["reasoning_tokens"])
             let ts = obj["timestamp"] != nil && !(obj["timestamp"] is NSNull) ? UsageCore.timestampMs(obj["timestamp"]) : 0
+
+            // Same period gate as the transcript paths: undated records
+            // (ts == 0) fall out of today/month but stay for allTime/total.
+            guard withinPeriod(ts, period, now) else { continue }
 
             if ts > 0 {
                 if minStart == 0 || ts < minStart { minStart = ts }
@@ -867,7 +871,7 @@ enum SessionDetailCore {
 
     // MARK: - Kimi Live Session Breakdown
 
-    static func readKimiSessionBreakdown(sessionId: String, period: String = "total") -> JSON? {
+    static func readKimiSessionBreakdown(sessionId: String, period: String = "total", now: Date = Date()) -> JSON? {
         let cleanId = sessionId.replacingOccurrences(of: "@.*$", with: "", options: .regularExpression)
         for root in Adapters.kimiRoots {
             let sessionDirs = Adapters.findKimiSessionDirs(at: root)
@@ -876,14 +880,14 @@ enum SessionDetailCore {
                 if name == sessionId || name == cleanId || name.contains(cleanId) {
                     let rows = Adapters.parseKimiSessionDir(sDir)
                     guard !rows.isEmpty else { continue }
-                    return buildModelBreakdownFromRows(client: "kimi", sessionId: sessionId, period: period, rows: rows)
+                    return buildModelBreakdownFromRows(client: "kimi", sessionId: sessionId, period: period, rows: rows, now: now)
                 }
             }
         }
         return nil
     }
 
-    private static func buildModelBreakdownFromRows(client: String, sessionId: String, period: String, rows: [UsageCore.UsageRow]) -> JSON {
+    private static func buildModelBreakdownFromRows(client: String, sessionId: String, period: String, rows: [UsageCore.UsageRow], now: Date = Date()) -> JSON? {
         var totalTokens: Double = 0
         var totalInput: Double = 0
         var totalOutput: Double = 0
@@ -908,6 +912,10 @@ enum SessionDetailCore {
 
         var modelMap: [String: ModelAccumulator] = [:]
         for r in rows {
+            // Same period gate as the transcript paths: undated rows
+            // (startedAt == 0) fall out of today/month but stay for
+            // allTime/total.
+            guard withinPeriod(r.startedAt, period, now) else { continue }
             let modelId = UsageCore.normalizeModelName(r.model ?? "") ?? "unknown"
             let inTk = r.input
             let outTk = r.output
@@ -941,6 +949,8 @@ enum SessionDetailCore {
             acc.messageCount += msgs
             modelMap[modelId] = acc
         }
+
+        guard !modelMap.isEmpty else { return nil }
 
         var models: [[String: Any]] = []
         for (mId, acc) in modelMap {
@@ -995,7 +1005,8 @@ enum SessionDetailCore {
 
     // MARK: - Entry point
 
-    static func read(client: String, sessionId: String, period: String, sessionCost: Double) -> JSON {
+    static func read(client: String, sessionId: String, period: String, sessionCost: Double,
+                     startDate: String = "", endDate: String = "") -> JSON {
         let normalizedClient = client.trimmingCharacters(in: .whitespaces).lowercased()
         let normalizedPeriod = period.isEmpty ? "total" : period
 
@@ -1003,7 +1014,9 @@ enum SessionDetailCore {
         if let breakdown = HistoryLedger.shared.querySessionModelBreakdown(
             client: normalizedClient,
             sessionId: sessionId,
-            period: normalizedPeriod
+            period: normalizedPeriod,
+            startDate: startDate,
+            endDate: endDate
         ) {
             return breakdown
         }

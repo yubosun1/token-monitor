@@ -3761,6 +3761,119 @@ func runSessionDetailCoreTests() {
         checkEqual(todayTotals["turnCount"] as? Int ?? -1, 1, "D2 today turnCount")
         checkEqual(todayTotals["exchangeCount"] as? Int ?? -1, 1, "D2 today exchangeCount")
     }
+
+    // D3: the antigravity file fallback filters usage records by their
+    // timestamps per period. Undated records join "total" only (the
+    // withinPeriod date arms reject ts <= 0, same as the exchanges path).
+    do {
+        let cal = Calendar.current
+        guard let todayDate = cal.date(from: DateComponents(year: 2026, month: 6, day: 15, hour: 9)),
+              let monthDate = cal.date(from: DateComponents(year: 2026, month: 6, day: 3, hour: 10)),
+              let oldDate = cal.date(from: DateComponents(year: 2026, month: 5, day: 20, hour: 10)) else {
+            check(false, "D3 fixture dates constructible")
+            return
+        }
+        let now = todayDate.addingTimeInterval(3600)
+        let sid = "tm-sess-\(UUID().uuidString.prefix(8))"
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("tm-sd-antigravity-\(UUID().uuidString)")
+        let sessionsDir = tempDir.appendingPathComponent("antigravity-cache/sessions")
+        try! FileManager.default.createDirectory(at: sessionsDir, withIntermediateDirectories: true)
+        let previousConfigDir = ProcessInfo.processInfo.environment["TOKSCALE_CONFIG_DIR"]
+        defer {
+            if let previousConfigDir {
+                setenv("TOKSCALE_CONFIG_DIR", previousConfigDir, 1)
+            } else {
+                unsetenv("TOKSCALE_CONFIG_DIR")
+            }
+            try? FileManager.default.removeItem(at: tempDir)
+        }
+        setenv("TOKSCALE_CONFIG_DIR", tempDir.path, 1)
+        let msToday = Int(todayDate.timeIntervalSince1970 * 1000)
+        let msMonth = Int(monthDate.timeIntervalSince1970 * 1000)
+        let msOld = Int(oldDate.timeIntervalSince1970 * 1000)
+        let content = """
+        {"type":"usage","sessionId":"\(sid)","modelId":"tm-model-a","input":100,"output":0,"cacheRead":0,"cacheWrite":0,"timestamp":\(msToday)}
+        {"type":"usage","sessionId":"\(sid)","modelId":"tm-model-a","input":200,"output":0,"cacheRead":0,"cacheWrite":0,"timestamp":\(msMonth)}
+        {"type":"usage","sessionId":"\(sid)","modelId":"tm-model-b","input":300,"output":0,"cacheRead":0,"cacheWrite":0,"timestamp":\(msOld)}
+        {"type":"usage","sessionId":"\(sid)","modelId":"tm-model-c","input":400,"output":0,"cacheRead":0,"cacheWrite":0,"timestamp":null}
+        """
+        try! content.data(using: .utf8)!.write(to: sessionsDir.appendingPathComponent("\(sid)-ab12.jsonl"))
+
+        let total = SessionDetailCore.readAntigravitySessionBreakdown(sessionId: sid, period: "total", now: now)
+        check(total != nil, "D3 antigravity breakdown found")
+        checkEqual(UsageCore.intValue(total?["totalTokens"]), 1000, "D3 total keeps every record")
+        checkEqual((total?["models"] as? [[String: Any]])?.count ?? 0, 3, "D3 total lists every model")
+
+        let today = SessionDetailCore.readAntigravitySessionBreakdown(sessionId: sid, period: "today", now: now)
+        check(today != nil, "D3 today breakdown found")
+        checkEqual(UsageCore.intValue(today?["totalTokens"]), 100, "D3 today keeps only today's record")
+        checkEqual((today?["models"] as? [[String: Any]])?.count ?? 0, 1, "D3 today lists one model")
+
+        let month = SessionDetailCore.readAntigravitySessionBreakdown(sessionId: sid, period: "month", now: now)
+        checkEqual(UsageCore.intValue(month?["totalTokens"]), 300, "D3 month keeps June records")
+
+        // Same gate as the exchanges path: withinPeriod drops undated rows
+        // even for allTime/custom (the date-window arms reject ts <= 0).
+        let allTime = SessionDetailCore.readAntigravitySessionBreakdown(sessionId: sid, period: "allTime", now: now)
+        checkEqual(UsageCore.intValue(allTime?["totalTokens"]), 600, "D3 allTime keeps every dated record")
+
+        let custom = SessionDetailCore.readAntigravitySessionBreakdown(sessionId: sid, period: "custom", now: now)
+        checkEqual(UsageCore.intValue(custom?["totalTokens"]), 600, "D3 custom keeps every dated record like the exchanges path")
+    }
+
+    // D4: the kimi fallback filters rows by startedAt per period.
+    do {
+        let cal = Calendar.current
+        guard let todayDate = cal.date(from: DateComponents(year: 2026, month: 6, day: 15, hour: 9)),
+              let monthDate = cal.date(from: DateComponents(year: 2026, month: 6, day: 3, hour: 10)),
+              let oldDate = cal.date(from: DateComponents(year: 2026, month: 5, day: 20, hour: 10)) else {
+            check(false, "D4 fixture dates constructible")
+            return
+        }
+        let now = todayDate.addingTimeInterval(3600)
+        let kid = "tm-kimi-\(UUID().uuidString.prefix(8))"
+        let tempRoot = FileManager.default.temporaryDirectory.appendingPathComponent("tm-sd-kimi-\(UUID().uuidString)")
+        let sessionDir = tempRoot.appendingPathComponent("sessions/\(kid)")
+        try! FileManager.default.createDirectory(at: sessionDir.appendingPathComponent("agents/main"), withIntermediateDirectories: true)
+        let previousKimiHome = ProcessInfo.processInfo.environment["KIMI_CODE_HOME"]
+        defer {
+            if let previousKimiHome {
+                setenv("KIMI_CODE_HOME", previousKimiHome, 1)
+            } else {
+                unsetenv("KIMI_CODE_HOME")
+            }
+            try? FileManager.default.removeItem(at: tempRoot)
+        }
+        setenv("KIMI_CODE_HOME", tempRoot.path, 1)
+        try! """
+        {"id":"\(kid)","title":"d4","cwd":"/tmp","createdAt":\(Int(monthDate.timeIntervalSince1970 * 1000)),"updatedAt":\(Int(now.timeIntervalSince1970 * 1000))}
+        """.data(using: .utf8)!.write(to: sessionDir.appendingPathComponent("state.json"))
+        let msToday = Int(todayDate.timeIntervalSince1970 * 1000)
+        let msMonth = Int(monthDate.timeIntervalSince1970 * 1000)
+        let msOld = Int(oldDate.timeIntervalSince1970 * 1000)
+        let wire = """
+        {"type":"usage.record","model":"kimi-code/tm-kimi-model","usage":{"inputOther":100,"output":0,"inputCacheRead":0,"inputCacheCreation":0},"time":\(msToday)}
+        {"type":"usage.record","model":"kimi-code/tm-kimi-model","usage":{"inputOther":200,"output":0,"inputCacheRead":0,"inputCacheCreation":0},"time":\(msMonth)}
+        {"type":"usage.record","model":"kimi-code/tm-kimi-model","usage":{"inputOther":300,"output":0,"inputCacheRead":0,"inputCacheCreation":0},"time":\(msOld)}
+        """
+        try! wire.data(using: .utf8)!.write(to: sessionDir.appendingPathComponent("agents/main/wire.jsonl"))
+
+        let total = SessionDetailCore.readKimiSessionBreakdown(sessionId: kid, period: "total", now: now)
+        check(total != nil, "D4 kimi breakdown found")
+        checkEqual(UsageCore.intValue(total?["totalTokens"]), 600, "D4 total keeps every record")
+        let today = SessionDetailCore.readKimiSessionBreakdown(sessionId: kid, period: "today", now: now)
+        checkEqual(UsageCore.intValue(today?["totalTokens"]), 100, "D4 today keeps only today's record")
+        let month = SessionDetailCore.readKimiSessionBreakdown(sessionId: kid, period: "month", now: now)
+        checkEqual(UsageCore.intValue(month?["totalTokens"]), 300, "D4 month keeps June records")
+        let allTime = SessionDetailCore.readKimiSessionBreakdown(sessionId: kid, period: "allTime", now: now)
+        checkEqual(UsageCore.intValue(allTime?["totalTokens"]), 600, "D4 allTime keeps every record")
+        let custom = SessionDetailCore.readKimiSessionBreakdown(sessionId: kid, period: "custom", now: now)
+        checkEqual(UsageCore.intValue(custom?["totalTokens"]), 600, "D4 custom keeps every record")
+        // A period that excludes every row yields nil, not an empty frame.
+        let lateNow = todayDate.addingTimeInterval(24 * 3600)
+        let none = SessionDetailCore.readKimiSessionBreakdown(sessionId: kid, period: "today", now: lateNow)
+        check(none == nil, "D4 empty period falls back to notFound")
+    }
 }
 
 func t65DeepseekKeyNormalizeTests() {
