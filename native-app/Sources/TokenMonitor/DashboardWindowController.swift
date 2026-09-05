@@ -257,7 +257,11 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
            let w = stored?["width"] as? Double, let h = stored?["height"] as? Double,
            w >= 200, h >= 200 {
             let frame = NSRect(x: x, y: y, width: w, height: h)
-            if let screen = NSScreen.main, screen.visibleFrame.intersects(frame) {
+            // Validate against every connected display: a frame saved on a
+            // secondary screen intersects NSScreen.main only when that
+            // screen happens to host it, so main-only checks wrongly
+            // discarded valid frames and recentered the window.
+            if NSScreen.screens.contains(where: { $0.visibleFrame.intersects(frame) }) {
                 window.setFrame(frame, display: false)
                 return
             }
