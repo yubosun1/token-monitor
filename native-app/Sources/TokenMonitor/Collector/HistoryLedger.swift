@@ -677,13 +677,25 @@ final class HistoryLedger {
                         NSLog("[HistoryLedger] day %@: perClientModel sum %.0f != day tokens %.0f", day.date, totalTokens, day.tokens)
                     }
                 } else if day.perClient.isEmpty {
-                    for (model, mStats) in day.perModel {
+                    // Model-only day: day.messages is the whole-day total and
+                    // cannot be attributed per model — binding it on every
+                    // row would multiply the read-back message sum (which
+                    // fetchHistoryDays accumulates across rows) by the number
+                    // of models. Distribute it proportionally to each row's
+                    // tokens, so the day's message total still adds up (an
+                    // even split when the day reports no tokens).
+                    let models = day.perModel.sorted { $0.key < $1.key }
+                    let modelTokens = models.reduce(0.0) { $0 + $1.value.tokens }
+                    for (model, mStats) in models {
+                        let messages = modelTokens > 0
+                            ? day.messages * mStats.tokens / modelTokens
+                            : day.messages / Double(models.count)
                         sqlite3_bind_text(stmt, 1, (day.date as NSString).utf8String, -1, nil)
                         sqlite3_bind_text(stmt, 2, ("unknown" as NSString).utf8String, -1, nil)
                         sqlite3_bind_text(stmt, 3, (model as NSString).utf8String, -1, nil)
                         sqlite3_bind_double(stmt, 4, mStats.tokens)
                         sqlite3_bind_double(stmt, 5, mStats.cost)
-                        sqlite3_bind_double(stmt, 6, day.messages)
+                        sqlite3_bind_double(stmt, 6, messages)
                         sqlite3_bind_double(stmt, 7, day.activeTimeMs)
                         sqlite3_bind_double(stmt, 8, nowMs)
                         if sqlite3_step(stmt) != SQLITE_DONE {
@@ -698,14 +710,21 @@ final class HistoryLedger {
                     // e.g. fixture-constructed days): write per-client rows
                     // with model "unknown". A client×model cartesian product
                     // is deliberately NOT used: it would inflate the totals by
-                    // the number of clients (the pre-v2 bug).
-                    for (client, cStats) in day.perClient {
+                    // the number of clients (the pre-v2 bug). day.messages is
+                    // the whole-day total, so it is distributed per row the
+                    // same way as the model-only branch above.
+                    let clients = day.perClient.sorted { $0.key < $1.key }
+                    let clientTokens = clients.reduce(0.0) { $0 + $1.value.tokens }
+                    for (client, cStats) in clients {
+                        let messages = clientTokens > 0
+                            ? day.messages * cStats.tokens / clientTokens
+                            : day.messages / Double(clients.count)
                         sqlite3_bind_text(stmt, 1, (day.date as NSString).utf8String, -1, nil)
                         sqlite3_bind_text(stmt, 2, (client as NSString).utf8String, -1, nil)
                         sqlite3_bind_text(stmt, 3, ("unknown" as NSString).utf8String, -1, nil)
                         sqlite3_bind_double(stmt, 4, cStats.tokens)
                         sqlite3_bind_double(stmt, 5, cStats.cost)
-                        sqlite3_bind_double(stmt, 6, cStats.messages)
+                        sqlite3_bind_double(stmt, 6, messages)
                         sqlite3_bind_double(stmt, 7, day.activeTimeMs)
                         sqlite3_bind_double(stmt, 8, nowMs)
                         if sqlite3_step(stmt) != SQLITE_DONE {

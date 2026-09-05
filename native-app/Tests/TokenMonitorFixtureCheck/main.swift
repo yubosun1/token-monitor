@@ -2828,6 +2828,34 @@ func runHistoryLedgerTests() {
         let undatedTotal = ledger.querySessionModelBreakdown(client: "periodclient", sessionId: "s-period-undated", period: "total")
         checkEqual(undatedTotal?["totalTokens"] as? Int ?? -1, 700, "L13.12: undated row included in total")
     }
+
+    // L14: recordTokscaleDays must not multiply day.messages by the number
+    // of per-model / per-client rows. day.messages is a whole-day total —
+    // binding it on every row made the read-back sum (accumulated across
+    // rows by fetchHistoryDays) N times too large. It is now distributed
+    // proportionally to each row's tokens so the day total survives.
+    do {
+        var modelDay = HistoryCore.Day(date: "2026-08-25", tokens: 600, cost: 2.0, messages: 12, activeTimeMs: 4000)
+        modelDay.perModel["model-a"] = (tokens: 400, cost: 1.5)
+        modelDay.perModel["model-b"] = (tokens: 200, cost: 0.5)
+        ledger.recordTokscaleDays([modelDay])
+
+        var clientDay = HistoryCore.Day(date: "2026-08-26", tokens: 600, cost: 3.0, messages: 9, activeTimeMs: 5000)
+        clientDay.perClient["claude"] = (tokens: 300, cost: 1.5, messages: 0)
+        clientDay.perClient["codex"] = (tokens: 300, cost: 1.5, messages: 0)
+        ledger.recordTokscaleDays([clientDay])
+
+        let fetched = ledger.fetchHistoryDays(clients: nil)
+        let modelDayBack = fetched.first { $0.date == "2026-08-25" }
+        checkEqual(modelDayBack?.tokens ?? 0, 600, "L14.1: per-model day tokens intact")
+        checkClose(modelDayBack?.messages ?? 0, 12, "L14.2: per-model day messages not amplified", tolerance: 1e-9)
+        checkClose(modelDayBack?.perModel["model-a"]?.tokens ?? 0, 400, "L14.3: per-model attribution intact")
+
+        let clientDayBack = fetched.first { $0.date == "2026-08-26" }
+        checkEqual(clientDayBack?.tokens ?? 0, 600, "L14.4: per-client day tokens intact")
+        checkClose(clientDayBack?.messages ?? 0, 9, "L14.5: per-client day messages not amplified", tolerance: 1e-9)
+        checkClose(clientDayBack?.perClient["claude"]?.messages ?? 0, 4.5, "L14.6: per-client messages split proportionally", tolerance: 1e-9)
+    }
 }
 
 // T-series: tokscale response decoding — one corrupt row must be skipped
