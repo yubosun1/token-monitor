@@ -1151,11 +1151,13 @@ enum Adapters {
         var chunk = [UInt8](repeating: 0, count: 1 << 16)
         return input.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> (Data, Bool) in
             // Pre-allocate the output buffer when the zstd frame header
-            // records the uncompressed size — avoids repeated realloc as
-            // 64KB chunks append (session files decompress to a few MB).
+            // records a sane uncompressed size — avoids repeated realloc as
+            // 64KB chunks append (session files decompress to a few MB). A
+            // crafted or corrupt frame header may advertise an enormous
+            // size, so the declared size is only trusted up to 512 MB.
             if let base = raw.baseAddress, raw.count > 0 {
                 let frameSize = ZSTD_getFrameContentSize(base, raw.count)
-                if frameSize > 0 && frameSize < UInt64.max - 1 {
+                if frameSize > 0, frameSize < UInt64.max - 1, frameSize <= 512 * 1024 * 1024 {
                     output.reserveCapacity(Int(frameSize))
                 }
             }
