@@ -16,6 +16,12 @@ final class IdleTeardownScheduler {
     /// advance a fake clock instead of sleeping.
     private let executor: (TimeInterval, @escaping Work) -> Void
     private var pending: DispatchWorkItem?
+    /// Monotonic generation for the pending item: the work item's block
+    /// compares against this instead of capturing the item variable, so the
+    /// block retains neither the scheduler nor the item itself (a block
+    /// that captured the item variable by reference kept the item alive
+    /// forever through its own variable box).
+    private var generation = 0
 
     init(executor: @escaping (TimeInterval, @escaping Work) -> Void = { delay, fire in
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: fire)
@@ -30,10 +36,12 @@ final class IdleTeardownScheduler {
     /// create more than one live work item.
     func schedule(delay: TimeInterval, work: @escaping Work) {
         pending?.cancel()
-        var item: DispatchWorkItem!
-        item = DispatchWorkItem { [weak self] in
-            guard let self, let current = self.pending, current === item else { return }
+        generation += 1
+        let token = generation
+        let item = DispatchWorkItem { [weak self] in
+            guard let self, self.generation == token else { return }
             self.pending = nil
+            self.generation += 1
             work()
         }
         pending = item
@@ -41,9 +49,10 @@ final class IdleTeardownScheduler {
     }
 
     /// Cancel the pending teardown (show path). A stale scheduled fire is a
-    /// no-op because the item no longer matches pending.
+    /// no-op because its generation is no longer current.
     func cancel() {
         pending?.cancel()
         pending = nil
+        generation += 1
     }
 }
