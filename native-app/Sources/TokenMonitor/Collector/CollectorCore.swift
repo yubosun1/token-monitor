@@ -900,8 +900,12 @@ final class Collector {
                     days = HistoryLedger.mergeDays(liveDays: days, ledgerDays: ledgerDays)
                 }
             }
+            // The daily window is anchored to the tick's own today key, not
+            // the real clock: a tick that straddles midnight would otherwise
+            // mix its `now`-derived periods with a wall-clock "today" from
+            // the next day, cutting the same day out of the window.
             let built = HistoryCore.normalizeHistory(
-                days: days, todayKey: nil,
+                days: days, todayKey: dayKey,
                 totalActiveTimeMsOverride: tokscaleSnapshot?.graphActiveTime
             )
             stateLock.lock()
