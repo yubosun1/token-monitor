@@ -109,13 +109,15 @@ final class LimitsRuntime {
         guard settings["limitsEnabled"] as? Bool ?? true else { return }
         let enabled = (settings["limitProviders"] as? String ?? "deepseek,kimi")
             .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
-        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
 
         var providers: [Any] = []
         for provider in enabled {
             switch provider {
             case "deepseek":
-                providers.append(DeepseekBalance.fetchLimits(nowMs: nowMs))
+                // Stamp now at fetch time, not at refresh start: a refresh
+                // spanning midnight must not record consumption under the
+                // previous day's key.
+                providers.append(DeepseekBalance.fetchLimits(nowMs: Int64(Date().timeIntervalSince1970 * 1000)))
             case "kimi":
                 let semaphore = DispatchSemaphore(value: 0)
                 var fetched: JSON = [:]
@@ -123,7 +125,7 @@ final class LimitsRuntime {
                     fetched = await KimiLimits.fetchLimits(
                         apiKey: CredentialStore.shared.kimiApiKey(),
                         webAccessToken: CredentialStore.shared.kimiWebAccessToken(),
-                        nowMs: nowMs
+                        nowMs: Int64(Date().timeIntervalSince1970 * 1000)
                     )
                     semaphore.signal()
                 }
@@ -134,7 +136,7 @@ final class LimitsRuntime {
             }
         }
 
-        let updatedAt = ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: Double(nowMs) / 1000))
+        let updatedAt = ISO8601DateFormatter().string(from: Date())
         // Tolerant numeric read (Int/Double/String), same reason as the
         // collector timer: in-process settings updates may store Swift Ints.
         let rawRefreshMs = UsageCore.doubleValue(settings["limitsRefreshMs"])
