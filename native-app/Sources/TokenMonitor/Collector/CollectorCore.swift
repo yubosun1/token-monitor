@@ -858,7 +858,7 @@ final class Collector {
             var month = UsageCore.mergePeriods([tokscalePeriods["month"] ?? UsageCore.emptyPeriod(), merged["month"] ?? UsageCore.emptyPeriod()])
             var allTime = UsageCore.mergePeriods([tokscalePeriods["allTime"] ?? UsageCore.emptyPeriod(), merged["allTime"] ?? UsageCore.emptyPeriod()])
 
-            if let ledger = environment.historyLedger {
+            if let ledger = environment.historyLedger, !clients.isEmpty {
                 // Persistent-ledger fallback: adapter sources deleted from disk
                 // survive here. Component-wise max (never whole-period
                 // replacement): the ledger only holds adapter rows — tokscale
@@ -867,7 +867,11 @@ final class Collector {
                 // live event-level scan does, and replacing the whole period
                 // with ledger values would fold cross-midnight session history
                 // into today/month). Max also keeps the freshest live value
-                // when both sides have data.
+                // when both sides have data. An empty client set must skip
+                // the fallback entirely: the ledger's fetchPeriods treats an
+                // empty array as "no filter" and would return the whole
+                // database, turning the legal empty wire shape into stale
+                // full-history totals.
                 let ledgerPeriods = ledger.fetchPeriods(clients: clients, now: now, allTimeSince: allTimeSince)
                 today = UsageCore.maxPeriods(today, ledgerPeriods.today)
                 month = UsageCore.maxPeriods(month, ledgerPeriods.month)
@@ -894,7 +898,9 @@ final class Collector {
                 }
             }
             HistoryCore.mergeAdapterContributions(historyContributions, into: &days)
-            if let ledger = environment.historyLedger {
+            if let ledger = environment.historyLedger, !clients.isEmpty {
+                // Same empty-client rule as the periods fallback above:
+                // fetchHistoryDays([]) returns every recorded day.
                 let ledgerDays = ledger.fetchHistoryDays(clients: clients)
                 if !ledgerDays.isEmpty {
                     days = HistoryLedger.mergeDays(liveDays: days, ledgerDays: ledgerDays)

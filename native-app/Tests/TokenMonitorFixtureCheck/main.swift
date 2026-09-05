@@ -541,6 +541,9 @@ final class FakeCollectorWorld {
     var rawReads: [String: Int] = [:]
     var pricingLookups: [String: Int] = [:]
     var pricingLookupPolicies: [String: PricingPolicy] = [:]
+    /// Inject a real HistoryLedger to exercise the persistent-ledger
+    /// fallback paths (production wires HistoryLedger.shared).
+    var historyLedger: HistoryLedger?
     var tokscalePeriodSpawns = 0
     var tokscaleGraphSpawns = 0
     var tokscalePricingRefreshes = 0
@@ -606,6 +609,7 @@ final class FakeCollectorWorld {
             customPricingSync: { _ in
                 self.customPricingSyncCalls += 1
             },
+            historyLedger: self.historyLedger,
             tickObserver: { kind, reason in
                 self.observerLock.lock()
                 self.tickKinds.append(kind)
@@ -1411,6 +1415,55 @@ func runCollectorStateTests() {
         checkEqual(world.tokscalePricingRefreshes, 1, "T16 manual refresh updates tokscale pricing once")
         checkEqual(world.tokscalePeriodSpawns, 2, "T16 manual refresh forces a cache-only period scan")
         checkEqual(world.tokscaleGraphSpawns, 2, "T16 manual refresh forces a cache-only graph scan")
+    }
+
+    // T19: with every client disabled the wire shape stays empty even when
+    // a persistent ledger holds rows. The ledger fallback is consulted only
+    // for a non-empty client set: fetchPeriods([])/fetchHistoryDays([])
+    // treat an empty array as "no filter" and return the whole database,
+    // which would resurrect deleted-source data into an all-disabled UI.
+    do {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("tm-empty-clients-\(UUID().uuidString)")
+        try! fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+        let ledger = HistoryLedger(dbURL: dir.appendingPathComponent("ledger.db"))
+        // Deleted-source residue pre-seeded in the ledger: one usage row and
+        // one history day that no live source would produce.
+        ledger.recordUsageRows(
+            [stateRow(client: "proma", session: "gone-s1", model: "model-a", input: 400, output: 200, startedAt: "2026-08-15T09:00:00+08:00")],
+            defaultClient: "proma",
+            now: shanghaiDate(2026, 8, 15, 12, 0)
+        )
+        var residueDay = HistoryCore.Day(date: "2026-08-15", tokens: 600, cost: 0.6, messages: 2)
+        residueDay.perClient["proma"] = (tokens: 600, cost: 0.6, messages: 2)
+        ledger.recordTokscaleDays([residueDay], now: shanghaiDate(2026, 8, 15, 12, 0))
+
+        let world = FakeCollectorWorld(
+            now: shanghaiDate(2026, 8, 15, 12, 0),
+            settings: stateSettings(clients: "proma")
+        )
+        world.historyLedger = ledger
+        world.rowsByClient["proma"] = [
+            stateRow(client: "proma", session: "s1", model: "model-a", input: 100, output: 50, startedAt: "2026-08-15T10:00:00+08:00")
+        ]
+        let (collector, queue) = world.makeCollector()
+        collector.requestRefresh(.full, reason: .startup)
+        world.waitIdle(collector, queue)
+        // Enabled: ledger residue (600) + the live row recorded into the
+        // ledger during derivation (150) merge into the live totals.
+        checkEqual(UsageCore.intValue(world.period(collector, "allTime")["totalTokens"]), 750, "T19 ledger fallback merges residue while enabled")
+
+        world.settings["clients"] = ""
+        collector.requestRefresh(.full, reason: .settingsChange)
+        world.waitIdle(collector, queue)
+        let stats = collector.latestStats() ?? [:]
+        let periods = stats["periods"] as? [String: Any] ?? [:]
+        checkEqual(UsageCore.intValue((periods["today"] as? [String: Any] ?? [:])["totalTokens"]), 0, "T19 empty clients skip ledger fallback (today)")
+        checkEqual(UsageCore.intValue((periods["month"] as? [String: Any] ?? [:])["totalTokens"]), 0, "T19 empty clients skip ledger fallback (month)")
+        checkEqual(UsageCore.intValue((periods["allTime"] as? [String: Any] ?? [:])["totalTokens"]), 0, "T19 empty clients skip ledger fallback (allTime)")
+        let history = stats["history"] as? [String: Any]
+        checkEqual((history?["daily"] as? [Any] ?? []).isEmpty, true, "T19 empty clients history ignores ledger days")
     }
 }
 
