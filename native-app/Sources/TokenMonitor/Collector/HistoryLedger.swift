@@ -262,11 +262,23 @@ final class HistoryLedger {
             return
         }
         // Enable WAL mode for high concurrency, non-blocking reads/writes, and robustness.
-        sqlite3_exec(db, "PRAGMA journal_mode = WAL;", nil, nil, nil)
-        sqlite3_exec(db, "PRAGMA synchronous = NORMAL;", nil, nil, nil)
-        sqlite3_exec(db, "PRAGMA busy_timeout = 5000;", nil, nil, nil)
-        sqlite3_exec(db, "PRAGMA cache_size = -2000;", nil, nil, nil) // Bound SQLite page cache to 2MB
-        sqlite3_exec(db, "PRAGMA temp_store = MEMORY;", nil, nil, nil)
+        // Each PRAGMA is checked (a failure degrades durability/concurrency
+        // but must not abort startup — the connection itself is usable).
+        if sqlite3_exec(db, "PRAGMA journal_mode = WAL;", nil, nil, nil) != SQLITE_OK {
+            NSLog("[HistoryLedger] PRAGMA journal_mode=WAL failed: %s", sqlite3_errmsg(db))
+        }
+        if sqlite3_exec(db, "PRAGMA synchronous = NORMAL;", nil, nil, nil) != SQLITE_OK {
+            NSLog("[HistoryLedger] PRAGMA synchronous=NORMAL failed: %s", sqlite3_errmsg(db))
+        }
+        if sqlite3_exec(db, "PRAGMA busy_timeout = 5000;", nil, nil, nil) != SQLITE_OK {
+            NSLog("[HistoryLedger] PRAGMA busy_timeout failed: %s", sqlite3_errmsg(db))
+        }
+        if sqlite3_exec(db, "PRAGMA cache_size = -2000;", nil, nil, nil) != SQLITE_OK { // Bound SQLite page cache to 2MB
+            NSLog("[HistoryLedger] PRAGMA cache_size failed: %s", sqlite3_errmsg(db))
+        }
+        if sqlite3_exec(db, "PRAGMA temp_store = MEMORY;", nil, nil, nil) != SQLITE_OK {
+            NSLog("[HistoryLedger] PRAGMA temp_store failed: %s", sqlite3_errmsg(db))
+        }
     }
 
     private func createTablesIfNeeded() {
