@@ -1034,6 +1034,15 @@ enum Adapters {
         for wireFile in wireFiles {
             guard let data = try? Data(contentsOf: wireFile) else { continue }
             let lines = parseJsonlLines(data)
+            // usage.record and context.append_loop_event/step.end are TWO
+            // recordings of the SAME step usage: current kimi-code writes
+            // both for every step (verified against real wire files — every
+            // legacy blob has an identical usage.record twin). The gate is
+            // therefore load-bearing dedup, not a format preference: counting
+            // both lines doubles every kimi total. When any usage.record is
+            // present, count only those; legacy lines count only in files
+            // that have no usage.record at all.
+            let hasUsageRecord = lines.contains { ($0["type"] as? String) == "usage.record" }
 
             for line in lines {
                 guard let type = line["type"] as? String else { continue }
@@ -1041,13 +1050,8 @@ enum Adapters {
                 var modelRaw: String?
                 var timeMs: Double = 0
 
-                // Each line stands on its own: a wire file that mixes the
-                // legacy context.append_loop_event step.end records with
-                // usage.record records (e.g. across a protocol migration)
-                // counts both. A whole-file "has usage.record" gate would
-                // silently drop every legacy line as soon as a single new
-                // record appears, undercounting the session.
-                if type == "usage.record" {
+                if hasUsageRecord {
+                    guard type == "usage.record" else { continue }
                     usageObj = line["usage"] as? JSON
                     modelRaw = line["model"] as? String
                     // timestampMs (not doubleValue): tolerates a seconds-based
