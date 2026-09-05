@@ -610,49 +610,54 @@ enum Adapters {
         }
         pruneParseCache(client: "hanako", activePaths: Set(allFiles.map { $0.path }))
         var groups: [[UsageCore.UsageRow]] = []
-        var seenMessageIds = Set<String>()
-        // Messages without an id cannot be deduped across the sessions and
-        // activity roots by message id. Mirror files carry the same content
-        // under the same base name, so a content fingerprint (session base
-        // name + timestamp + token components) closes the last duplicate
-        // path without risking false merges of distinct messages.
-        var seenFallbackKeys = Set<String>()
+        var seenKeys = Set<String>()
         for root in hanakoRoots {
             let sourceId = sourceNamespace(root)
             for file in jsonlFiles(root: root, recursive: true, client: "hanako") {
                 let parsed = hanakoFileRows(file, sourceId: sourceId)
-                // Cross-file (and cross-root) message dedupe over cached rows.
-                // `kept` stays nil while nothing is filtered so a clean
-                // file's group shares its cached array storage.
-                var kept: [UsageCore.UsageRow]? = nil
-                for i in 0..<parsed.rows.count {
-                    let messageId = i < parsed.messageIds.count ? parsed.messageIds[i] : ""
-                    let duplicate: Bool
-                    if !messageId.isEmpty {
-                        duplicate = !seenMessageIds.insert(messageId).inserted
-                    } else {
-                        let row = parsed.rows[i]
-                        let base = (row.sessionId ?? "").split(separator: "@").first.map(String.init) ?? row.sessionId ?? ""
-                        let fallbackKey = [
-                            base,
-                            String(format: "%.0f", row.startedAt),
-                            String(format: "%.1f", row.input),
-                            String(format: "%.1f", row.output),
-                            String(format: "%.1f", row.cacheRead),
-                            String(format: "%.1f", row.cacheWrite)
-                        ].joined(separator: "|")
-                        duplicate = !seenFallbackKeys.insert(fallbackKey).inserted
-                    }
-                    if duplicate {
-                        if kept == nil { kept = Array(parsed.rows[0..<i]) }
-                    } else {
-                        kept?.append(parsed.rows[i])
-                    }
-                }
-                groups.append(kept ?? parsed.rows)
+                groups.append(dedupeHanakoRows(rows: parsed.rows, messageIds: parsed.messageIds, seenKeys: &seenKeys))
             }
         }
         return groups
+    }
+
+    /// Cross-file (and cross-root) message dedupe over cached rows. One key
+    /// space with prefixed keys ("id|" for message ids, "fk|" for the
+    /// content fallback) closes every duplicate path: a message that
+    /// carries an id in one file and appears id-less in a mirror is still
+    /// merged, and the fallback key uses the full-precision timestamp so
+    /// two genuinely distinct messages within the same millisecond are not
+    /// falsely merged. Every applicable key is inserted per row and the
+    /// row is skipped when ANY of its keys was already seen. Messages
+    /// without an id cannot be deduped across the sessions and activity
+    /// roots by message id alone; mirror files carry the same content
+    /// under the same base name, so the content fingerprint (session base
+    /// name + timestamp + token components) closes that path. `kept` stays
+    /// nil while nothing is filtered so a clean file's group shares its
+    /// cached array storage.
+    static func dedupeHanakoRows(rows: [UsageCore.UsageRow], messageIds: [String], seenKeys: inout Set<String>) -> [UsageCore.UsageRow] {
+        var kept: [UsageCore.UsageRow]? = nil
+        for i in 0..<rows.count {
+            let messageId = i < messageIds.count ? messageIds[i] : ""
+            let row = rows[i]
+            let base = (row.sessionId ?? "").split(separator: "@").first.map(String.init) ?? row.sessionId ?? ""
+            let fallbackKey = [
+                base,
+                String(row.startedAt),
+                String(format: "%.1f", row.input),
+                String(format: "%.1f", row.output),
+                String(format: "%.1f", row.cacheRead),
+                String(format: "%.1f", row.cacheWrite)
+            ].joined(separator: "|")
+            var keys = ["fk|" + fallbackKey]
+            if !messageId.isEmpty { keys.append("id|" + messageId) }
+            if keys.contains(where: { !seenKeys.insert($0).inserted }) {
+                if kept == nil { kept = Array(rows[0..<i]) }
+            } else {
+                kept?.append(row)
+            }
+        }
+        return kept ?? rows
     }
 
     /// Parse one hanako session/activity file, memoized by (path, mtime, size).

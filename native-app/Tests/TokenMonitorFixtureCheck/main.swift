@@ -3220,6 +3220,86 @@ func t57JsonlBomTests() {
     checkEqual(parsed[1]["id"] as? String, "bom-2", "t57 second line unaffected")
 }
 
+// MARK: - Hanako cross-format dedup tests
+
+/// The hanako dedup lives in ONE key space with prefixed keys: a message
+/// that carries an id in one file and appears id-less in a mirror is still
+/// merged, and the fallback key's timestamp must not be rounded (two
+/// distinct messages within the same millisecond must not merge).
+func t54HanakoDedupTests() {
+    func row(_ session: String, _ startedAt: Double, _ input: Double, _ output: Double) -> UsageCore.UsageRow {
+        UsageCore.UsageRow(
+            client: "hanako", sessionId: session, model: "model-a", provider: "hanako",
+            input: input, output: output, cacheRead: 0, cacheWrite: 0, reasoning: 0,
+            messageCount: 1, cost: 0, startedAt: startedAt, lastUsedAt: startedAt,
+            projectId: "", projectLabel: "", performance: nil
+        )
+    }
+
+    // t54a: same message with an id in one file and without one in the
+    // mirror is counted once (cross-format dedup).
+    do {
+        var seen = Set<String>()
+        let g1 = Adapters.dedupeHanakoRows(
+            rows: [row("msg-1@src1", 1_725_430_000_000, 300, 150)],
+            messageIds: ["m1"], seenKeys: &seen)
+        checkEqual(g1.count, 1, "t54a id-bearing message kept")
+        let g2 = Adapters.dedupeHanakoRows(
+            rows: [row("msg-1@src2", 1_725_430_000_000, 300, 150)],
+            messageIds: [""], seenKeys: &seen)
+        checkEqual(g2.count, 0, "t54a id-less mirror of an id'd message deduped")
+    }
+
+    // t54b: the reverse order — id-less first, then the same message with
+    // its id — also dedupes (every applicable key is inserted per row).
+    do {
+        var seen = Set<String>()
+        let g1 = Adapters.dedupeHanakoRows(
+            rows: [row("msg-2@src1", 1_725_430_000_000, 420, 210)],
+            messageIds: [""], seenKeys: &seen)
+        checkEqual(g1.count, 1, "t54b id-less message kept")
+        let g2 = Adapters.dedupeHanakoRows(
+            rows: [row("msg-2@src2", 1_725_430_000_000, 420, 210)],
+            messageIds: ["m2"], seenKeys: &seen)
+        checkEqual(g2.count, 0, "t54b later id-bearing mirror deduped")
+    }
+
+    // t54c: the fallback key uses the full-precision timestamp: two distinct
+    // messages within the same (rounded) millisecond are NOT merged.
+    do {
+        var seen = Set<String>()
+        let g1 = Adapters.dedupeHanakoRows(
+            rows: [
+                row("msg-3@src1", 1_725_430_000_000.4, 500, 250),
+                row("msg-3@src1", 1_725_430_000_000.6, 500, 250)
+            ],
+            messageIds: ["", ""], seenKeys: &seen)
+        checkEqual(g1.count, 2, "t54c distinct sub-ms messages not falsely merged")
+        let g2 = Adapters.dedupeHanakoRows(
+            rows: [row("msg-3@src2", 1_725_430_000_000.6, 500, 250)],
+            messageIds: [""], seenKeys: &seen)
+        checkEqual(g2.count, 0, "t54c an exact mirror is still deduped")
+    }
+
+    // t54d: duplicate ids are still deduped across files, and unique
+    // messages pass through untouched.
+    do {
+        var seen = Set<String>()
+        let g1 = Adapters.dedupeHanakoRows(
+            rows: [row("msg-4@src1", 1_725_430_000_000, 600, 300)],
+            messageIds: ["m4"], seenKeys: &seen)
+        let g2 = Adapters.dedupeHanakoRows(
+            rows: [row("msg-4@src2", 1_725_430_000_000, 600, 300)],
+            messageIds: ["m4"], seenKeys: &seen)
+        let g3 = Adapters.dedupeHanakoRows(
+            rows: [row("msg-5@src1", 1_725_430_000_000, 700, 350)],
+            messageIds: ["m5"], seenKeys: &seen)
+        checkEqual(g1.count, 1, "t54d first id kept")
+        checkEqual(g2.count, 0, "t54d repeated id deduped")
+        checkEqual(g3.count, 1, "t54d unrelated message kept")
+    }
+}
+
 // MARK: - DSH torn delta tail tests
 
 /// A delta that ends mid-line must not lose the line: the raw bytes are
@@ -3366,6 +3446,7 @@ runMemoryLeakAndCacheTests()
 runHistoryLedgerTests()
 runTokscaleDecodeTests()
 t53DshTornTailTests()
+t54HanakoDedupTests()
 t55DshTouchOnlyStampTests()
 t57JsonlBomTests()
 print("fixture checks: \(checkCount) checks, \(failureCount) failures")
