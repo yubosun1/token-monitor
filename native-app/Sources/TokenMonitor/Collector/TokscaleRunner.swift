@@ -270,7 +270,10 @@ final class TokscaleRunner {
         return paths
     }
 
-    /// Cleans up stale Antigravity sync locks left by killed/crashed tokscale processes.
+    /// Cleans up stale Antigravity sync locks left by killed/crashed
+    /// tokscale processes. A lock whose recorded holder pid is still alive
+    /// is never removed, mtime and force notwithstanding; the age fallback
+    /// only applies to locks that carry no pid information at all.
     @discardableResult
     static func cleanupStaleAntigravityLocks(home: String = NSHomeDirectory(), force: Bool = false) -> Int {
         let fm = FileManager.default
@@ -278,26 +281,29 @@ final class TokscaleRunner {
         let now = Date().timeIntervalSince1970
         for path in antigravityLockPaths(home: home) {
             guard fm.fileExists(atPath: path) else { continue }
-            if force {
-                try? fm.removeItem(atPath: path)
-                cleaned += 1
+            // The lock records its holder's pid as the first whitespace
+            // token where tokscale wrote one.
+            var recordedPID: Int32?
+            if let content = try? String(contentsOfFile: path, encoding: .utf8) {
+                let parts = content.split(whereSeparator: \.isWhitespace)
+                if let first = parts.first, let pid = Int32(first), pid > 0 {
+                    recordedPID = pid
+                }
+            }
+            if let pid = recordedPID, isProcessAlive(pid) {
                 continue
             }
             var isStale = false
-            if let content = try? String(contentsOfFile: path, encoding: .utf8) {
-                let parts = content.split(whereSeparator: \.isWhitespace)
-                if let first = parts.first, let pid = Int32(first) {
-                    if pid > 0 && kill(pid, 0) != 0 && errno == ESRCH {
-                        isStale = true
-                    }
-                }
-            }
-            if !isStale {
-                if let attrs = try? fm.attributesOfItem(atPath: path),
-                   let mtime = attrs[.modificationDate] as? Date,
-                   now - mtime.timeIntervalSince1970 > 30.0 {
-                    isStale = true
-                }
+            if recordedPID != nil {
+                // The recorded holder is gone.
+                isStale = true
+            } else if force {
+                isStale = true
+            } else if let attrs = try? fm.attributesOfItem(atPath: path),
+                      let mtime = attrs[.modificationDate] as? Date,
+                      now - mtime.timeIntervalSince1970 > 30.0 {
+                // No pid recorded (older format): age is the only signal.
+                isStale = true
             }
             if isStale {
                 try? fm.removeItem(atPath: path)
@@ -305,6 +311,25 @@ final class TokscaleRunner {
             }
         }
         return cleaned
+    }
+
+    /// Whether a process with this pid exists right now. EPERM also counts
+    /// as alive: the process exists even when it belongs to another user.
+    private static func isProcessAlive(_ pid: Int32) -> Bool {
+        if kill(pid, 0) == 0 { return true }
+        return errno == EPERM
+    }
+
+    /// Whether a sync failure message indicates a STALE lock left behind by
+    /// a dead process (worth a forced cleanup) rather than live contention
+    /// such as SQLite's "database is locked", which must never trigger lock
+    /// deletion.
+    static func isStaleLockError(_ stderr: String) -> Bool {
+        guard !stderr.contains("database is locked") else { return false }
+        return stderr.contains("sync lock")
+            || stderr.contains("stale lock")
+            || stderr.contains("lock file")
+            || stderr.contains("already exists")
     }
 
     /// Whether Antigravity IDE native session roots are present on disk.
@@ -331,7 +356,7 @@ final class TokscaleRunner {
         do {
             let result = try run(args, timeout: timeout)
             if result.exitCode != 0 {
-                if result.stderr.contains("sync lock") || result.stderr.contains("already exists") || result.stderr.contains("lock") {
+                if Self.isStaleLockError(result.stderr) {
                     Self.cleanupStaleAntigravityLocks(home: targetHome, force: true)
                     if let retry = try? run(args, timeout: timeout), retry.exitCode == 0 {
                         return true

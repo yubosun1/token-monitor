@@ -3539,6 +3539,87 @@ func t61DrainTimeoutGrandchildTests() {
     check(!alive, "t61 grandchild reaped by the group kill")
 }
 
+// MARK: - Antigravity lock cleanup heuristics tests
+
+/// Stale-lock cleanup must never remove a lock whose recorded pid is still
+/// alive: the age fallback exists only for locks that carry no pid info,
+/// and the force path must liveness-check too. Dead-pid locks and
+/// pid-less old locks are still cleaned. Each step leaves exactly one lock
+/// file in place (cleanup scans sync.lock / sync.os.lock / <dir>.lock).
+func t59AntigravityLockCleanupTests() {
+    let fm = FileManager.default
+    let lockDir = fm.temporaryDirectory.appendingPathComponent("tm-lock-pid-\(UUID().uuidString)")
+    let cacheDir = lockDir.appendingPathComponent(".config/tokscale/antigravity-cache")
+    try! fm.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+    defer { try? fm.removeItem(at: lockDir) }
+    let syncLock = cacheDir.appendingPathComponent("sync.lock").path
+    func age(_ path: String, seconds: TimeInterval) {
+        try! fm.setAttributes([.modificationDate: Date(timeIntervalSinceNow: seconds)], ofItemAtPath: path)
+    }
+
+    // A live holder: a real process whose pid sits in the lock file.
+    let sleeper = Process()
+    sleeper.executableURL = URL(fileURLWithPath: "/bin/sleep")
+    sleeper.arguments = ["60"]
+    try! sleeper.run()
+    let livePid = sleeper.processIdentifier
+    try! "\(livePid) 1234567890\n".write(toFile: syncLock, atomically: true, encoding: .utf8)
+    age(syncLock, seconds: -3600)
+
+    // (c) An old mtime must not delete a lock held by a live process,
+    // even one that has outlived the 30s fallback.
+    let cleanedLive = TokscaleRunner.cleanupStaleAntigravityLocks(home: lockDir.path, force: false)
+    checkEqual(cleanedLive, 0, "t59 live-pid lock not cleaned by age fallback")
+    check(fm.fileExists(atPath: syncLock), "t59 live-pid lock file kept")
+
+    // (b) The force path liveness-checks too.
+    let cleanedLiveForce = TokscaleRunner.cleanupStaleAntigravityLocks(home: lockDir.path, force: true)
+    checkEqual(cleanedLiveForce, 0, "t59 live-pid lock not cleaned by force")
+    check(fm.fileExists(atPath: syncLock), "t59 live-pid lock kept under force")
+
+    sleeper.terminate()
+    sleeper.waitUntilExit()
+
+    // Once the recorded holder is gone the same lock is stale.
+    let cleanedDead = TokscaleRunner.cleanupStaleAntigravityLocks(home: lockDir.path, force: false)
+    checkEqual(cleanedDead, 1, "t59 dead-pid lock cleaned once holder exits")
+    check(!fm.fileExists(atPath: syncLock), "t59 dead-pid lock file removed")
+
+    // Pid-less lock: only an old mtime marks it stale.
+    try! "antigravity sync\n".write(toFile: syncLock, atomically: true, encoding: .utf8)
+    age(syncLock, seconds: -3600)
+    checkEqual(TokscaleRunner.cleanupStaleAntigravityLocks(home: lockDir.path, force: false), 1,
+               "t59 pid-less old lock cleaned by age fallback")
+
+    try! "antigravity sync\n".write(toFile: syncLock, atomically: true, encoding: .utf8)
+    checkEqual(TokscaleRunner.cleanupStaleAntigravityLocks(home: lockDir.path, force: false), 0,
+               "t59 fresh pid-less lock kept")
+
+    // A dead-pid lock is cleaned regardless of age.
+    try! "9999999 1234567890\n".write(toFile: syncLock, atomically: true, encoding: .utf8)
+    checkEqual(TokscaleRunner.cleanupStaleAntigravityLocks(home: lockDir.path, force: false), 1,
+               "t59 dead-pid lock cleaned regardless of age")
+}
+
+func t60StaleLockErrorPatternTests() {
+    checkEqual(TokscaleRunner.isStaleLockError("sqlite3: database is locked (5)"), false,
+               "t60 live SQLite contention never triggers lock cleanup")
+    checkEqual(TokscaleRunner.isStaleLockError("the database is locked by another connection"), false,
+               "t60 database-is-locked variant ignored")
+    checkEqual(TokscaleRunner.isStaleLockError("error: sync lock already exists"), true,
+               "t60 sync-lock message triggers cleanup")
+    checkEqual(TokscaleRunner.isStaleLockError("a stale lock from a crashed run blocks startup"), true,
+               "t60 stale-lock message triggers cleanup")
+    checkEqual(TokscaleRunner.isStaleLockError("unable to create lock file"), true,
+               "t60 lock-file message triggers cleanup")
+    checkEqual(TokscaleRunner.isStaleLockError("lock already exists for this sync"), true,
+               "t60 already-exists message triggers cleanup")
+    checkEqual(TokscaleRunner.isStaleLockError("some unrelated mention of lock"), false,
+               "t60 bare lock mention never triggers cleanup")
+    checkEqual(TokscaleRunner.isStaleLockError("database is locked; the sync lock stays"), false,
+               "t60 database lock mentioned with other text still ignored")
+}
+
 runChecks()
 runKimiTests()
 runCollectorStateTests()
@@ -3561,6 +3642,8 @@ t56RecursiveListingTests()
 t57JsonlBomTests()
 t58KimiMixedFormatTests()
 t61DrainTimeoutGrandchildTests()
+t59AntigravityLockCleanupTests()
+t60StaleLockErrorPatternTests()
 print("fixture checks: \(checkCount) checks, \(failureCount) failures")
 if failureCount > 0 { exit(1) }
 
