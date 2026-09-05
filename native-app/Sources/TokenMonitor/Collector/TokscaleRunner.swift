@@ -476,12 +476,17 @@ final class TokscaleRunner {
 
     /// Terminate every in-flight tokscale subprocess (app termination path).
     func terminateAll() {
+        // Hold the registry lock across the whole sweep so a spawn that
+        // registered between a snapshot and the first terminate() is also
+        // reaped; the list is then cleared so run()'s deferred removal is a
+        // no-op. terminate() only sends a signal and does not wait, so
+        // holding the lock here cannot block a concurrent collection.
         lock.lock()
-        let processes = runningProcesses
-        lock.unlock()
-        for process in processes {
+        for process in runningProcesses {
             process.terminate()
         }
+        runningProcesses.removeAll()
+        lock.unlock()
     }
 }
 
