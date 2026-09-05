@@ -956,7 +956,8 @@ final class Collector {
             let a = allTime["totalTokens"] as? Int ?? 0
             let clients = (allTime["clients"] as? [String: Any] ?? [:]).mapValues { $0 }
             let costs = (allTime["clientCosts"] as? [String: Any] ?? [:]).mapValues { $0 }
-            return String(format: "collected id=%d today=%d month=%d allTime=%d allTimeClients=%@ costs=%@", id, t, m, a, clients.description, costs.description)
+            // %ld: token totals exceed Int32 (allTime is in the billions).
+            return String(format: "collected id=%ld today=%ld month=%ld allTime=%ld allTimeClients=%@ costs=%@", id, t, m, a, clients.description, costs.description)
         }())
         PerfDiag.cpuMark(String(format: "tick-end id=%d", id))
         PerfDiag.footprintMark(String(format: "post-tick id=%d", id))
