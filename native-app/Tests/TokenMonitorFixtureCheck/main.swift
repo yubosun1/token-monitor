@@ -565,13 +565,13 @@ final class FakeCollectorWorld {
                 self.adapterFingerprintChecks[client, default: 0] += 1
                 return SourceScanner.Fingerprint(files: [], signature: self.adapterFingerprints[client] ?? "")
             },
-            adapterRows: { client in
+            adapterRowGroups: { client in
                 self.rawReads[client, default: 0] += 1
                 if let gate = self.blockFirstRead {
                     self.blockFirstRead = nil
                     gate.wait()
                 }
-                return self.rowsByClient[client] ?? []
+                return (self.rowsByClient[client] ?? []).map { [$0] }
             },
             pricingLookup: { model, policy in
                 self.pricingLookups[model, default: 0] += 1
@@ -2116,8 +2116,8 @@ func runAntigravityTests() {
         {"type":"usage","sessionId":"session-ws-1","modelId":"gemini-3.7-flash","input":100,"output":50,"cacheRead":20,"cacheWrite":0,"reasoning":10,"timestamp":null}
         """
         try? sessionContent.write(toFile: sessionsDir1 + "/session-ws-1-abc.jsonl", atomically: true, encoding: .utf8)
-        let rows = Adapters.collectAntigravityRows()
-        check(rows.count >= 0, "A9 collectAntigravityRows runs without error")
+        let rows = Adapters.collectAntigravityRowGroups().flatMap { $0 }
+        check(rows.count >= 0, "A9 collectAntigravityRowGroups runs without error")
     }
     // A10: SourceScanner included filter and fingerprinting for Antigravity files
     do {
@@ -2171,8 +2171,8 @@ func runMemoryLeakAndCacheTests() {
 
         // Parse with multiple successive timestamps
         for ts: Double in [1000, 2000, 3000, 4000, 5000] {
-            _ = Adapters.collectAntigravityRows()
-            let rows = Adapters.collectAntigravityRows()
+            _ = Adapters.collectAntigravityRowGroups()
+            let rows = Adapters.collectAntigravityRowGroups().flatMap { $0 }
             check(rows.count >= 0, "M2.2: collect runs for ts=\(ts)")
         }
 

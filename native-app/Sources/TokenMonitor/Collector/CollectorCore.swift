@@ -34,7 +34,10 @@ struct CollectorEnvironment {
     var now: () -> Date
     var settings: () -> [String: Any]
     var adapterFingerprint: (String) -> SourceScanner.Fingerprint
-    var adapterRows: (String) -> [UsageCore.UsageRow]
+    /// Per-file row groups: each array is shared copy-on-write with the
+    /// adapter parse cache, so the raw snapshot below pins no second copy
+    /// of the dataset.
+    var adapterRowGroups: (String) -> [[UsageCore.UsageRow]]
     var pricingLookup: (String, PricingPolicy) -> TokscalePricing?
     var tokscaleFingerprint: ([String]) -> SourceScanner.Fingerprint
     var tokscaleAntigravitySync: () -> Bool
@@ -51,7 +54,7 @@ struct CollectorEnvironment {
         now: @escaping () -> Date,
         settings: @escaping () -> [String: Any],
         adapterFingerprint: @escaping (String) -> SourceScanner.Fingerprint,
-        adapterRows: @escaping (String) -> [UsageCore.UsageRow],
+        adapterRowGroups: @escaping (String) -> [[UsageCore.UsageRow]],
         pricingLookup: @escaping (String, PricingPolicy) -> TokscalePricing?,
         tokscaleFingerprint: @escaping ([String]) -> SourceScanner.Fingerprint,
         tokscaleAntigravitySync: @escaping () -> Bool,
@@ -66,7 +69,7 @@ struct CollectorEnvironment {
         self.now = now
         self.settings = settings
         self.adapterFingerprint = adapterFingerprint
-        self.adapterRows = adapterRows
+        self.adapterRowGroups = adapterRowGroups
         self.pricingLookup = pricingLookup
         self.tokscaleFingerprint = tokscaleFingerprint
         self.tokscaleAntigravitySync = tokscaleAntigravitySync
@@ -86,13 +89,13 @@ struct CollectorEnvironment {
             adapterFingerprint: { client in
                 SourceScanner.fingerprint(client: client, roots: SourceScanner.adapterRoots(client))
             },
-            adapterRows: { client in
+            adapterRowGroups: { client in
                 switch client {
-                case "proma": return Adapters.collectPromaRows()
-                case "hanako": return Adapters.collectHanakoRows()
-                case "dsh": return Adapters.collectDshRows()
-                case "antigravity": return Adapters.collectAntigravityRows()
-                case "kimi": return Adapters.collectKimiRows()
+                case "proma": return Adapters.collectPromaRowGroups()
+                case "hanako": return Adapters.collectHanakoRowGroups()
+                case "dsh": return Adapters.collectDshRowGroups()
+                case "antigravity": return Adapters.collectAntigravityRowGroups()
+                case "kimi": return Adapters.collectKimiRowGroups()
                 default: return []
                 }
             },
@@ -231,12 +234,21 @@ final class Collector {
 
     // MARK: - Cache models (review round 3.1)
 
-    /// Raw cache: fingerprint + parsed rows. Only a fingerprint change
-    /// re-reads source files.
+    /// Raw cache: fingerprint + per-file row groups. Only a fingerprint
+    /// change re-reads source files. The groups share storage with the
+    /// adapter parse cache (copy-on-write), so holding them pins no
+    /// second copy of the dataset; derivation materializes a transient
+    /// flat, deterministically sorted array and discards it.
     struct RawSnapshot {
         var fingerprint: String
-        var rows: [UsageCore.UsageRow]
+        var rowGroups: [[UsageCore.UsageRow]]
         var models: [String]
+
+        /// Transient flat view for one derivation pass, ordered exactly as
+        /// the old merged cache was (sortRows keeps float sums stable).
+        func materializedRows() -> [UsageCore.UsageRow] {
+            return Adapters.sortRows(rowGroups.flatMap { $0 })
+        }
     }
 
     /// Derived cache key: the raw fingerprint plus every query dimension
@@ -637,11 +649,11 @@ final class Collector {
                     raw = prior
                     PerfDiag.log(String(format: "source %@: changed but within re-read cooldown (%.0fs), reusing previous rows", client, adapterRecheckInterval(settings)))
                 } else {
-                    let rows = environment.adapterRows(client)
+                    let groups = environment.adapterRowGroups(client)
                     raw = RawSnapshot(
                         fingerprint: fp.signature,
-                        rows: rows,
-                        models: Self.distinctModelIds(rows)
+                        rowGroups: groups,
+                        models: Self.distinctModelIds(Adapters.sortRows(groups.flatMap { $0 }))
                     )
                     rawSnapshots[client] = raw
                     lastAdapterReadAt[client] = now
@@ -665,15 +677,18 @@ final class Collector {
                 if let derived = derivedSnapshots[client], derived.key == key {
                     adapterContributions[client] = derived
                 } else {
+                    // One transient flat copy per derivation; the snapshot
+                    // itself keeps only the shared per-file groups.
+                    let rows = raw.materializedRows()
                     let periods = adapterPeriodsFor(
-                        client: client, rows: raw.rows, pricing: pricingMap,
+                        client: client, rows: rows, pricing: pricingMap,
                         now: now, allTimeSince: allTimeSince
                     )
                     let history = Adapters.historyContributions(
-                        rows: raw.rows, client: client, pricingByModel: pricingMap
+                        rows: rows, client: client, pricingByModel: pricingMap
                     )
                     if let ledger = environment.historyLedger {
-                        let pricedRows: [UsageCore.UsageRow] = raw.rows.map { row in
+                        let pricedRows: [UsageCore.UsageRow] = rows.map { row in
                             var r = row
                             r.cost = Adapters.estimatedRowCost(row: row, pricingByModel: pricingMap) ?? 0
                             return r

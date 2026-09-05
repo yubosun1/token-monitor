@@ -420,8 +420,18 @@ enum Adapters {
         return filtered
     }
 
+    /// Pre-aggregated per (date, model): both consumers only ever combine
+    /// contributions within that key — HistoryCore.mergeAdapterContributions
+    /// sums tokens/cost/messages into day buckets and HistoryLedger sums
+    /// them into (date, client, model) cells while taking max() for
+    /// activeTimeMs — so grouping here is information-lossless, and the
+    /// retained array stays bounded by days×models instead of messages.
     static func historyContributions(rows: [UsageCore.UsageRow], client: String, pricingByModel: [String: TokscalePricing], timeZone: TimeZone = .current) -> [HistoryContribution] {
-        var out: [HistoryContribution] = []
+        struct GroupKey: Hashable {
+            let date: String
+            let modelId: String
+        }
+        var grouped: [GroupKey: HistoryContribution] = [:]
         for row in rows {
             // Row createdAt lives in startedAt for adapters.
             let date = localDateKey(row.startedAt, timeZone: timeZone)
@@ -434,21 +444,30 @@ enum Adapters {
             let started = row.startedAt
             let ended = row.lastUsedAt
             let activeTimeMs = max(0, min(ended - started, 8 * 60 * 60 * 1000))
-            out.append(HistoryContribution(
-                date: date,
-                client: client,
-                modelId: modelId.isEmpty ? "unknown" : modelId,
-                input: max(0, Int(row.input.rounded())),
-                output: max(0, Int(row.output.rounded())),
-                cacheRead: max(0, Int(row.cacheRead.rounded())),
-                cacheWrite: max(0, Int(row.cacheWrite.rounded())),
-                reasoning: max(0, Int(row.reasoning.rounded())),
-                cost: cost ?? 0,
-                messages: 1,
-                activeTimeMs: activeTimeMs
-            ))
+            let key = GroupKey(date: date, modelId: modelId.isEmpty ? "unknown" : modelId)
+            let g = grouped[key] ?? HistoryContribution(
+                date: key.date, client: client, modelId: key.modelId,
+                input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0,
+                cost: 0, messages: 0, activeTimeMs: 0
+            )
+            grouped[key] = HistoryContribution(
+                date: g.date,
+                client: g.client,
+                modelId: g.modelId,
+                input: g.input + max(0, Int(row.input.rounded())),
+                output: g.output + max(0, Int(row.output.rounded())),
+                cacheRead: g.cacheRead + max(0, Int(row.cacheRead.rounded())),
+                cacheWrite: g.cacheWrite + max(0, Int(row.cacheWrite.rounded())),
+                reasoning: g.reasoning + max(0, Int(row.reasoning.rounded())),
+                cost: g.cost + (cost ?? 0),
+                messages: g.messages + 1,
+                activeTimeMs: max(g.activeTimeMs, activeTimeMs)
+            )
         }
-        return out
+        // Deterministic order: the merged day buckets sum costs in
+        // contribution order, and floating-point addition is order-sensitive
+        // at the last ulp.
+        return grouped.values.sorted { ($0.date, $0.modelId) < ($1.date, $1.modelId) }
     }
 
     /// Deterministic ordering for collected rows: Dictionary-backed parse
@@ -468,17 +487,17 @@ enum Adapters {
 
     static let promaRoot = NSHomeDirectory() + "/.proma/agent-sessions"
 
-    static func collectPromaRows() -> [UsageCore.UsageRow] {
+    static func collectPromaRowGroups() -> [[UsageCore.UsageRow]] {
         let sourceId = sourceNamespace(promaRoot)
         let files = jsonlFiles(root: promaRoot, recursive: false, client: "proma")
         pruneParseCache(client: "proma", activePaths: Set(files.map { $0.path }))
-        var rows: [UsageCore.UsageRow] = []
+        var groups: [[UsageCore.UsageRow]] = []
         for file in files {
             autoreleasepool {
-                rows.append(contentsOf: promaFileRows(file, sourceId: sourceId))
+                groups.append(promaFileRows(file, sourceId: sourceId))
             }
         }
-        return sortRows(rows)
+        return groups
     }
 
     /// Parse one proma session file, memoized by (path, mtime, size).
@@ -580,13 +599,13 @@ enum Adapters {
         var messageIds: [String] = []
     }
 
-    static func collectHanakoRows() -> [UsageCore.UsageRow] {
+    static func collectHanakoRowGroups() -> [[UsageCore.UsageRow]] {
         var allFiles: [URL] = []
         for root in hanakoRoots {
             allFiles.append(contentsOf: jsonlFiles(root: root, recursive: true, client: "hanako"))
         }
         pruneParseCache(client: "hanako", activePaths: Set(allFiles.map { $0.path }))
-        var rows: [UsageCore.UsageRow] = []
+        var groups: [[UsageCore.UsageRow]] = []
         var seenMessageIds = Set<String>()
         // Messages without an id cannot be deduped across the sessions and
         // activity roots by message id. Mirror files carry the same content
@@ -599,11 +618,14 @@ enum Adapters {
             for file in jsonlFiles(root: root, recursive: true, client: "hanako") {
                 let parsed = hanakoFileRows(file, sourceId: sourceId)
                 // Cross-file (and cross-root) message dedupe over cached rows.
+                // `kept` stays nil while nothing is filtered so a clean
+                // file's group shares its cached array storage.
+                var kept: [UsageCore.UsageRow]? = nil
                 for i in 0..<parsed.rows.count {
                     let messageId = i < parsed.messageIds.count ? parsed.messageIds[i] : ""
+                    let duplicate: Bool
                     if !messageId.isEmpty {
-                        if seenMessageIds.contains(messageId) { continue }
-                        seenMessageIds.insert(messageId)
+                        duplicate = !seenMessageIds.insert(messageId).inserted
                     } else {
                         let row = parsed.rows[i]
                         let base = (row.sessionId ?? "").split(separator: "@").first.map(String.init) ?? row.sessionId ?? ""
@@ -615,13 +637,18 @@ enum Adapters {
                             String(format: "%.1f", row.cacheRead),
                             String(format: "%.1f", row.cacheWrite)
                         ].joined(separator: "|")
-                        if !seenFallbackKeys.insert(fallbackKey).inserted { continue }
+                        duplicate = !seenFallbackKeys.insert(fallbackKey).inserted
                     }
-                    rows.append(parsed.rows[i])
+                    if duplicate {
+                        if kept == nil { kept = Array(parsed.rows[0..<i]) }
+                    } else {
+                        kept?.append(parsed.rows[i])
+                    }
                 }
+                groups.append(kept ?? parsed.rows)
             }
         }
-        return sortRows(rows)
+        return groups
     }
 
     /// Parse one hanako session/activity file, memoized by (path, mtime, size).
@@ -701,9 +728,9 @@ enum Adapters {
         return antigravityCacheRoots.map { $0 + "/sessions" }.filter { FileManager.default.fileExists(atPath: $0) }
     }
 
-    static func collectAntigravityRows() -> [UsageCore.UsageRow] {
+    static func collectAntigravityRowGroups() -> [[UsageCore.UsageRow]] {
         let sessionTimestamps = loadAntigravityManifestTimestamps()
-        var rows: [UsageCore.UsageRow] = []
+        var groups: [[UsageCore.UsageRow]] = []
         var seenFileNames = Set<String>()
 
         let defaultRoot = antigravitySessionsRoot
@@ -721,11 +748,11 @@ enum Adapters {
                 let filename = file.lastPathComponent
                 guard seenFileNames.insert(filename).inserted else { continue }
                 autoreleasepool {
-                    rows.append(contentsOf: antigravityFileRows(file, sourceId: sourceId, sessionTimestamps: sessionTimestamps))
+                    groups.append(antigravityFileRows(file, sourceId: sourceId, sessionTimestamps: sessionTimestamps))
                 }
             }
         }
-        return sortRows(rows)
+        return groups
     }
 
     private static func loadAntigravityManifestTimestamps() -> [String: Double] {
@@ -851,8 +878,8 @@ enum Adapters {
         return Array(Set(roots)).filter { FileManager.default.fileExists(atPath: $0) }
     }
 
-    static func collectKimiRows() -> [UsageCore.UsageRow] {
-        var rows: [UsageCore.UsageRow] = []
+    static func collectKimiRowGroups() -> [[UsageCore.UsageRow]] {
+        var groups: [[UsageCore.UsageRow]] = []
         var seenSessionDirs = Set<String>()
 
         var allDirs: [URL] = []
@@ -869,10 +896,10 @@ enum Adapters {
         pruneParseCache(client: "kimi", activePaths: Set(allDirs.map { $0.path }))
         for sDir in allDirs {
             autoreleasepool {
-                rows.append(contentsOf: parseKimiSessionDir(sDir))
+                groups.append(parseKimiSessionDir(sDir))
             }
         }
-        return sortRows(rows)
+        return groups
     }
 
     static func findKimiSessionDirs(at rootPath: String) -> [URL] {
@@ -1162,25 +1189,32 @@ enum Adapters {
         }
     }
 
-    static func collectDshRows() -> [UsageCore.UsageRow] {
+    /// Per-file row groups, each array shared copy-on-write with the parse
+    /// cache (or a live incremental state). Callers needing a flat,
+    /// deterministically ordered list materialize it transiently with
+    /// `sortRows(groups.flatMap { $0 })` — the collector keeps only the
+    /// groups, so the dataset is not pinned in memory twice.
+    static func collectDshRowGroups() -> [[UsageCore.UsageRow]] {
         let diag = ProcessInfo.processInfo.environment["TOKEN_MONITOR_DIAG"] != nil
         let files = dshSessionFiles()
         // Bounded cache (round-4 Phase 5): entries for deleted session files
         // are pruned so the parse cache tracks live files only.
         pruneDshParseCache(activeFiles: Set(files.map { $0.path }))
-        var rows: [UsageCore.UsageRow] = []
+        var groups: [[UsageCore.UsageRow]] = []
         var totalEvents = 0
+        var totalRows = 0
         for file in files {
             autoreleasepool {
                 let parsed = cachedSessionFileRows(file)
                 totalEvents += parsed.events
-                rows.append(contentsOf: parsed.rows)
+                totalRows += parsed.rows.count
+                groups.append(parsed.rows)
             }
         }
         if diag {
-            NSLog("[dsh] files=%d usageEvents=%d rows=%d", files.count, totalEvents, rows.count)
+            NSLog("[dsh] files=%d usageEvents=%d rows=%d", files.count, totalEvents, totalRows)
         }
-        return sortRows(rows)
+        return groups
     }
 
     struct DshFileResult {
