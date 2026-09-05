@@ -2032,6 +2032,49 @@ func runDshCorruptFrameTests() {
     Adapters.dropClientCaches(["dsh"])
 }
 
+// MARK: - DSH reasoning token tests
+
+/// dsh usage payloads carry `reasoningTokens` (real logs: 256/5474 events);
+/// makeDshRow must surface them on the row instead of hardcoding 0, in both
+/// the full-parse and incremental-delta paths, and the session-detail turn
+/// events must carry them too.
+func t66DshReasoningTests() {
+    let fm = FileManager.default
+    let dir = fm.temporaryDirectory.appendingPathComponent("tm-dsh-reasoning-\(UUID().uuidString)")
+    let s1 = dir.appendingPathComponent("session-1")
+    try! fm.createDirectory(at: s1, withIntermediateDirectories: true)
+    defer { try? fm.removeItem(at: dir) }
+    let f1 = s1.appendingPathComponent("session.jsonl.zstd")
+
+    let head = "{\"type\":\"session\",\"seq\":0,\"createdAt\":\"2026-08-15T10:00:00+08:00\"}\n"
+        + "{\"type\":\"assistant/chunk\",\"seq\":1,\"time\":\"2026-08-15T10:00:10+08:00\",\"data\":{\"turn\":1,\"step\":1,\"chunk\":{\"type\":\"usage\",\"usage\":{\"inputTokens\":100,\"outputTokens\":50,\"cacheReadTokens\":0,\"cacheWriteTokens\":0,\"reasoningTokens\":640}}}}\n"
+        + "{\"type\":\"assistant/chunk\",\"seq\":2,\"time\":\"2026-08-15T10:00:15+08:00\",\"data\":{\"turn\":1,\"step\":1,\"chunk\":{\"type\":\"finish\",\"replayState\":{\"model\":\"deepseek-chat\"}}}}\n"
+
+    // Full parse: reasoning lands on the row.
+    try! compressZstd(head).write(to: f1)
+    let r1 = Adapters.cachedSessionFileRows(f1)
+    checkEqual(r1.rows.count, 1, "t66 full parse row count")
+    checkEqual(r1.rows.first?.reasoning ?? 0, 640, "t66 full parse reasoning from reasoningTokens")
+
+    // Incremental path: an appended usage event with reasoning.
+    let delta = "{\"type\":\"assistant/chunk\",\"seq\":3,\"time\":\"2026-08-15T10:01:00+08:00\",\"data\":{\"turn\":2,\"step\":1,\"chunk\":{\"type\":\"usage\",\"usage\":{\"inputTokens\":200,\"outputTokens\":60,\"cacheReadTokens\":0,\"cacheWriteTokens\":0,\"reasoningTokens\":128}}}}\n"
+        + "{\"type\":\"assistant/chunk\",\"seq\":4,\"time\":\"2026-08-15T10:01:05+08:00\",\"data\":{\"turn\":2,\"step\":1,\"chunk\":{\"type\":\"finish\",\"replayState\":{\"model\":\"deepseek-chat\"}}}}\n"
+    let fh = try! FileHandle(forWritingTo: f1)
+    try! fh.seekToEnd()
+    fh.write(compressZstd(delta))
+    try! fh.close()
+    let r2 = Adapters.cachedSessionFileRows(f1)
+    checkEqual(r2.rows.count, 2, "t66 delta append row count")
+    checkEqual(r2.rows.map { $0.reasoning }.sorted(), [128, 640], "t66 delta path keeps reasoning on both rows")
+
+    // Session detail: turn events carry reasoning for the popup.
+    let parsed = SessionDetailCore.parseDshLog(head)
+    checkEqual(parsed.events.count, 1, "t66 detail turn count")
+    checkEqual(parsed.events.first?.tokens.reasoning ?? 0, 640, "t66 detail turn reasoning")
+
+    Adapters.dropClientCaches(["dsh"])
+}
+
 func runVisibilityTests() {
     // V1: duplicate hides/shows emit exactly one event each.
     do {
@@ -4042,6 +4085,7 @@ t62ZeroBalanceKeepsHistoryTests()
 t63CredentialsFilePermissionTests()
 t64BalanceStorePermissionTests()
 t65DeepseekKeyNormalizeTests()
+t66DshReasoningTests()
 runSessionDetailCoreTests()
 print("fixture checks: \(checkCount) checks, \(failureCount) failures")
 if failureCount > 0 { exit(1) }

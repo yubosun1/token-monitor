@@ -457,7 +457,7 @@ enum SessionDetailCore {
                         output: num(usage["outputTokens"]),
                         cacheRead: num(usage["cacheReadTokens"]),
                         cacheWrite: num(usage["cacheWriteTokens"]),
-                        reasoning: 0
+                        reasoning: num(usage["reasoningTokens"])
                     )
                     e.tools = uniqueTools(pendingTools["\(turn):\(step)"] ?? [])
                     events.append(e)

@@ -1727,7 +1727,7 @@ enum Adapters {
             output: UsageCore.doubleValue(usage["outputTokens"]),
             cacheRead: UsageCore.doubleValue(usage["cacheReadTokens"]),
             cacheWrite: UsageCore.doubleValue(usage["cacheWriteTokens"]),
-            reasoning: 0,
+            reasoning: UsageCore.doubleValue(usage["reasoningTokens"]),
             messageCount: 1,
             cost: 0,
             startedAt: createdAt,
