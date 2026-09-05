@@ -3678,6 +3678,19 @@ func t63CredentialsFilePermissionTests() {
     checkEqual(store.deepseekApiKey(), "sk-existing", "t63 round-trip read after overwrite")
 }
 
+func t64BalanceStorePermissionTests() {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("tm-balance-store-\(UUID().uuidString)")
+    try! FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let storePath = dir.appendingPathComponent("deepseek-balance-v2.json").path
+    DeepseekBalance.storePathOverride = storePath
+    defer { DeepseekBalance.storePathOverride = nil }
+
+    _ = DeepseekBalance.recordConsumption(accountKey: "t64-account", currency: "CNY", paid: 10, now: Int64(1_760_000_000_000))
+    check(FileManager.default.fileExists(atPath: storePath), "t64 balance store persisted")
+    checkEqual(posixPermissions(of: storePath), 0o600, "t64 balance store is 0600")
+}
+
 func posixPermissions(of path: String) -> Int {
     ((try? FileManager.default.attributesOfItem(atPath: path))?[.posixPermissions] as? NSNumber)?.intValue ?? -1
 }
@@ -3708,6 +3721,7 @@ t59AntigravityLockCleanupTests()
 t60StaleLockErrorPatternTests()
 t62ZeroBalanceKeepsHistoryTests()
 t63CredentialsFilePermissionTests()
+t64BalanceStorePermissionTests()
 print("fixture checks: \(checkCount) checks, \(failureCount) failures")
 if failureCount > 0 { exit(1) }
 

@@ -361,7 +361,24 @@ enum DeepseekBalance {
 
     private static func writeJson(_ document: JSON, to path: String) {
         guard let data = try? JSONSerialization.data(withJSONObject: document) else { return }
-        try? data.write(to: URL(fileURLWithPath: path), options: .atomic)
+        let url = URL(fileURLWithPath: path)
+        // Same temp-file chmod-before-rename pattern as the credentials
+        // store: the balance history must never sit at the umask default.
+        let tempURL = url.appendingPathExtension("tmp-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+        guard (try? data.write(to: tempURL)) != nil else { return }
+        do {
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: tempURL.path)
+        } catch {
+            NSLog("[deepseek-balance] chmod 0600 failed, keeping previous file: %@", String(describing: error))
+            return
+        }
+        _ = try? FileManager.default.replaceItemAt(url, withItemAt: tempURL)
+        do {
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        } catch {
+            NSLog("[deepseek-balance] post-rename chmod 0600 failed: %@", String(describing: error))
+        }
     }
 
     private static func jsonEqual(_ a: JSON, _ b: JSON) -> Bool {
