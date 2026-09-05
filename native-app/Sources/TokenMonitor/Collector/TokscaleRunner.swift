@@ -120,6 +120,9 @@ final class TokscaleRunner {
             process?.terminate()
         }
         DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: timeoutWorkItem)
+        // Cancel on every exit path — in particular when run() throws
+        // below, so the timer can never fire against a stale process.
+        defer { timeoutWorkItem.cancel() }
 
         let started = Date()
         try process.run()
@@ -132,7 +135,6 @@ final class TokscaleRunner {
             lock.unlock()
         }
         let drained = Self.drainOutput(process: process, outPipe: outPipe, errPipe: errPipe, timeout: timeout)
-        timeoutWorkItem.cancel()
         let elapsedMs = Date().timeIntervalSince(started) * 1000
 
         let stdout = drained.stdout
