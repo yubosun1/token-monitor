@@ -16,7 +16,7 @@
 
 ## 核心特性
 
-- **极致低占用**：告别 Electron 的资源开销，后台常驻内存仅约 15MB；窗口隐藏 30 秒后自动回收 WebContent 进程，再次唤出毫秒级呈现。
+- **极致低占用**：告别 Electron 的资源开销，后台常驻内存约 40–60MB；窗口隐藏 30 秒后自动回收 WebContent 进程，再次唤出毫秒级呈现。
 - **8 大 AI 客户端用量追踪**：
   - **Tokscale 驱动**：Claude Code、Codex、WorkBuddy
   - **Swift 原生解析**：Kimi、Proma、Hanako、Antigravity、DeepSeek Harness（zstd 流式解压）
@@ -58,7 +58,7 @@
 
 ```bash
 ./native-app/scripts/build-app.sh        # 构建并打包应用
-./native-app/scripts/check-fixtures.sh   # 运行数据采集与聚合逻辑校验测试 (400+ checks)
+./native-app/scripts/check-fixtures.sh   # 运行数据采集与聚合逻辑校验测试 (600+ checks)
 ```
 
 ---
