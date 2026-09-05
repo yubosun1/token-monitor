@@ -3206,6 +3206,20 @@ func runTokscaleDecodeTests() {
     }
 }
 
+// MARK: - JSONL BOM tests
+
+/// A UTF-8 BOM at the head of a jsonl file must not leak into the first
+/// line's re-encoded data (String(data:encoding:.utf8) keeps it as
+/// U+FEFF); parseJsonlLines strips it.
+func t57JsonlBomTests() {
+    var data = Data([0xEF, 0xBB, 0xBF])
+    data.append(Data("{\"type\":\"message\",\"id\":\"bom-1\"}\n{\"type\":\"message\",\"id\":\"bom-2\"}\n".utf8))
+    let parsed = Adapters.parseJsonlLines(data)
+    checkEqual(parsed.count, 2, "t57 BOM-prefixed file parses both lines")
+    checkEqual(parsed[0]["id"] as? String, "bom-1", "t57 first line intact after BOM strip")
+    checkEqual(parsed[1]["id"] as? String, "bom-2", "t57 second line unaffected")
+}
+
 // MARK: - DSH torn delta tail tests
 
 /// A delta that ends mid-line must not lose the line: the raw bytes are
@@ -3353,6 +3367,7 @@ runHistoryLedgerTests()
 runTokscaleDecodeTests()
 t53DshTornTailTests()
 t55DshTouchOnlyStampTests()
+t57JsonlBomTests()
 print("fixture checks: \(checkCount) checks, \(failureCount) failures")
 if failureCount > 0 { exit(1) }
 

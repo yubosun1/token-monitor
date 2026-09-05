@@ -307,8 +307,12 @@ enum Adapters {
 
     static func parseJsonlLines(_ data: Data) -> [JSON] {
         guard let text = String(data: data, encoding: .utf8) else { return [] }
+        // String(data:encoding:) keeps a leading UTF-8 BOM as U+FEFF; a BOM
+        // would survive into the first line's re-encoded data, so strip it
+        // before splitting.
+        let body = text.first == "\u{FEFF}" ? String(text.dropFirst()) : text
         var objects: [JSON] = []
-        for line in text.split(whereSeparator: \.isNewline) {
+        for line in body.split(whereSeparator: \.isNewline) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8) else { continue }
             autoreleasepool {
