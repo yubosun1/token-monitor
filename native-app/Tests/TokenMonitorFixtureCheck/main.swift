@@ -2757,6 +2757,77 @@ func runHistoryLedgerTests() {
         let third = ledger.fetchHistoryDays(clients: nil)
         check(third.contains { $0.date == "2026-09-01" }, "L12.4: history refreshed after record without fetchPeriods")
     }
+
+    // L13: querySessionModelBreakdown honors the period parameter. Dates are
+    // computed relative to the real run date so the test holds on any day:
+    // one row today, one row at the start of the current month (they merge
+    // onto the same date when the run happens on the 1st), and a separate
+    // session holding only an undated (date = '') row. today/month must
+    // exclude undated rows; allTime/total must include them; a custom
+    // startDate/endDate range filters too.
+    do {
+        let now = Date()
+        let todayKey = DateFormatUtil.dayKey(now)
+        let monthStartKey = DateFormatUtil.monthKey(now) + "-01"
+        let dayMs = { (key: String) -> Double in
+            (DateFormatUtil.parseDayKey(key)?.timeIntervalSince1970 ?? 0) * 1000
+        }
+        let base = UsageCore.UsageRow(
+            client: "periodclient", sessionId: "", model: "",
+            provider: "", input: 0, output: 0, cacheRead: 0, cacheWrite: 0,
+            reasoning: 0, messageCount: 1, cost: 0, startedAt: 0, lastUsedAt: 0,
+            projectId: "", projectLabel: "", performance: nil
+        )
+        func row(_ session: String, _ model: String, _ date: String, _ tokens: Double, _ startedAtMs: Double) -> UsageCore.UsageRow {
+            var r = base
+            r.sessionId = session
+            r.model = model
+            r.input = tokens
+            r.startedAt = startedAtMs
+            return r
+        }
+        ledger.recordUsageRows([
+            row("s-period-filter", "model-today", todayKey, 500, now.timeIntervalSince1970 * 1000),
+            row("s-period-filter", "model-month", monthStartKey, 300, dayMs(monthStartKey)),
+            row("s-period-undated", "model-undated", "", 700, 0)
+        ])
+
+        // On the 1st of a month the month-start row lands on today's date,
+        // so the today filter picks both rows up; otherwise just today's.
+        let monthStartIsToday = monthStartKey == todayKey
+        let todayExpected = 500 + (monthStartIsToday ? 300 : 0)
+        let todayModels = monthStartIsToday ? 2 : 1
+
+        let today = ledger.querySessionModelBreakdown(client: "periodclient", sessionId: "s-period-filter", period: "today")
+        check(today != nil, "L13.1: today breakdown found")
+        checkEqual(today?["totalTokens"] as? Int ?? -1, todayExpected, "L13.2: today filter keeps only today's dated rows")
+        checkEqual((today?["models"] as? [[String: Any]])?.count ?? 0, todayModels, "L13.3: today filter returns only dated models")
+
+        let month = ledger.querySessionModelBreakdown(client: "periodclient", sessionId: "s-period-filter", period: "month")
+        checkEqual(month?["totalTokens"] as? Int ?? -1, 800, "L13.4: month filter keeps every dated row of the month")
+        checkEqual((month?["models"] as? [[String: Any]])?.count ?? 0, 2, "L13.5: month filter returns both dated models")
+
+        let allTime = ledger.querySessionModelBreakdown(client: "periodclient", sessionId: "s-period-filter", period: "allTime")
+        checkEqual(allTime?["totalTokens"] as? Int ?? -1, 800, "L13.6: allTime includes all dated rows")
+
+        let total = ledger.querySessionModelBreakdown(client: "periodclient", sessionId: "s-period-filter", period: "total")
+        checkEqual(total?["totalTokens"] as? Int ?? -1, 800, "L13.7: total (default) keeps the lifetime aggregate")
+
+        let custom = ledger.querySessionModelBreakdown(client: "periodclient", sessionId: "s-period-filter", period: "custom", startDate: todayKey, endDate: todayKey)
+        checkEqual(custom?["totalTokens"] as? Int ?? -1, todayExpected, "L13.8: custom startDate/endDate range filters")
+
+        // Undated rows are excluded from today/month (renderer shows
+        // "No activity in this period" via the nil fallback) but included
+        // in allTime/total.
+        let undatedToday = ledger.querySessionModelBreakdown(client: "periodclient", sessionId: "s-period-undated", period: "today")
+        check(undatedToday == nil, "L13.9: undated-only session yields nil for today")
+        let undatedMonth = ledger.querySessionModelBreakdown(client: "periodclient", sessionId: "s-period-undated", period: "month")
+        check(undatedMonth == nil, "L13.10: undated-only session yields nil for month")
+        let undatedAllTime = ledger.querySessionModelBreakdown(client: "periodclient", sessionId: "s-period-undated", period: "allTime")
+        checkEqual(undatedAllTime?["totalTokens"] as? Int ?? -1, 700, "L13.11: undated row included in allTime")
+        let undatedTotal = ledger.querySessionModelBreakdown(client: "periodclient", sessionId: "s-period-undated", period: "total")
+        checkEqual(undatedTotal?["totalTokens"] as? Int ?? -1, 700, "L13.12: undated row included in total")
+    }
 }
 
 // T-series: tokscale response decoding — one corrupt row must be skipped

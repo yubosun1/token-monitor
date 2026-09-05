@@ -833,7 +833,15 @@ final class HistoryLedger {
     }
 
     /// Queries the detailed per-model token breakdown for a specific session across its lifetime or period.
-    func querySessionModelBreakdown(client: String, sessionId: String, period: String = "total") -> [String: Any]? {
+    ///
+    /// `period` mirrors the dashboard's period values ("today" / "month" /
+    /// "allTime" / "total"): it filters on the ledger's `date` column
+    /// ("yyyy-MM-dd"; "" for undated rows). Undated rows are included for
+    /// allTime/total and naturally excluded by today/month. A custom range
+    /// can be passed explicitly via startDate/endDate; the session-detail
+    /// invoke does not plumb them yet, so "custom" currently behaves like
+    /// allTime (no filter).
+    func querySessionModelBreakdown(client: String, sessionId: String, period: String = "total", startDate: String = "", endDate: String = "") -> [String: Any]? {
         lock.lock()
         defer { lock.unlock() }
         guard let db, !sessionId.isEmpty else { return nil }
@@ -852,6 +860,25 @@ final class HistoryLedger {
             whereClauses.append("client = '\(escapedClient)'")
         }
         whereClauses.append("(session_id = '\(escapedSessionId)' OR session_id = '\(baseSessionId)' OR session_id LIKE '\(baseSessionId)@%')")
+
+        // Period filter, same date conventions as fetchPeriods: local day /
+        // month keys against the date column; allTime and total leave the
+        // filter off so undated (date = '') rows stay included.
+        let now = Date()
+        switch period {
+        case "today":
+            whereClauses.append("date = '\(DateFormatUtil.dayKey(now))'")
+        case "month":
+            whereClauses.append("date LIKE '\(DateFormatUtil.monthKey(now))%'")
+        default:
+            break
+        }
+        if !startDate.isEmpty {
+            whereClauses.append("date >= '\(startDate.replacingOccurrences(of: "'", with: "''"))'")
+        }
+        if !endDate.isEmpty {
+            whereClauses.append("date <= '\(endDate.replacingOccurrences(of: "'", with: "''"))'")
+        }
 
         let whereSQL = "WHERE " + whereClauses.joined(separator: " AND ")
         let sql = """
