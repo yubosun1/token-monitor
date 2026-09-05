@@ -3498,6 +3498,47 @@ func XCTAssertSQLITE(_ condition: Bool) {
     check(condition, "sqlite operation succeeded")
 }
 
+// MARK: - Tokscale drain timeout tests
+
+/// The pipe drain must never freeze: when the child exits but a grandchild
+/// inherited the stdout/stderr pipe write ends (fork/exec fd-inheritance
+/// trap), EOF never arrives on its own. drainOutput must return within a
+/// bounded wall-clock budget and reap the grandchild via the process-group
+/// kill (/bin/sh puts background jobs in the shell's own process group).
+func t61DrainTimeoutGrandchildTests() {
+    let proc = Process()
+    proc.executableURL = URL(fileURLWithPath: "/bin/sh")
+    proc.arguments = ["-c", "sleep 30 & echo slp=$!"]
+    let outPipe = Pipe()
+    let errPipe = Pipe()
+    proc.standardOutput = outPipe
+    proc.standardError = errPipe
+    try! proc.run()
+    let started = Date()
+    let drained = TokscaleRunner.drainOutput(process: proc, outPipe: outPipe, errPipe: errPipe,
+                                             timeout: 1, grace: 1)
+    let elapsed = Date().timeIntervalSince(started)
+    check(elapsed < 6.0, "t61 drain returns within a bounded budget (\(String(format: "%.2f", elapsed))s)")
+    check(elapsed >= 1.9, "t61 drain does not return before the kill deadline (\(String(format: "%.2f", elapsed))s)")
+    checkEqual(proc.terminationStatus, 0, "t61 wrapper shell exited cleanly")
+    let stdout = drained.stdout
+    guard let range = stdout.range(of: "slp=") else {
+        check(false, "t61 grandchild pid captured (stdout: \(stdout))")
+        return
+    }
+    let pidText = stdout[range.upperBound...].prefix { $0.isNumber }
+    guard let grandchildPID = Int32(pidText) else {
+        check(false, "t61 grandchild pid parsed (stdout: \(stdout))")
+        return
+    }
+    let alive = kill(grandchildPID, 0) == 0 || errno == EPERM
+    if alive {
+        // Test hygiene: never leave the orphan running.
+        kill(grandchildPID, SIGKILL)
+    }
+    check(!alive, "t61 grandchild reaped by the group kill")
+}
+
 runChecks()
 runKimiTests()
 runCollectorStateTests()
@@ -3519,6 +3560,7 @@ t55DshTouchOnlyStampTests()
 t56RecursiveListingTests()
 t57JsonlBomTests()
 t58KimiMixedFormatTests()
+t61DrainTimeoutGrandchildTests()
 print("fixture checks: \(checkCount) checks, \(failureCount) failures")
 if failureCount > 0 { exit(1) }
 

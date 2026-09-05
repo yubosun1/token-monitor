@@ -131,35 +131,12 @@ final class TokscaleRunner {
             runningProcesses.removeAll { $0 === process }
             lock.unlock()
         }
-        // Drain stdout and stderr concurrently. Reading them sequentially can
-        // deadlock: if the child fills the stderr pipe buffer (~64KB) while
-        // stdout is still being read, it blocks writing and never closes
-        // stdout, so the sequential reader waits until the timeout kills it.
-        let outHandle = outPipe.fileHandleForReading
-        let errHandle = errPipe.fileHandleForReading
-        final class PipeBox { var data = Data() }
-        let outBox = PipeBox()
-        let errBox = PipeBox()
-        let drainGroup = DispatchGroup()
-        drainGroup.enter()
-        DispatchQueue.global(qos: .utility).async {
-            outBox.data = outHandle.readDataToEndOfFile()
-            drainGroup.leave()
-        }
-        drainGroup.enter()
-        DispatchQueue.global(qos: .utility).async {
-            errBox.data = errHandle.readDataToEndOfFile()
-            drainGroup.leave()
-        }
-        drainGroup.wait()
-        try? outHandle.close()
-        try? errHandle.close()
-        process.waitUntilExit()
+        let drained = Self.drainOutput(process: process, outPipe: outPipe, errPipe: errPipe, timeout: timeout)
         timeoutWorkItem.cancel()
         let elapsedMs = Date().timeIntervalSince(started) * 1000
 
-        let stdout = String(data: outBox.data, encoding: .utf8) ?? ""
-        let stderr = String(data: errBox.data, encoding: .utf8) ?? ""
+        let stdout = drained.stdout
+        let stderr = drained.stderr
 
         if PerfDiag.enabled {
             lock.lock()
@@ -170,6 +147,85 @@ final class TokscaleRunner {
                                 n, process.processIdentifier, args.joined(separator: " "), elapsedMs, process.terminationStatus))
         }
         return Result(stdout: stdout, stderr: stderr, exitCode: process.terminationStatus)
+    }
+
+    /// Drains one spawned subprocess's pipes with a hard wall-clock budget.
+    /// `timeout` matches the SIGTERM deadline `run` already armed; the short
+    /// `grace` lets the pipes finish draining after a SIGTERM before the
+    /// drain is declared stuck. On expiry the process is SIGKILLed — the
+    /// negative-pid form covers a process group the child heads (wrapper
+    /// shells put background jobs in the shell's group), so grandchildren
+    /// that inherited a pipe write end die with it — and the read ends are
+    /// closed so the drain handlers observe EOF. The call therefore always
+    /// returns within `timeout + 2 * grace`, even when a grandchild keeps
+    /// the pipes open forever (fork/exec fd-inheritance trap); the output
+    /// may be partial on the expiry path.
+    static func drainOutput(process: Process, outPipe: Pipe, errPipe: Pipe,
+                            timeout: TimeInterval, grace: TimeInterval = 2) -> (stdout: String, stderr: String) {
+        // The handlers append on their own queue while the caller reads the
+        // snapshot, so the boxes carry their own lock. A semaphore per pipe
+        // is signaled exactly once at EOF (or read error); unlike a
+        // DispatchGroup it tolerates being signaled from a handler that
+        // raced the close on the timeout path.
+        final class PipeBox {
+            private let lock = NSLock()
+            private var storage = Data()
+            func append(_ data: Data) { lock.lock(); storage.append(data); lock.unlock() }
+            func snapshot() -> Data { lock.lock(); defer { lock.unlock() }; return storage }
+        }
+        let outBox = PipeBox()
+        let errBox = PipeBox()
+        let outDone = DispatchSemaphore(value: 0)
+        let errDone = DispatchSemaphore(value: 0)
+        let outHandle = outPipe.fileHandleForReading
+        let errHandle = errPipe.fileHandleForReading
+
+        func startDrain(_ handle: FileHandle, into box: PipeBox, done: DispatchSemaphore) {
+            // Drain stdout and stderr concurrently. A plain sequential read
+            // can deadlock: if the child fills the stderr pipe buffer
+            // (~64KB) while stdout is still being read, it blocks writing
+            // and never closes stdout. The raw read() keeps the handler
+            // exception-free even after the timeout path closes the handle
+            // from another thread (FileHandle read APIs raise instead).
+            handle.readabilityHandler = { h in
+                var buffer = [UInt8](repeating: 0, count: 65536)
+                let count = read(h.fileDescriptor, &buffer, buffer.count)
+                if count > 0 {
+                    box.append(Data(buffer[0..<count]))
+                } else if count < 0, errno == EINTR {
+                    // Interrupted syscall; the ready event is re-armed.
+                } else {
+                    // EOF, or EBADF after the timeout path closed the
+                    // handle: nothing more will arrive.
+                    h.readabilityHandler = nil
+                    done.signal()
+                }
+            }
+        }
+        startDrain(outHandle, into: outBox, done: outDone)
+        startDrain(errHandle, into: errBox, done: errDone)
+
+        // Wait for both pipes to reach EOF, bounded by the SIGTERM deadline
+        // plus the drain grace.
+        let killDeadline = DispatchTime.now() + timeout + grace
+        let outStuck = outDone.wait(timeout: killDeadline) == .timedOut
+        let errStuck = errDone.wait(timeout: killDeadline) == .timedOut
+        if outStuck || errStuck {
+            // Re-assert SIGTERM (the timer may have lagged), then hard-kill.
+            process.terminate()
+            kill(-process.processIdentifier, SIGKILL)
+            kill(process.processIdentifier, SIGKILL)
+            // Close the read ends so the handlers observe EOF/EBADF and the
+            // second wait below completes. If a grandchild still holds the
+            // pipes this wait expires, keeping the total budget bounded.
+            try? outHandle.close()
+            try? errHandle.close()
+            _ = outDone.wait(timeout: .now() + grace)
+            _ = errDone.wait(timeout: .now() + grace)
+        }
+        process.waitUntilExit()
+        return (String(data: outBox.snapshot(), encoding: .utf8) ?? "",
+                String(data: errBox.snapshot(), encoding: .utf8) ?? "")
     }
 
     private static let clientAliases: [String: [String]] = [
