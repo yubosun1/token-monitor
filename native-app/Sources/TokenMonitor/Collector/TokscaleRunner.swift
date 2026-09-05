@@ -410,7 +410,10 @@ final class TokscaleRunner {
     /// Cached pricing lookup. Routine collection reads the last known price
     /// without network I/O; an explicit refresh can bypass its TTL.
     func pricing(for modelId: String, policy: PricingPolicy = .cacheOnly) -> TokscalePricing? {
-        if pricingCache.isEmpty { loadDiskPricingCache() }
+        lock.lock()
+        let cacheIsEmpty = pricingCache.isEmpty
+        lock.unlock()
+        if cacheIsEmpty { loadDiskPricingCache() }
         let key = modelId.trimmingCharacters(in: .whitespaces).lowercased()
         guard !key.isEmpty else { return nil }
         lock.lock()
