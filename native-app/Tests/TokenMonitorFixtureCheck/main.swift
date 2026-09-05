@@ -2856,6 +2856,42 @@ func runHistoryLedgerTests() {
         checkClose(clientDayBack?.messages ?? 0, 9, "L14.5: per-client day messages not amplified", tolerance: 1e-9)
         checkClose(clientDayBack?.perClient["claude"]?.messages ?? 0, 4.5, "L14.6: per-client messages split proportionally", tolerance: 1e-9)
     }
+
+    // L15: querySessionModelBreakdown escapes LIKE wildcards in session ids.
+    // A base session id containing _ or % must only match its own @-suffixed
+    // rows, not look-alikes (an unescaped 'ab_cd@%' pattern also matched
+    // 'abXcd@...').
+    do {
+        let base = UsageCore.UsageRow(
+            client: "escapeclient", sessionId: "", model: "",
+            provider: "", input: 0, output: 0, cacheRead: 0, cacheWrite: 0,
+            reasoning: 0, messageCount: 1, cost: 0, startedAt: 1787400000000, lastUsedAt: 1787400000000,
+            projectId: "", projectLabel: "", performance: nil
+        )
+        func row(_ session: String, _ model: String, _ tokens: Double) -> UsageCore.UsageRow {
+            var r = base
+            r.sessionId = session
+            r.model = model
+            r.input = tokens
+            return r
+        }
+        ledger.recordUsageRows([
+            row("ab_cd@local", "m-underscore", 100),
+            row("abXcd@local", "m-lookalike", 50),
+            row("ab%cd@local", "m-percent", 200),
+            row("ab\\cd@local", "m-backslash", 300)
+        ])
+
+        let under = ledger.querySessionModelBreakdown(client: "escapeclient", sessionId: "ab_cd", period: "total")
+        checkEqual(under?["totalTokens"] as? Int ?? -1, 100, "L15.1: underscore base matches only its own session")
+        checkEqual((under?["models"] as? [[String: Any]])?.count ?? 0, 1, "L15.2: underscore lookup does not match the lookalike")
+
+        let percent = ledger.querySessionModelBreakdown(client: "escapeclient", sessionId: "ab%cd", period: "total")
+        checkEqual(percent?["totalTokens"] as? Int ?? -1, 200, "L15.3: percent base matches only its own session")
+
+        let backslash = ledger.querySessionModelBreakdown(client: "escapeclient", sessionId: "ab\\cd", period: "total")
+        checkEqual(backslash?["totalTokens"] as? Int ?? -1, 300, "L15.4: backslash base matches only its own session")
+    }
 }
 
 // T-series: tokscale response decoding — one corrupt row must be skipped

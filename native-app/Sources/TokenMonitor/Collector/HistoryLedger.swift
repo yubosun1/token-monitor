@@ -878,7 +878,15 @@ final class HistoryLedger {
         if !escapedClient.isEmpty {
             whereClauses.append("client = '\(escapedClient)'")
         }
-        whereClauses.append("(session_id = '\(escapedSessionId)' OR session_id = '\(baseSessionId)' OR session_id LIKE '\(baseSessionId)@%')")
+        // % and _ are LIKE wildcards; single-quote escaping prevents
+        // injection but not wildcard mis-matching, so escape them in the
+        // pattern (session ids routinely contain underscores). The equality
+        // arms need no escaping.
+        let likeBaseSessionId = baseSessionId
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "%", with: "\\%")
+            .replacingOccurrences(of: "_", with: "\\_")
+        whereClauses.append("(session_id = '\(escapedSessionId)' OR session_id = '\(baseSessionId)' OR session_id LIKE '\(likeBaseSessionId)@%' ESCAPE '\\')")
 
         // Period filter, same date conventions as fetchPeriods: local day /
         // month keys against the date column; allTime and total leave the
