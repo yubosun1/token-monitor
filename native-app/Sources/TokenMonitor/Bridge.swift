@@ -330,6 +330,16 @@ final class BridgeCore {
 
     weak var delegate: BridgeDelegate?
 
+    /// Bring the actual login-item registration in line with the stored
+    /// setting. Called at app launch: SMAppService registrations do not
+    /// survive an app update (macOS drops them), so the toggle setting alone
+    /// is not enough — the registration must be re-applied whenever the app
+    /// starts, or users silently lose start-at-login after every update.
+    func reconcileStartAtLogin() {
+        let desired = settings.snapshot()["startAtLogin"] as? Bool ?? true
+        applyStartAtLogin(desired)
+    }
+
     private func applyStartAtLogin(_ enabled: Bool) {
         let service = SMAppService.mainApp
         do {

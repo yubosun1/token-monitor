@@ -33,6 +33,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, BridgeDelegate {
         // the background, like the Electron globalShortcut it replaces).
         ShortcutController.shared.onToggle = { [weak self] in self?.toggleMainWindow() }
         ShortcutController.shared.start(settings: BridgeCore.shared.settings.snapshot())
+        // Re-apply the start-at-login registration: macOS drops SMAppService
+        // registrations on app update, so the stored setting alone does not
+        // survive an update without this reconcile.
+        BridgeCore.shared.reconcileStartAtLogin()
         Collector.shared.start()
         LimitsRuntime.shared.start()
 
