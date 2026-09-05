@@ -3691,6 +3691,78 @@ func t64BalanceStorePermissionTests() {
     checkEqual(posixPermissions(of: storePath), 0o600, "t64 balance store is 0600")
 }
 
+// MARK: - Session detail core tests (dsh prompt/turn attribution, fallback periods)
+
+/// Dsh parse emits prompts and turns interleaved in log order, so each turn
+/// attaches to the prompt it follows; period filtering then keeps earlier
+/// prompts instead of dropping every exchange but the last one.
+func runSessionDetailCoreTests() {
+    let cal = Calendar.current
+    guard let today9 = cal.date(from: DateComponents(year: 2026, month: 6, day: 15, hour: 9)),
+          let today10 = cal.date(from: DateComponents(year: 2026, month: 6, day: 15, hour: 10)),
+          let yesterday10 = cal.date(from: DateComponents(year: 2026, month: 6, day: 14, hour: 10)) else {
+        check(false, "D1 fixture dates constructible")
+        return
+    }
+    let t9 = Int(today9.timeIntervalSince1970 * 1000)
+    let tYesterday = Int(yesterday10.timeIntervalSince1970 * 1000)
+
+    // Two turns, first with a tool call, both with explicit timestamps.
+    // The second turn happens yesterday so period filtering has something
+    // to prune (see D2).
+    let log = """
+    {"type":"session","seq":0,"createdAt":\(t9)}
+    {"type":"user/message","seq":1,"time":\(t9),"data":{"role":"user","content":[{"type":"text","text":"first prompt"}]}}
+    {"type":"tool/call","seq":2,"time":\(t9 + 1000),"data":{"turn":0,"step":0,"name":"Bash"}}
+    {"type":"assistant/chunk","seq":3,"time":\(t9 + 2000),"data":{"turn":0,"step":0,"chunk":{"type":"usage","usage":{"inputTokens":100,"outputTokens":20,"cacheReadTokens":0,"cacheWriteTokens":0}}}}
+    {"type":"user/message","seq":4,"time":\(tYesterday),"data":{"role":"user","content":[{"type":"text","text":"second prompt"}]}}
+    {"type":"assistant/chunk","seq":5,"time":\(tYesterday + 2000),"data":{"turn":1,"step":0,"chunk":{"type":"usage","usage":{"inputTokens":200,"outputTokens":40,"cacheReadTokens":0,"cacheWriteTokens":0}}}}
+    """
+    let (events, hasRealCost) = SessionDetailCore.parseDshLog(log)
+    let kinds = events.map { $0.kind }
+    checkEqual(kinds, [.prompt, .turn, .prompt, .turn], "D1 dsh events interleave prompts and turns in log order")
+    check(!hasRealCost, "D1 dsh log carries no real cost")
+    checkEqual(events.count, 4, "D1 four events parsed")
+    checkEqual(events[0].text, "first prompt", "D1 first prompt text")
+    checkEqual(events[1].tokens.input, 100, "D1 first turn input tokens")
+    checkEqual(events[1].tokens.output, 20, "D1 first turn output tokens")
+    checkEqual(events[1].tools, ["Bash"], "D1 first turn carries its tool")
+    checkEqual(Int(events[1].timestampMs), t9 + 2000, "D1 first turn uses its usage chunk timestamp")
+    checkEqual(events[2].text, "second prompt", "D1 second prompt text")
+    checkEqual(events[3].tokens.input, 200, "D1 second turn input tokens")
+
+    // Attribution end-to-end: groupEvents must bind each turn to the prompt
+    // that precedes it, and period filtering must keep the first exchange
+    // when only its turn falls inside the period.
+    do {
+        let sameDayLog = log + "\n{\"type\":\"user/message\",\"seq\":6,\"time\":\(tYesterday),\"data\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"yesterday prompt\"}]}}\n"
+            + "{\"type\":\"assistant/chunk\",\"seq\":7,\"time\":\(tYesterday + 2000),\"data\":{\"turn\":2,\"step\":0,\"chunk\":{\"type\":\"usage\",\"usage\":{\"inputTokens\":300,\"outputTokens\":10,\"cacheReadTokens\":0,\"cacheWriteTokens\":0}}}}\n"
+        let (allEvents, _) = SessionDetailCore.parseDshLog(sameDayLog)
+        let now = today10
+        let total = SessionDetailCore.finish(events: allEvents, hasRealCost: false, client: "dsh",
+                                             sessionId: "d1-session", period: "total",
+                                             sessionCost: 0, now: now)
+        let exchanges = total["exchanges"] as? [[String: Any]] ?? []
+        checkEqual(exchanges.count, 3, "D2 total keeps every exchange")
+        checkEqual(exchanges[0]["promptPreview"] as? String ?? "", "first prompt", "D2 first exchange owns the first prompt")
+        checkEqual(exchanges[0]["turnCount"] as? Int ?? 0, 1, "D2 first exchange owns only its own turn")
+        checkEqual(exchanges[1]["promptPreview"] as? String ?? "", "second prompt", "D2 second exchange owns the second prompt")
+        checkEqual(exchanges[1]["turnCount"] as? Int ?? 0, 1, "D2 second exchange owns only its own turn")
+        checkEqual(exchanges[2]["promptPreview"] as? String ?? "", "yesterday prompt", "D2 third exchange owns the yesterday prompt")
+
+        let today = SessionDetailCore.finish(events: allEvents, hasRealCost: false, client: "dsh",
+                                             sessionId: "d1-session", period: "today",
+                                             sessionCost: 0, now: now)
+        let todayExchanges = today["exchanges"] as? [[String: Any]] ?? []
+        checkEqual(todayExchanges.count, 1, "D2 today drops the exchanges whose turns are yesterday")
+        checkEqual(todayExchanges[0]["promptPreview"] as? String ?? "", "first prompt", "D2 today keeps the earlier prompt")
+        let todayTotals = today["totals"] as? [String: Any] ?? [:]
+        checkEqual(UsageCore.intValue(todayTotals["totalTokens"]), 120, "D2 today totalTokens reflect only in-period turns")
+        checkEqual(todayTotals["turnCount"] as? Int ?? -1, 1, "D2 today turnCount")
+        checkEqual(todayTotals["exchangeCount"] as? Int ?? -1, 1, "D2 today exchangeCount")
+    }
+}
+
 func t65DeepseekKeyNormalizeTests() {
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent("tm-deepseek-key-\(UUID().uuidString)")
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -3736,6 +3808,7 @@ t62ZeroBalanceKeepsHistoryTests()
 t63CredentialsFilePermissionTests()
 t64BalanceStorePermissionTests()
 t65DeepseekKeyNormalizeTests()
+runSessionDetailCoreTests()
 print("fixture checks: \(checkCount) checks, \(failureCount) failures")
 if failureCount > 0 { exit(1) }
 

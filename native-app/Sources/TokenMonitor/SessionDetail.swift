@@ -366,11 +366,16 @@ enum SessionDetailCore {
     /// envelope {type, seq, time, data}; user messages carry the message
     /// itself in `data`, assistant usage arrives as assistant/chunk usage
     /// chunks (same source the collector aggregates).
-    private static func parseDshLog(_ text: String) -> (events: [Event], hasRealCost: Bool) {
+    ///
+    /// Prompts and turns interleave in log order: each turn's usage chunk
+    /// follows the user message that prompted it, so a turn is emitted right
+    /// where it occurs. (Collecting turns in a second pass and appending
+    /// them after every prompt mis-attributed multi-turn sessions and made
+    /// period filtering drop earlier prompts.)
+    static func parseDshLog(_ text: String) -> (events: [Event], hasRealCost: Bool) {
         var events: [Event] = []
         var seenSeq = Set<Int>()
         var pendingTools: [String: [String]] = [:]
-        var usageEvents: [JSON] = []
         var headerCreatedAt = 0.0
         var lastTime = 0.0
         // A forked session's log is seeded with a byte-for-byte copy of its
@@ -440,32 +445,26 @@ enum SessionDetailCore {
                 let turn = payload["turn"] as? Int ?? 0
                 let step = payload["step"] as? Int ?? 0
                 if chunkType == "usage", let usage = chunk["usage"] as? JSON {
-                    usageEvents.append(["usage": usage, "turn": turn, "step": step, "time": time])
+                    // Use the usage chunk's own timestamp so a session
+                    // spanning local midnight shows its turns on the day
+                    // they happened (the popup's period filter keys off turn
+                    // timestamps).
+                    let eventTime = time
+                    let createdAt = eventTime > 0 ? eventTime : (headerCreatedAt > 0 ? headerCreatedAt : lastTime)
+                    var e = Event(kind: .turn, timestampMs: createdAt)
+                    e.tokens = Tokens(
+                        input: num(usage["inputTokens"]),
+                        output: num(usage["outputTokens"]),
+                        cacheRead: num(usage["cacheReadTokens"]),
+                        cacheWrite: num(usage["cacheWriteTokens"]),
+                        reasoning: 0
+                    )
+                    e.tools = uniqueTools(pendingTools["\(turn):\(step)"] ?? [])
+                    events.append(e)
                 }
             default:
                 break
             }
-        }
-
-        for event in usageEvents {
-            guard let usage = event["usage"] as? JSON else { continue }
-            let turn = event["turn"] as? Int ?? 0
-            let step = event["step"] as? Int ?? 0
-            // Use the usage event's own timestamp so a session spanning
-            // local midnight shows its turns on the day they happened (the
-            // popup's period filter keys off turn timestamps).
-            let eventTime = UsageCore.doubleValue(event["time"])
-            let createdAt = eventTime > 0 ? eventTime : (headerCreatedAt > 0 ? headerCreatedAt : lastTime)
-            var e = Event(kind: .turn, timestampMs: createdAt)
-            e.tokens = Tokens(
-                input: num(usage["inputTokens"]),
-                output: num(usage["outputTokens"]),
-                cacheRead: num(usage["cacheReadTokens"]),
-                cacheWrite: num(usage["cacheWriteTokens"]),
-                reasoning: 0
-            )
-            e.tools = uniqueTools(pendingTools["\(turn):\(step)"] ?? [])
-            events.append(e)
         }
         return (events, false)
     }
@@ -602,8 +601,8 @@ enum SessionDetailCore {
         ]
     }
 
-    private static func finish(events: [Event], hasRealCost: Bool, client: String, sessionId: String,
-                               period: String, sessionCost: Double, now: Date) -> JSON {
+    static func finish(events: [Event], hasRealCost: Bool, client: String, sessionId: String,
+                       period: String, sessionCost: Double, now: Date) -> JSON {
         var grouped = filterExchangesByPeriod(groupEvents(events), period, now)
         let filteredCost: Double
         if hasRealCost {
