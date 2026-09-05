@@ -610,6 +610,15 @@ final class Collector {
             PerfDiag.log("antigravity sync " + (synced ? "completed" : "failed"))
             syncSpan.end()
         }
+        // Idle housekeeping runs on every tick, ahead of the fingerprint
+        // gate: on an idle machine no fingerprint changes and the gated
+        // free paths never run, so without this the retained dsh decoder
+        // streams (~2.5 MB per session file) were held from launch until
+        // the next source change — i.e. effectively forever.
+        let freedStreams = Adapters.freeIdleDshStreams(now: now)
+        if freedStreams > 0 {
+            PerfDiag.log(String(format: "dsh: freed %d idle decoder stream(s)", freedStreams))
+        }
         for client in adapterClientIds where clients.contains(client) {
             autoreleasepool {
                 let span = PerfDiag.span("source-" + client)

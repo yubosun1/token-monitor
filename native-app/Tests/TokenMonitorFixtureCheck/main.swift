@@ -1561,6 +1561,63 @@ func runDshCacheTests() {
     checkEqual(Adapters.dshIncrementalStateCount, 0, "T15 disabled dsh frees streaming states")
 }
 
+// MARK: - DSH idle stream sweep tests
+
+/// The in-read free paths only run when a fingerprint change routes a tick
+/// through collectDshRows(); the per-tick idle sweep must free stable
+/// sessions' streams even when nothing ever changes again.
+func runDshIdleSweepTests() {
+    let fm = FileManager.default
+    let dir = fm.temporaryDirectory.appendingPathComponent("tm-dsh-sweep-\(UUID().uuidString)")
+    let s1 = dir.appendingPathComponent("session-1")
+    let s2 = dir.appendingPathComponent("session-2")
+    try! fm.createDirectory(at: s1, withIntermediateDirectories: true)
+    try! fm.createDirectory(at: s2, withIntermediateDirectories: true)
+    defer {
+        Adapters.dropClientCaches(["dsh"])
+        try? fm.removeItem(at: dir)
+    }
+    let f1 = s1.appendingPathComponent("session.jsonl.zstd")
+    let f2 = s2.appendingPathComponent("session.jsonl.zstd")
+
+    // T16a: a freshly written session keeps its stream through the sweep.
+    try! compressZstd(dshSessionLines(100)).write(to: f1)
+    _ = Adapters.cachedSessionFileRows(f1)
+    checkEqual(Adapters.dshIncrementalStateCount, 1, "T16a fresh session holds a stream")
+    checkEqual(Adapters.freeIdleDshStreams(), 0, "T16a sweep keeps a within-grace stream")
+    checkEqual(Adapters.dshIncrementalStateCount, 1, "T16a stream survives the sweep")
+
+    // T16b: past the grace window the sweep drops the stream but keeps the
+    // memoized rows.
+    checkEqual(Adapters.freeIdleDshStreams(now: Date().addingTimeInterval(3600)), 1, "T16b idle stream swept")
+    checkEqual(Adapters.dshIncrementalStateCount, 0, "T16b no streaming state left")
+    let c0 = Adapters.dshDecompressCount
+    let r1 = Adapters.cachedSessionFileRows(f1)
+    checkEqual(r1.rows.count, 1, "T16b rows still served from the parse cache")
+    checkEqual(Adapters.dshDecompressCount - c0, 0, "T16b swept session does not re-decompress")
+    checkEqual(Adapters.dshIncrementalStateCount, 0, "T16b cache hit does not resurrect a stream")
+
+    // T16c: an append after the sweep re-parses fully and retains a fresh
+    // stream (the file is young again), yielding correct rows.
+    let appended = "{\"type\":\"assistant/chunk\",\"seq\":10,\"time\":\"2026-08-15T10:01:00+08:00\",\"data\":{\"turn\":2,\"step\":1,\"chunk\":{\"type\":\"usage\",\"usage\":{\"inputTokens\":200,\"outputTokens\":20,\"cacheReadTokens\":0,\"cacheWriteTokens\":0}}}}\n"
+    let h = try! FileHandle(forWritingTo: f1)
+    try! h.seekToEnd()
+    h.write(compressZstd(appended))
+    try! h.close()
+    let r2 = Adapters.cachedSessionFileRows(f1)
+    checkEqual(r2.rows.count, 2, "T16c post-sweep append re-parses")
+    checkEqual(r2.rows.last?.input ?? 0, 200, "T16c appended row parsed")
+    checkEqual(Adapters.dshIncrementalStateCount, 1, "T16c stream re-retained for the active session")
+
+    // T16d: a session file already past the grace window at first parse
+    // never retains a stream at all — only its memoized rows.
+    try! compressZstd(dshSessionLines(300)).write(to: f2)
+    try! fm.setAttributes([.modificationDate: Date().addingTimeInterval(-3600)], ofItemAtPath: f2.path)
+    let r3 = Adapters.cachedSessionFileRows(f2)
+    checkEqual(r3.rows.count, 1, "T16d old session parses")
+    checkEqual(Adapters.dshIncrementalStateCount, 1, "T16d old session retains no stream")
+}
+
 // MARK: - DSH fork seedLength tests
 
 /// A forked session's log starts with a byte-for-byte copy of its parent's
@@ -2642,6 +2699,7 @@ runChecks()
 runKimiTests()
 runCollectorStateTests()
 runDshCacheTests()
+runDshIdleSweepTests()
 runDshForkSeedTests()
 runDshCorruptFrameTests()
 runVisibilityTests()

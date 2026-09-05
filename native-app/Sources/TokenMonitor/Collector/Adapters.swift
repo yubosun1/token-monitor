@@ -40,6 +40,11 @@ enum Adapters {
     private static var fileListCache: [String: (stamp: (Date, Int), urls: [URL])] = [:]
     private static var parseCache: [String: (stamp: (Date, Int), value: Any)] = [:]
     private static var decompressCounter = 0
+    /// How long a dsh session file may stay untouched before its retained
+    /// decoder stream is considered idle and freed. A session appending
+    /// faster than this keeps its stream; a slower one pays one full
+    /// re-parse per append, same as before the incremental path existed.
+    private static let dshStreamGrace: TimeInterval = 120
     /// Per-file streaming state for incremental re-reads of actively
     /// appending dsh sessions (see DshIncrementalState). Guarded by
     /// fileCacheLock; an entry is dropped after the session stops changing
@@ -110,6 +115,42 @@ enum Adapters {
                 freeDshStream(&state)
             }
         }
+    }
+
+    /// Free retained zstd streams whose session file has been stable past
+    /// the grace window. Runs on every collector tick: the in-read free
+    /// paths (cachedSessionFileRows/dshRead) only execute when a
+    /// fingerprint change routes the tick through collectDshRows(), so on
+    /// an idle machine — no fingerprint ever changes — every stream
+    /// created since launch (~2.5 MB each) was previously held forever.
+    /// Dropping the state is safe: a later append falls back to one full
+    /// re-parse, the same recovery as after a truncation.
+    @discardableResult
+    static func freeIdleDshStreams(now: Date = Date()) -> Int {
+        fileCacheLock.lock()
+        let states = dshIncrementalStates
+        fileCacheLock.unlock()
+        var freed = 0
+        for (path, state) in states {
+            let stamp = fileStamp(URL(fileURLWithPath: path))
+            // A stamp mismatch means the file was appended since the
+            // retained read: the stream is about to be delta-fed, keep it.
+            // A vanished file is freed here too rather than waiting for the
+            // next collect's pruneDshParseCache.
+            let stable = stamp == nil
+                || (stamp!.0 == state.stamp.mtime && stamp!.1 == state.stamp.size)
+            let idleSince = stamp?.0 ?? state.stamp.mtime
+            guard stable, now.timeIntervalSince(idleSince) > dshStreamGrace else { continue }
+            fileCacheLock.lock()
+            if var current = dshIncrementalStates[path],
+               current.stamp.mtime == state.stamp.mtime, current.stamp.size == state.stamp.size {
+                freeDshStream(&current)
+                dshIncrementalStates[path] = nil
+                freed += 1
+            }
+            fileCacheLock.unlock()
+        }
+        return freed
     }
 
     private static func fileStamp(_ url: URL) -> (mtime: Date, size: Int)? {
@@ -1117,7 +1158,7 @@ enum Adapters {
             // first stable tick would force a full re-parse on every append.
             if var state = dshIncrementalStates[file.path],
                state.stamp.mtime == stamp.mtime, state.stamp.size == stamp.size,
-               Date().timeIntervalSince(stamp.mtime) > 120 {
+               Date().timeIntervalSince(stamp.mtime) > dshStreamGrace {
                 freeDshStream(&state)
                 dshIncrementalStates[file.path] = nil
             }
@@ -1197,6 +1238,17 @@ enum Adapters {
             // Also drop any stale incremental entry: when this full parse is
             // the fallback of a failed delta feed, the old entry still
             // points at the stream that feed already freed.
+            dshIncrementalStates[file.path] = nil
+            parseCache[key] = (stamp, result)
+            fileCacheLock.unlock()
+            return result
+        }
+        // Only retain a stream for sessions that may still be appending:
+        // a file already past the grace window is done, and keeping a
+        // decoder for it would pin ~2.5 MB until the idle sweep runs.
+        if Date().timeIntervalSince(stamp.mtime) > dshStreamGrace {
+            ZSTD_freeDStream(stream)
+            fileCacheLock.lock()
             dshIncrementalStates[file.path] = nil
             parseCache[key] = (stamp, result)
             fileCacheLock.unlock()
