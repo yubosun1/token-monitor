@@ -654,8 +654,17 @@ function compactMonthLabel(label) {
 }
 function currentCurrency() { return currencyApi.normalizeCurrency(state.settings?.currency); }
 function formatCost(value) { return currencyApi.formatCurrencyFromUsd(value, currentCurrency()); }
+function effectiveCurrencyRates() {
+  return currencyApi.resolveEffectiveRates(state.settings?.currencyRatesEffective, state.settings?.currencyRates);
+}
+let appliedCurrencyRatesSignature = '';
 function applyEffectiveCurrencyRates() {
-  if (state.settings?.currencyRatesEffective) currencyApi.configureRates(state.settings.currencyRatesEffective);
+  const rates = effectiveCurrencyRates();
+  const signature = JSON.stringify(rates);
+  if (signature === appliedCurrencyRatesSignature) return false;
+  appliedCurrencyRatesSignature = signature;
+  currencyApi.configureRates(rates);
+  return true;
 }
 function formatRate(value) {
   const num = Number(value);
@@ -674,7 +683,7 @@ function syncCurrencyRateControls() {
   const mode = currencyRateMode(code);
   if (els.currencyRateModeAuto) els.currencyRateModeAuto.checked = mode === 'auto';
   if (els.currencyRateModeManual) els.currencyRateModeManual.checked = mode === 'manual';
-  const eff = Number(state.settings?.currencyRatesEffective?.[code]);
+  const eff = effectiveCurrencyRates()[code];
   if (mode === 'manual') {
     els.currencyRateManualField?.classList.remove('hidden');
     if (els.currencyRateStatus) els.currencyRateStatus.textContent = '';
@@ -686,8 +695,7 @@ function syncCurrencyRateControls() {
     els.currencyRateManualField?.classList.add('hidden');
     if (els.currencyRateStatus) {
       const info = state.settings?.currencyRateInfo;
-      if (!Number.isFinite(eff)) els.currencyRateStatus.textContent = '';
-      else if (info?.source) els.currencyRateStatus.textContent = t('settings.currency.rateLive', { rate: formatRate(eff), date: (info.date || '').slice(5) });
+      if (info?.source) els.currencyRateStatus.textContent = t('settings.currency.rateLive', { rate: formatRate(eff), date: (info.date || '').slice(5) });
       else els.currencyRateStatus.textContent = t('settings.currency.rateDefault', { rate: formatRate(eff) });
     }
   }
@@ -1264,7 +1272,7 @@ function renderRows(rows, { incompleteHint = '' } = {}) {
   const renderContext = {
     breakdown: state.breakdown,
     currency: currentCurrency(),
-    currencyRatesEffective: state.settings?.currencyRatesEffective || null,
+    currencyRatesEffective: effectiveCurrencyRates(),
     locale: currentLocale(),
     showToolIcons: toolIconsEnabled(state.settings?.showToolIcons)
   };
@@ -4327,7 +4335,7 @@ function renderLimits() {
       state.settings?.showToolIcons !== false,
       state.settings?.claudePrepaidBalanceEnabled !== false,
       state.settings?.currency || '',
-      state.settings?.currencyRatesEffective || null,
+      effectiveCurrencyRates(),
       state.settings?.subscriptions || [],
       state.settings?.codexManagedAccounts || [],
       state.codexActiveAccount || null,
@@ -7469,7 +7477,7 @@ function renderToolPreferencesNow() {
   const detailSignature = JSON.stringify([
     localClientHealth(),
     localDevice(),
-    state.settings?.currencyRatesEffective || null
+    effectiveCurrencyRates()
   ]);
   const sourceSignature = clientSourceCacheApi.clientSourceRequestKey(
     clientSourcesIdentity(state.clientHealthExpanded)
@@ -8208,7 +8216,7 @@ async function saveSettings(patch) {
     restartTimer();
     throw error;
   }
-  applyEffectiveCurrencyRates();
+  if (applyEffectiveCurrencyRates()) render();
   // settings:update broadcasts the normalized settings before resolving the
   // IPC request. The push already ran the full sync; repeating it when the
   // promise resolves rebuilds the provider rows a second time and restarts
@@ -8474,8 +8482,8 @@ els.currencyRateModeManual?.addEventListener('change', async () => {
   if (!els.currencyRateModeManual.checked) return;
   const code = currentCurrency();
   if (code === 'USD') return;
-  const current = Number(state.settings?.currencyRatesEffective?.[code]);  // seed with the live rate
-  const seed = Number(formatRate(current)) || 1;                            // stored == what's shown
+  const current = effectiveCurrencyRates()[code];  // seed with the rate in effect
+  const seed = Number(formatRate(current)) || 1;                       // stored == what's shown
   await saveSettings({ currencyRates: { ...(state.settings?.currencyRates || {}), [code]: seed } });
   els.currencyRateOverrideInput?.focus();
 });
@@ -8619,10 +8627,10 @@ window.tokenMonitor.onSettingsPush?.((next) => {
   const prevCompactTokenUnits = state.settings?.compactTokenUnits;
   const prevShowCompactTotalTokens = state.settings?.showCompactTotalTokens;
   state.settings = next;
-  applyEffectiveCurrencyRates();
+  const ratesChanged = applyEffectiveCurrencyRates();
   preserveSettingsPanelScroll(syncSettingsForm);
   maybeUpdateBarsIcon();
-  if (prevMetric !== effectiveHeatmapMetric(next)) {
+  if (ratesChanged || prevMetric !== effectiveHeatmapMetric(next)) {
     render();
   } else if (
     prevLanguage !== next.language

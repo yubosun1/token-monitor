@@ -54,7 +54,7 @@ const state = {
   tab: 'activity', range: '30', stackBy: 'client', mode: 'bars', flat: false,
   locale: 'zh-CN', currency: 'USD', compactTokenUnits: 'western', history: null, chartModel: null,
   chartKind: 'bars', motion: 'none', reduceMotion: 'system',
-  heatmapMetric: 'tokens', dashboardPinned: false
+  heatmapMetric: 'tokens', dashboardPinned: false, currencyRatesSignature: ''
 };
 
 const DATA_MOTION_MS = 800;
@@ -668,8 +668,10 @@ async function boot() {
   state.compactTokenUnits = compactTokenApi.normalizeCompactTokenUnits(settings.compactTokenUnits);
   state.dashboardPinned = Boolean(settings.dashboardPinned);
   syncPinButton();
-  if (settings.currencyRatesEffective && window.TokenMonitorCurrency?.configureRates) {
-    window.TokenMonitorCurrency.configureRates(settings.currencyRatesEffective);
+  if (window.TokenMonitorCurrency?.configureRates) {
+    const rates = window.TokenMonitorCurrency.resolveEffectiveRates(settings.currencyRatesEffective, settings.currencyRates);
+    state.currencyRatesSignature = JSON.stringify(rates);
+    window.TokenMonitorCurrency.configureRates(rates);
   }
   // Tokens is the dashboard default. A persisted heatmapMetric only applies when
   // it was explicitly chosen in the current UI (heatmapMetricExplicit) — the
@@ -704,12 +706,17 @@ window.tokenMonitor.onSettingsPush?.((next) => {
     state.compactTokenUnits = nextCompactTokenUnits;
     needsRender = true;
   }
-  if (next.currencyRatesEffective && window.TokenMonitorCurrency?.configureRates) {
-    window.TokenMonitorCurrency.configureRates(next.currencyRatesEffective);
-    // A rate-only change (auto refresh / same-currency manual override) keeps
-    // the currency code identical, so the code-change branch below won't fire —
-    // repaint explicitly or the already-rendered costs stay stale.
-    needsRender = true;
+  if (window.TokenMonitorCurrency?.configureRates) {
+    const rates = window.TokenMonitorCurrency.resolveEffectiveRates(next.currencyRatesEffective, next.currencyRates);
+    const signature = JSON.stringify(rates);
+    if (signature !== state.currencyRatesSignature) {
+      state.currencyRatesSignature = signature;
+      window.TokenMonitorCurrency.configureRates(rates);
+      // A rate-only change (auto refresh / same-currency manual override) keeps
+      // the currency code identical, so the code-change branch below won't fire —
+      // repaint explicitly or the already-rendered costs stay stale.
+      needsRender = true;
+    }
   }
   if (next.currency && state.currency !== next.currency) {
     state.currency = next.currency;
