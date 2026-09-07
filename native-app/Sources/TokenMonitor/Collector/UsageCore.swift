@@ -83,6 +83,7 @@ enum UsageCore {
     /// 2. Known model aliases and variant suffixes are normalized to their canonical
     ///    base model id so usage is aggregated together:
     ///    - `gemini-3.7-flash-high` and `gemini-flash-safety-le2` -> `gemini-3.7-flash`
+    ///    - `gemini-3.8-flash-high` -> `gemini-3.8-flash`
     ///    - `glm-5.2-x` -> `glm-5.2`
     /// The input is expected to already be trimmed + lowercased (callers normalize
     /// first); this function is defensive about it regardless.
@@ -95,6 +96,8 @@ enum UsageCore {
         switch s {
         case "gemini-3.7-flash-high", "gemini-flash-safety-le2":
             return "gemini-3.7-flash"
+        case "gemini-3.8-flash-high":
+            return "gemini-3.8-flash"
         case "glm-5.2-x":
             return "glm-5.2"
         default:

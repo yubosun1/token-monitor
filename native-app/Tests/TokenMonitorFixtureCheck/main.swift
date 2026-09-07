@@ -369,6 +369,8 @@ func runChecks() {
         checkEqual(UsageCore.canonicalModelName("gemini-flash-safety-le2"), "gemini-3.7-flash", "canonical maps gemini-flash-safety-le2")
         checkEqual(UsageCore.canonicalModelName("google/gemini-3.7-flash-high"), "gemini-3.7-flash", "canonical strips prefix and maps gemini-3.7-flash-high")
         checkEqual(UsageCore.canonicalModelName("google/gemini-flash-safety-le2"), "gemini-3.7-flash", "canonical strips prefix and maps gemini-flash-safety-le2")
+        checkEqual(UsageCore.canonicalModelName("gemini-3.8-flash-high"), "gemini-3.8-flash", "canonical maps gemini-3.8-flash-high")
+        checkEqual(UsageCore.canonicalModelName("google/gemini-3.8-flash-high"), "gemini-3.8-flash", "canonical strips prefix and maps gemini-3.8-flash-high")
         checkEqual(UsageCore.canonicalModelName("glm-5.2-x"), "glm-5.2", "canonical maps glm-5.2-x")
         checkEqual(UsageCore.canonicalModelName("zai/glm-5.2-x"), "glm-5.2", "canonical strips prefix and maps glm-5.2-x")
         checkEqual(UsageCore.normalizeModelName("opencode-go/deepseek-v4-flash"), "deepseek-v4-flash", "normalizeModelName canonicalizes")
@@ -389,13 +391,16 @@ func runChecks() {
             modelRow("gemini-3.7-flash-high", 100),
             modelRow("gemini-flash-safety-le2", 200),
             modelRow("gemini-3.7-flash", 300),
+            modelRow("gemini-3.8-flash-high", 350),
+            modelRow("gemini-3.8-flash", 150),
             modelRow("glm-5.2-x", 400),
             modelRow("glm-5.2", 500)
         ]
         let aliasPeriod = UsageCore.extractPeriod(entries: aliasRows)
         let aModels = aliasPeriod["models"] as! [String: Any]
-        checkEqual(aModels.count, 2, "gemini variants and glm variants merge to respective base models")
+        checkEqual(aModels.count, 3, "gemini variants and glm variants merge to respective base models")
         checkEqual(UsageCore.intValue(aModels["gemini-3.7-flash"]), 600, "merged gemini-3.7-flash token total")
+        checkEqual(UsageCore.intValue(aModels["gemini-3.8-flash"]), 500, "merged gemini-3.8-flash token total")
         checkEqual(UsageCore.intValue(aModels["glm-5.2"]), 900, "merged glm-5.2 token total")
 
         // History contributions carry the canonical model id too.
@@ -2849,7 +2854,7 @@ func runHistoryLedgerTests() {
         migrated.recordTokscaleDays([cleanDay])
         let rebuilt = migrated.fetchHistoryDays(clients: nil)
         checkEqual(rebuilt.first?.tokens ?? 0, 10, "L9.2: rebuilt history accumulates after migration")
-        checkEqual(migrated.currentUserVersion(), 4, "L9.3: user_version advanced to the current schema")
+        checkEqual(migrated.currentUserVersion(), 5, "L9.3: user_version advanced to the current schema")
     }
 
     // L10: v2 → v3 migration purges the v1-era tokscale session rows that a
@@ -2912,7 +2917,7 @@ func runHistoryLedgerTests() {
         let adapterRows = migrated.querySessionRows(clients: ["proma"])
         checkEqual(adapterRows.count, 1, "L10.2: adapter rows survive the v3 migration")
         checkEqual(adapterRows.first?.input ?? 0, 500, "L10.3: adapter row values intact")
-        checkEqual(migrated.currentUserVersion(), 4, "L10.4: user_version advanced to 4")
+        checkEqual(migrated.currentUserVersion(), 5, "L10.4: user_version advanced to 5")
         // Periods no longer include the frozen tokscale snapshot.
         let periods = migrated.fetchPeriods(clients: ["codex", "proma"], now: Date(timeIntervalSince1970: 1787700000), allTimeSince: 0)
         checkEqual(UsageCore.intValue(periods.allTime["totalTokens"]), 700, "L10.5: allTime reflects only adapter rows after purge")
@@ -2980,7 +2985,7 @@ func runHistoryLedgerTests() {
         sqlite3_close(raw)
 
         let migrated = HistoryLedger(dbURL: dbPath)
-        checkEqual(migrated.currentUserVersion(), 4, "L11.1: user_version advanced to 4")
+        checkEqual(migrated.currentUserVersion(), 5, "L11.1: user_version advanced to 5")
 
         let geminiRows = migrated.querySessionRows(clients: ["antigravity"])
         checkEqual(geminiRows.count, 1, "L11.2: gemini alias session rows merged into one")
@@ -3166,6 +3171,78 @@ func runHistoryLedgerTests() {
 
         let backslash = ledger.querySessionModelBreakdown(client: "escapeclient", sessionId: "ab\\cd", period: "total")
         checkEqual(backslash?["totalTokens"] as? Int ?? -1, 300, "L15.4: backslash base matches only its own session")
+    }
+
+    // L16: v4 → v5 migration merges gemini-3.8-flash-high into gemini-3.8-flash.
+    do {
+        let legacy = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("tm-ledger-v4-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: legacy) }
+        let dbPath = legacy.appendingPathComponent("ledger.db")
+        var raw: OpaquePointer?
+        let openRC = sqlite3_open_v2(dbPath.path, &raw, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nil)
+        let v4SQL = """
+        CREATE TABLE IF NOT EXISTS session_ledger (
+            session_id TEXT NOT NULL,
+            client TEXT NOT NULL,
+            date TEXT NOT NULL,
+            model_id TEXT NOT NULL,
+            provider TEXT NOT NULL DEFAULT '',
+            input_tokens REAL NOT NULL DEFAULT 0,
+            output_tokens REAL NOT NULL DEFAULT 0,
+            cache_read_tokens REAL NOT NULL DEFAULT 0,
+            cache_write_tokens REAL NOT NULL DEFAULT 0,
+            reasoning_tokens REAL NOT NULL DEFAULT 0,
+            message_count REAL NOT NULL DEFAULT 0,
+            cost_usd REAL NOT NULL DEFAULT 0.0,
+            started_at_ms REAL NOT NULL DEFAULT 0.0,
+            last_used_at_ms REAL NOT NULL DEFAULT 0.0,
+            project_id TEXT NOT NULL DEFAULT '',
+            project_label TEXT NOT NULL DEFAULT '',
+            timed_tokens REAL NOT NULL DEFAULT 0,
+            timed_duration_ms REAL NOT NULL DEFAULT 0,
+            updated_at_ms REAL NOT NULL DEFAULT 0,
+            PRIMARY KEY (session_id, client, date, model_id)
+        );
+        CREATE TABLE IF NOT EXISTS daily_history_ledger (
+            date TEXT NOT NULL,
+            client TEXT NOT NULL,
+            model_id TEXT NOT NULL,
+            tokens REAL NOT NULL DEFAULT 0,
+            cost_usd REAL NOT NULL DEFAULT 0.0,
+            messages REAL NOT NULL DEFAULT 0.0,
+            active_time_ms REAL NOT NULL DEFAULT 0.0,
+            updated_at_ms REAL NOT NULL DEFAULT 0,
+            PRIMARY KEY (date, client, model_id)
+        );
+        INSERT INTO session_ledger (session_id, client, date, model_id, input_tokens, output_tokens, updated_at_ms)
+        VALUES ('s-gemini-38-1','antigravity','2026-09-01','gemini-3.8-flash-high',120,60,1787600000000);
+        INSERT INTO session_ledger (session_id, client, date, model_id, input_tokens, output_tokens, updated_at_ms)
+        VALUES ('s-gemini-38-1','antigravity','2026-09-01','gemini-3.8-flash',240,90,1787700000000);
+        INSERT INTO daily_history_ledger (date, client, model_id, tokens, cost_usd, messages, updated_at_ms)
+        VALUES ('2026-09-01','antigravity','gemini-3.8-flash-high',180,0.015,2,1787600000000);
+        INSERT INTO daily_history_ledger (date, client, model_id, tokens, cost_usd, messages, updated_at_ms)
+        VALUES ('2026-09-01','antigravity','gemini-3.8-flash',330,0.025,3,1787700000000);
+        """
+        let execRC = raw.map { sqlite3_exec($0, v4SQL, nil, nil, nil) } ?? -1
+        XCTAssertSQLITE(openRC == SQLITE_OK && execRC == SQLITE_OK)
+        XCTAssertSQLITE(sqlite3_exec(raw, "PRAGMA user_version = 4;", nil, nil, nil) == SQLITE_OK)
+        sqlite3_close(raw)
+
+        let migrated = HistoryLedger(dbURL: dbPath)
+        checkEqual(migrated.currentUserVersion(), 5, "L16.1: user_version advanced to 5")
+
+        let geminiRows = migrated.querySessionRows(clients: ["antigravity"])
+        checkEqual(geminiRows.count, 1, "L16.2: gemini-3.8-flash-high session rows merged into gemini-3.8-flash")
+        checkEqual(geminiRows.first?.model ?? "", "gemini-3.8-flash", "L16.3: session row model is gemini-3.8-flash")
+        checkEqual(geminiRows.first?.input ?? 0, 360, "L16.4: input tokens merged (120 + 240)")
+        checkEqual(geminiRows.first?.output ?? 0, 150, "L16.5: output tokens merged (60 + 90)")
+
+        let days = migrated.fetchHistoryDays(clients: nil)
+        checkEqual(days.count, 1, "L16.6: one history day")
+        let day = days.first!
+        checkEqual(day.perModel["gemini-3.8-flash"]?.tokens ?? 0, 510, "L16.7: daily history gemini-3.8 variants merged (180 + 330)")
+        check(day.perModel["gemini-3.8-flash-high"] == nil, "L16.8: old gemini-3.8-flash-high key absent")
     }
 }
 

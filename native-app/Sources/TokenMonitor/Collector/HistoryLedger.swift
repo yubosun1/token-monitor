@@ -65,7 +65,9 @@ final class HistoryLedger {
     /// v4: merges model variant aliases into their canonical base models
     /// (`gemini-3.7-flash-high` and `gemini-flash-safety-le2` -> `gemini-3.7-flash`,
     /// `glm-5.2-x` -> `glm-5.2`) in both session_ledger and daily_history_ledger.
-    private static let ledgerSchemaVersion: Int32 = 4
+    /// v5: merges `gemini-3.8-flash-high` into `gemini-3.8-flash` in both
+    /// session_ledger and daily_history_ledger.
+    private static let ledgerSchemaVersion: Int32 = 5
 
     /// Internal (not private) so the fixture checker can assert the migration
     /// advanced the schema version.
@@ -214,6 +216,97 @@ final class HistoryLedger {
             }
             if sqlite3_exec(db, dailyMergeSQL, nil, nil, nil) != SQLITE_OK {
                 NSLog("[HistoryLedger] migration v4 daily_history_ledger failed: %s", sqlite3_errmsg(db))
+                succeeded = false
+            }
+        }
+        if version < 5 {
+            // v4 → v5: merge gemini-3.8-flash-high into gemini-3.8-flash
+            // in both session_ledger and daily_history_ledger.
+            let sessionMergeSQL = """
+            CREATE TEMPORARY TABLE IF NOT EXISTS _tmp_session_merge AS
+            SELECT
+                session_id,
+                client,
+                date,
+                CASE
+                    WHEN model_id = 'gemini-3.8-flash-high' THEN 'gemini-3.8-flash'
+                    ELSE model_id
+                END AS model_id,
+                MAX(provider) AS provider,
+                SUM(input_tokens) AS input_tokens,
+                SUM(output_tokens) AS output_tokens,
+                SUM(cache_read_tokens) AS cache_read_tokens,
+                SUM(cache_write_tokens) AS cache_write_tokens,
+                SUM(reasoning_tokens) AS reasoning_tokens,
+                SUM(message_count) AS message_count,
+                SUM(cost_usd) AS cost_usd,
+                MIN(started_at_ms) AS started_at_ms,
+                MAX(last_used_at_ms) AS last_used_at_ms,
+                MAX(project_id) AS project_id,
+                MAX(project_label) AS project_label,
+                SUM(timed_tokens) AS timed_tokens,
+                SUM(timed_duration_ms) AS timed_duration_ms,
+                MAX(updated_at_ms) AS updated_at_ms
+            FROM session_ledger
+            WHERE model_id IN ('gemini-3.8-flash-high', 'gemini-3.8-flash')
+            GROUP BY session_id, client, date, 4;
+
+            DELETE FROM session_ledger
+            WHERE model_id IN ('gemini-3.8-flash-high', 'gemini-3.8-flash');
+
+            INSERT INTO session_ledger (
+                session_id, client, date, model_id, provider,
+                input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens,
+                message_count, cost_usd, started_at_ms, last_used_at_ms, project_id, project_label,
+                timed_tokens, timed_duration_ms, updated_at_ms
+            )
+            SELECT
+                session_id, client, date, model_id, provider,
+                input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens,
+                message_count, cost_usd, started_at_ms, last_used_at_ms, project_id, project_label,
+                timed_tokens, timed_duration_ms, updated_at_ms
+            FROM _tmp_session_merge;
+
+            DROP TABLE IF EXISTS _tmp_session_merge;
+            """
+
+            let dailyMergeSQL = """
+            CREATE TEMPORARY TABLE IF NOT EXISTS _tmp_daily_merge AS
+            SELECT
+                date,
+                client,
+                CASE
+                    WHEN model_id = 'gemini-3.8-flash-high' THEN 'gemini-3.8-flash'
+                    ELSE model_id
+                END AS model_id,
+                SUM(tokens) AS tokens,
+                SUM(cost_usd) AS cost_usd,
+                SUM(messages) AS messages,
+                MAX(active_time_ms) AS active_time_ms,
+                MAX(updated_at_ms) AS updated_at_ms
+            FROM daily_history_ledger
+            WHERE model_id IN ('gemini-3.8-flash-high', 'gemini-3.8-flash')
+            GROUP BY date, client, 3;
+
+            DELETE FROM daily_history_ledger
+            WHERE model_id IN ('gemini-3.8-flash-high', 'gemini-3.8-flash');
+
+            INSERT INTO daily_history_ledger (
+                date, client, model_id, tokens, cost_usd, messages, active_time_ms, updated_at_ms
+            )
+            SELECT
+                date, client, model_id, tokens, cost_usd, messages, active_time_ms, updated_at_ms
+            FROM _tmp_daily_merge;
+
+            DROP TABLE IF EXISTS _tmp_daily_merge;
+            """
+
+            if sqlite3_exec(db, sessionMergeSQL, nil, nil, nil) != SQLITE_OK {
+                NSLog("[HistoryLedger] migration v5 session_ledger failed: %s", sqlite3_errmsg(db))
+                succeeded = false
+            }
+            if sqlite3_exec(db, dailyMergeSQL, nil, nil, nil) != SQLITE_OK {
+                NSLog("[HistoryLedger] migration v5 daily_history_ledger failed: %s", sqlite3_errmsg(db))
                 succeeded = false
             }
         }
