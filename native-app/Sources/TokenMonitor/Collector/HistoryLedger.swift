@@ -43,6 +43,7 @@ final class HistoryLedger {
         openDatabase()
         createTablesIfNeeded()
         migrateLegacyData()
+        repairUnpricedK3RowsIfNeeded()
     }
 
     /// Schema version of the ledger data, tracked via `PRAGMA user_version`.
@@ -428,6 +429,48 @@ final class HistoryLedger {
         }
         if succeeded, PerfDiag.enabled {
             PerfDiag.log("ledger schema migrated v\(version) → v\(Self.ledgerSchemaVersion)")
+        }
+    }
+
+    /// Re-prices any session_ledger and daily_history_ledger rows for `k3`
+    /// that were recorded with `cost_usd == 0.0` before K3 built-in pricing
+    /// was added. Uses Kimi K3 standard pricing:
+    /// input $3 / output $15 / cacheRead $0.30 per M tokens.
+    func repairUnpricedK3RowsIfNeeded() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let db else { return }
+
+        let repairSQL = """
+        BEGIN IMMEDIATE TRANSACTION;
+        UPDATE session_ledger
+        SET cost_usd = (input_tokens * 3.0 / 1000000.0)
+                     + (output_tokens * 15.0 / 1000000.0)
+                     + (cache_read_tokens * 0.30 / 1000000.0)
+        WHERE model_id = 'k3' AND cost_usd = 0.0;
+
+        UPDATE daily_history_ledger
+        SET cost_usd = (
+            SELECT COALESCE(SUM(s.cost_usd), daily_history_ledger.cost_usd)
+            FROM session_ledger s
+            WHERE s.date = daily_history_ledger.date
+              AND s.client = daily_history_ledger.client
+              AND s.model_id = daily_history_ledger.model_id
+        )
+        WHERE model_id = 'k3' AND cost_usd = 0.0
+          AND EXISTS (
+            SELECT 1 FROM session_ledger s
+            WHERE s.date = daily_history_ledger.date
+              AND s.client = daily_history_ledger.client
+              AND s.model_id = daily_history_ledger.model_id
+          );
+        COMMIT;
+        """
+        if sqlite3_exec(db, repairSQL, nil, nil, nil) == SQLITE_OK {
+            historyDaysDirty = true
+            cachedHistoryDays = nil
+        } else {
+            sqlite3_exec(db, "ROLLBACK;", nil, nil, nil)
         }
     }
 

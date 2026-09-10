@@ -16,14 +16,18 @@ final class SettingsStore {
     private var values: [String: Any]
     private let lock = NSLock()
 
-    init() {
-        let support = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let dir = support.appendingPathComponent("Token Monitor", isDirectory: true)
-        // The Electron app wrote settings.json in the same folder. The native
-        // app owns a fresh file so the two can never fight over one document.
-        fileURL = dir.appendingPathComponent("settings.native.json")
+    init(fileURL: URL? = nil) {
+        if let fileURL {
+            self.fileURL = fileURL
+        } else {
+            let support = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            let dir = support.appendingPathComponent("Token Monitor", isDirectory: true)
+            // The Electron app wrote settings.json in the same folder. The native
+            // app owns a fresh file so the two can never fight over one document.
+            self.fileURL = dir.appendingPathComponent("settings.native.json")
+        }
         values = Self.defaults()
-        if let data = try? Data(contentsOf: fileURL),
+        if let data = try? Data(contentsOf: self.fileURL),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             lock.lock(); defer { lock.unlock() }
             values.merge(json) { _, new in new }
@@ -36,7 +40,7 @@ final class SettingsStore {
     /// from the older native configuration.
     private func migrateLegacyDefaultsIfNeeded() {
         let version = values["settingsSchemaVersion"] as? Int ?? 0
-        guard version < 9 else { return }
+        guard version < 10 else { return }
         if version < 1, (values["heatmapMetric"] as? String) == "cost" {
             values["heatmapMetric"] = "tokens"
         }
@@ -109,7 +113,20 @@ final class SettingsStore {
                 }
             }
         }
-        values["settingsSchemaVersion"] = 9
+        if version < 10 {
+            // Built-in Kimi K3 pricing override: tokscale has no entry for
+            // k3, so sessions were costed as 0. K3 standard price:
+            // input $3 / output $15 / cacheRead $0.30 per M tokens.
+            var list = values["customModelPricing"] as? [[String: Any]] ?? []
+            let alreadyOverridden = list.contains {
+                ($0["modelId"] as? String)?.trimmingCharacters(in: .whitespaces).lowercased() == "k3"
+            }
+            if !alreadyOverridden {
+                list.append(["modelId": "k3", "inputPerM": 3.0, "outputPerM": 15.0, "cacheReadPerM": 0.30])
+                values["customModelPricing"] = list
+            }
+        }
+        values["settingsSchemaVersion"] = 10
         persist(values)
     }
 
@@ -155,6 +172,7 @@ final class SettingsStore {
             "customPeriodStart": "",
             "customPeriodEnd": "",
             "customModelPricing": [
+                ["modelId": "k3", "inputPerM": 3.0, "outputPerM": 15.0, "cacheReadPerM": 0.30],
                 // k3-256k (Kimi K3 short-context) has a broken all-zero
                 // entry in tokscale's pricing catalog; its real price is
                 // half of k3's ($3/$15/$0.30 per M tokens → $1.5/$7.5/$0.15).

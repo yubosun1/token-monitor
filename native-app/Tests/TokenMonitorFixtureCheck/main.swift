@@ -2478,6 +2478,12 @@ func runAntigravityTests() {
         checkEqual(defaults["windowBehavior"] as? String ?? "", "floating", "A7 windowBehavior defaults to floating")
         checkEqual(defaults["dashboardPinned"] as? Bool ?? true, false, "A7 dashboardPinned defaults to false")
         checkEqual(defaults["showTrayIcon"] as? Bool ?? false, true, "A7 showTrayIcon defaults to true")
+        let customPricing = defaults["customModelPricing"] as? [[String: Any]] ?? []
+        let k3Pricing = customPricing.first { ($0["modelId"] as? String) == "k3" }
+        check(k3Pricing != nil, "A7 k3 customModelPricing default exists")
+        checkClose(k3Pricing?["inputPerM"] as? Double ?? 0.0, 3.0, "A7 k3 inputPerM is 3.0")
+        checkClose(k3Pricing?["outputPerM"] as? Double ?? 0.0, 15.0, "A7 k3 outputPerM is 15.0")
+        checkClose(k3Pricing?["cacheReadPerM"] as? Double ?? 0.0, 0.30, "A7 k3 cacheReadPerM is 0.30")
     }
     // A8: Stale Antigravity sync lock cleanup
     do {
@@ -4387,6 +4393,66 @@ func t65DeepseekKeyNormalizeTests() {
     checkEqual(store.deepseekApiKey(), "sk-padded", "t65 whitespace-padded pasted key is trimmed")
 }
 
+func t67K3PricingAndRepairTests() {
+    // 1. SettingsStore migration test
+    let settingsTemp = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("tm-settings-v10-test-\(UUID().uuidString)")
+    let settingsFile = settingsTemp.appendingPathComponent("settings.json")
+    try? FileManager.default.createDirectory(at: settingsTemp, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: settingsTemp) }
+
+    let v9Data = """
+    {
+        "settingsSchemaVersion": 9,
+        "customModelPricing": [
+            {"modelId": "k3-256k", "inputPerM": 1.5, "outputPerM": 7.5, "cacheReadPerM": 0.15}
+        ]
+    }
+    """.data(using: .utf8)!
+    try? v9Data.write(to: settingsFile)
+
+    let store = SettingsStore(fileURL: settingsFile)
+    let migratedPricing = store.snapshot()["customModelPricing"] as? [[String: Any]] ?? []
+    let k3Entry = migratedPricing.first { ($0["modelId"] as? String) == "k3" }
+    check(k3Entry != nil, "t67 v9->v10 migration adds k3 pricing")
+    checkClose(k3Entry?["inputPerM"] as? Double ?? 0.0, 3.0, "t67 k3 input is 3.0")
+    checkClose(k3Entry?["outputPerM"] as? Double ?? 0.0, 15.0, "t67 k3 output is 15.0")
+    checkClose(k3Entry?["cacheReadPerM"] as? Double ?? 0.0, 0.30, "t67 k3 cacheRead is 0.30")
+    checkEqual(store.snapshot()["settingsSchemaVersion"] as? Int ?? 0, 10, "t67 schema version is 10")
+
+    // 2. HistoryLedger repair unpriced k3 test
+    let dbTemp = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("tm-k3-repair-\(UUID().uuidString).db")
+    defer { try? FileManager.default.removeItem(at: dbTemp) }
+
+    // First init creates the tables with version 6
+    do {
+        _ = HistoryLedger(dbURL: dbTemp)
+    }
+
+    // Now insert a session row and a daily row for k3 with cost_usd = 0.0
+    var raw: OpaquePointer?
+    let openRC = sqlite3_open(dbTemp.path, &raw)
+    let setupSQL = """
+    INSERT INTO session_ledger (session_id, client, date, model_id, input_tokens, output_tokens, cache_read_tokens, cost_usd, updated_at_ms)
+    VALUES ('s1', 'kimi', '2026-09-10', 'k3', 1000000.0, 1000000.0, 1000000.0, 0.0, 1787800000000);
+    INSERT INTO daily_history_ledger (date, client, model_id, tokens, cost_usd, messages, updated_at_ms)
+    VALUES ('2026-09-10', 'kimi', 'k3', 3000000.0, 0.0, 1, 1787800000000);
+    """
+    let execRC = sqlite3_exec(raw, setupSQL, nil, nil, nil)
+    XCTAssertSQLITE(openRC == SQLITE_OK && execRC == SQLITE_OK)
+    sqlite3_close(raw)
+
+    // Second init will trigger repairUnpricedK3RowsIfNeeded
+    let ledger = HistoryLedger(dbURL: dbTemp)
+    let sessions = ledger.querySessionRows(clients: ["kimi"])
+    let repairedSession = sessions.first { $0.model == "k3" }
+    // 1M * 3.0/1M + 1M * 15.0/1M + 1M * 0.30/1M = 3.0 + 15.0 + 0.30 = 18.30
+    checkClose(repairedSession?.cost ?? 0.0, 18.30, "t67 session_ledger k3 cost repaired to 18.30")
+
+    let days = ledger.fetchHistoryDays(clients: ["kimi"])
+    let repairedDay = days.first { $0.date == "2026-09-10" }
+    checkClose(repairedDay?.perModel["k3"]?.cost ?? 0.0, 18.30, "t67 daily_history_ledger k3 cost repaired to 18.30")
+}
+
 func posixPermissions(of path: String) -> Int {
     ((try? FileManager.default.attributesOfItem(atPath: path))?[.posixPermissions] as? NSNumber)?.intValue ?? -1
 }
@@ -4422,6 +4488,7 @@ t64BalanceStorePermissionTests()
 t65DeepseekKeyNormalizeTests()
 t66DshReasoningTests()
 runSessionDetailCoreTests()
+t67K3PricingAndRepairTests()
 print("fixture checks: \(checkCount) checks, \(failureCount) failures")
 if failureCount > 0 { exit(1) }
 
