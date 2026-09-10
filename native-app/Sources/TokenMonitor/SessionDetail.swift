@@ -362,17 +362,18 @@ enum SessionDetailCore {
         return (events, hasRealCost)
     }
 
-    /// DeepSeek Harness session log (~/.dsh/sessions/.../session.jsonl.zstd):
+    /// DeepSeek Harness session log (~/.dsh/sessions/.../session[.v3].jsonl.zstd):
     /// envelope {type, seq, time, data}; user messages carry the message
-    /// itself in `data`, assistant usage arrives as assistant/chunk usage
-    /// chunks (same source the collector aggregates).
+    /// itself in `data`. v2 delivers assistant usage as assistant/chunk
+    /// usage chunks (same source the collector aggregates); v3 delivers it
+    /// on consolidated assistant/message records (`data.usage`).
     ///
     /// Prompts and turns interleave in log order: each turn's usage chunk
     /// follows the user message that prompted it, so a turn is emitted right
     /// where it occurs. (Collecting turns in a second pass and appending
     /// them after every prompt mis-attributed multi-turn sessions and made
     /// period filtering drop earlier prompts.)
-    static func parseDshLog(_ text: String) -> (events: [Event], hasRealCost: Bool) {
+    static func parseDshLog(_ text: String, format: Adapters.DshFormat = .v2) -> (events: [Event], hasRealCost: Bool) {
         var events: [Event] = []
         var seenSeq = Set<Int>()
         var pendingTools: [String: [String]] = [:]
@@ -387,6 +388,30 @@ enum SessionDetailCore {
         // Stays nil until a session record sets it: a torn header must not
         // zero out an otherwise-parseable transcript.
         var seedLength: Int?
+        // v3 replaces seedLength with an `isSeeded` flag on the session
+        // record plus a `session/end-seed` marker line (itself the last
+        // seeded line) — which sits AFTER the seed prefix, so the boundary
+        // must be pre-scanned before the interleaved main pass. A migrated
+        // session (isSeeded = false) counts its converted history in full;
+        // a torn log without the marker counts everything, same as v2.
+        var skipBeforeSeq: Int?
+        if format == .v3 {
+            var isSeeded = false
+            var endSeedSeq: Int?
+            for line in text.split(whereSeparator: \.isNewline) {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                guard !trimmed.isEmpty,
+                      let data = trimmed.data(using: .utf8),
+                      let obj = try? JSONSerialization.jsonObject(with: data) as? JSON else { continue }
+                let type = obj["type"] as? String ?? ""
+                if type == "session" {
+                    isSeeded = obj["isSeeded"] as? Bool ?? false
+                } else if type == "session/end-seed" {
+                    endSeedSeq = obj["seq"] as? Int ?? 0
+                }
+            }
+            skipBeforeSeq = (isSeeded && endSeedSeq != nil) ? endSeedSeq! + 1 : nil
+        }
 
         for line in text.split(whereSeparator: \.isNewline) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
@@ -401,7 +426,9 @@ enum SessionDetailCore {
                 seedLength = obj["seedLength"] as? Int
                 continue
             }
-            if let seed = seedLength, seq < seed { continue }
+            if type == "session/end-seed" { continue }
+            let skip = format == .v3 ? skipBeforeSeq : seedLength
+            if let seed = skip, seq < seed { continue }
             if seenSeq.contains(seq) { continue }
             seenSeq.insert(seq)
             let time = UsageCore.timestampMs(obj["time"])
@@ -411,7 +438,8 @@ enum SessionDetailCore {
             switch type {
             case "user/message":
                 // data IS the user message: {role, content, timestamp, source}
-                let role = payload["role"] as? String ?? ""
+                // (v3 drops the role field; the envelope type already says it).
+                let role = payload["role"] as? String ?? "user"
                 guard role == "user" else { break }
                 let content = payload["content"] as? [Any] ?? []
                 let rawTexts = content.compactMap { part -> String? in
@@ -439,7 +467,7 @@ enum SessionDetailCore {
                 if let name = payload["name"] as? String, !name.isEmpty {
                     pendingTools["\(turn):\(step)", default: []].append(name)
                 }
-            case "assistant/chunk":
+            case "assistant/chunk" where format == .v2:
                 let chunk = payload["chunk"] as? JSON ?? JSON()
                 let chunkType = chunk["type"] as? String ?? ""
                 let turn = payload["turn"] as? Int ?? 0
@@ -462,6 +490,24 @@ enum SessionDetailCore {
                     e.tools = uniqueTools(pendingTools["\(turn):\(step)"] ?? [])
                     events.append(e)
                 }
+            case "assistant/message" where format == .v3:
+                guard let usage = payload["usage"] as? JSON else { break }
+                let turn = payload["turn"] as? Int ?? 0
+                let step = payload["step"] as? Int ?? 0
+                // Same per-event timestamp rule as v2 (v3 has no
+                // cacheWriteTokens — the provider never reported one).
+                let eventTime = time
+                let createdAt = eventTime > 0 ? eventTime : (headerCreatedAt > 0 ? headerCreatedAt : lastTime)
+                var e = Event(kind: .turn, timestampMs: createdAt)
+                e.tokens = Tokens(
+                    input: num(usage["inputTokens"]),
+                    output: num(usage["outputTokens"]),
+                    cacheRead: num(usage["cacheReadTokens"]),
+                    cacheWrite: num(usage["cacheWriteTokens"]),
+                    reasoning: num(usage["reasoningTokens"])
+                )
+                e.tools = uniqueTools(pendingTools["\(turn):\(step)"] ?? [])
+                events.append(e)
             default:
                 break
             }
@@ -707,13 +753,17 @@ enum SessionDetailCore {
             includingPropertiesForKeys: [.isRegularFileKey],
             options: [.skipsHiddenFiles]
         ) else { return nil }
+        var v2File: URL?
         for case let file as URL in enumerator {
-            if file.lastPathComponent == "session.jsonl.zstd",
-               file.deletingLastPathComponent().lastPathComponent == id {
-                return file
-            }
+            let name = file.lastPathComponent
+            guard name == "session.jsonl.zstd" || name == "session.v3.jsonl.zstd",
+                  file.deletingLastPathComponent().lastPathComponent == id else { continue }
+            // A migrated session keeps its frozen v2 log next to the live
+            // v3 one; the v3 file holds the same history plus new events.
+            if name == "session.v3.jsonl.zstd" { return file }
+            v2File = file
         }
-        return nil
+        return v2File
     }
 
     static func readAntigravitySessionBreakdown(sessionId: String, period: String, now: Date = Date()) -> JSON? {
@@ -1072,7 +1122,7 @@ enum SessionDetailCore {
                   let text = String(data: data, encoding: .utf8) else {
                 return notFound(client: normalizedClient, sessionId: sessionId, period: normalizedPeriod, sessionCost: sessionCost)
             }
-            let result = parseDshLog(text)
+            let result = parseDshLog(text, format: Adapters.dshFormat(of: file))
             return finish(events: result.events, hasRealCost: result.hasRealCost,
                           client: normalizedClient, sessionId: sessionId,
                           period: normalizedPeriod, sessionCost: sessionCost, now: now)

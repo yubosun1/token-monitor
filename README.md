@@ -19,7 +19,7 @@
 - **极致低占用**：告别 Electron 的资源开销，后台常驻内存约 40–60MB；窗口隐藏 30 秒后自动回收 WebContent 进程，再次唤出毫秒级呈现。
 - **8 大 AI 客户端用量追踪**：
   - **Tokscale 驱动**：Claude Code、Codex、WorkBuddy
-  - **Swift 原生解析**：Kimi、Proma、Hanako、Antigravity、DeepSeek Harness（zstd 流式解压）
+  - **Swift 原生解析**：Kimi、Proma、Hanako、Antigravity、DeepSeek Harness（v2/v3 会话日志，zstd 流式解压）
 - **AI 限额与订阅**：支持 DeepSeek 账户余额与 Kimi 会员额度实时监控，支持多厂商订阅计划登记。
 - **macOS 原生体验**：
   - 纯菜单栏常驻（LSUIElement，不占 Dock）
@@ -59,7 +59,7 @@
 
 ```bash
 ./native-app/scripts/build-app.sh        # 构建并打包应用
-./native-app/scripts/check-fixtures.sh   # 运行数据采集与聚合逻辑校验测试 (600+ checks)
+./native-app/scripts/check-fixtures.sh   # 运行数据采集与聚合逻辑校验测试 (680+ checks)
 ```
 
 ---

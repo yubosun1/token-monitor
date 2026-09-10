@@ -1102,10 +1102,27 @@ enum Adapters {
         return rows
     }
 
-    // MARK: - DeepSeek Harness (~/.dsh/sessions/<project>/session-*/session.jsonl.zstd)
+    // MARK: - DeepSeek Harness (~/.dsh/sessions/<project>/session-*/session[.v3].jsonl.zstd)
 
     static let dshRoot = NSHomeDirectory() + "/.dsh/sessions"
 
+    /// Session log format. v2 (pre-2026-09 harness) streams usage as
+    /// assistant/chunk usage chunks with the model resolved from finish
+    /// chunks; v3 writes session.v3.jsonl.zstd with consolidated
+    /// assistant/message records carrying usage and source.model inline.
+    enum DshFormat {
+        case v2
+        case v3
+    }
+
+    static func dshFormat(of file: URL) -> DshFormat {
+        file.lastPathComponent == "session.v3.jsonl.zstd" ? .v3 : .v2
+    }
+
+    /// One file per session directory. A session migrated by the v3 harness
+    /// keeps its old session.jsonl.zstd frozen next to the live v3 log whose
+    /// converted seed covers the same usage — parsing both would double
+    /// count, so the v3 file wins whenever both exist.
     static func dshSessionFiles() -> [URL] {
         let root = URL(fileURLWithPath: dshRoot)
         guard let enumerator = FileManager.default.enumerator(
@@ -1113,11 +1130,16 @@ enum Adapters {
             includingPropertiesForKeys: [.isRegularFileKey],
             options: [.skipsHiddenFiles]
         ) else { return [] }
-        var files: [URL] = []
+        var byDir: [String: URL] = [:]
         for case let file as URL in enumerator {
-            if file.lastPathComponent == "session.jsonl.zstd" { files.append(file) }
+            let name = file.lastPathComponent
+            guard name == "session.jsonl.zstd" || name == "session.v3.jsonl.zstd" else { continue }
+            let dir = file.deletingLastPathComponent().path
+            if name == "session.v3.jsonl.zstd" || byDir[dir] == nil {
+                byDir[dir] = file
+            }
         }
-        return files
+        return byDir.values.sorted { $0.path < $1.path }
     }
 
     /// In-memory zstd decompression through the vendored static libzstd.
@@ -1249,7 +1271,7 @@ enum Adapters {
         var events = 0
     }
 
-    /// Parse one session.jsonl.zstd into usage rows, memoized by
+    /// Parse one session[.v3].jsonl.zstd into usage rows, memoized by
     /// (path, mtime, size) — unchanged sessions skip decompress + parse.
     /// Actively-appending sessions use the incremental streaming state so a
     /// re-read only decompresses/parses the appended tail.
@@ -1335,7 +1357,8 @@ enum Adapters {
         let diag = ProcessInfo.processInfo.environment["TOKEN_MONITOR_DIAG"] != nil
         let (output, stoppedOnError) = feedZstd(stream, input: compressed, diag: diag, name: file.lastPathComponent)
         let sessionId = file.deletingLastPathComponent().lastPathComponent
-        let parsed = parseSessionData(output, sessionId: sessionId)
+        let format = dshFormat(of: file)
+        let parsed = parseSessionData(output, sessionId: sessionId, format: format)
         let result = DshFileResult(rows: parsed.rows, events: parsed.events)
         if stoppedOnError {
             // A content-corrupt frame is the recovery boundary: the parsed
@@ -1368,12 +1391,15 @@ enum Adapters {
         }
         let state = DshIncrementalState(
             sessionId: sessionId,
+            format: format,
             stamp: stamp,
             compressedOffset: compressed.count,
             headFingerprint: headFingerprint(file),
             stream: stream,
             seenSeq: parsed.seenSeq,
-            seedLength: parsed.seedLength,
+            skipBeforeSeq: parsed.skipBeforeSeq,
+            isSeeded: parsed.isSeeded,
+            needsFullReparse: false,
             fallbackModel: parsed.fallbackModel,
             headerCreatedAt: parsed.headerCreatedAt,
             lastTime: parsed.lastTime,
@@ -1456,6 +1482,13 @@ enum Adapters {
                 state.leftoverBytes = combined
             }
         }
+        if state.needsFullReparse {
+            // A v3 session/end-seed boundary that only shows up in an
+            // append invalidates already-emitted seed rows; re-parse from
+            // scratch so the seeded prefix is attributed correctly.
+            freeDshStream(&state)
+            return dshFullParseAndInit(file, key: "dsh|\(file.path)", stamp: stamp)
+        }
         if diag {
             NSLog("[dsh] delta %@ tail=%d bytes events=%d rows=%d", file.lastPathComponent, tail.count, state.totalEvents, state.rows.count)
         }
@@ -1471,46 +1504,98 @@ enum Adapters {
                 let trimmed = line.trimmingCharacters(in: .whitespaces)
                 guard !trimmed.isEmpty, let lineData = trimmed.data(using: .utf8),
                       let obj = try? JSONSerialization.jsonObject(with: lineData) as? JSON else { return }
-                let seq = obj["seq"] as? Int ?? 0
-                let type = obj["type"] as? String ?? ""
-                // The session record carries `seedLength`: a fork's log is seeded
-                // with a byte-for-byte copy of its parent's events, and that
-                // shared prefix is credited to the parent only. seq is 0-indexed,
-                // so the event AT seq == seedLength is the fork's own first new
-                // event — skip strictly `seq < seedLength`. A session record
-                // without the field clears it again, and a torn/absent header
-                // leaves it nil so no event is ever skipped on a guess.
-                if type == "session" {
-                    if let createdAt = obj["createdAt"] { state.headerCreatedAt = UsageCore.timestampMs(createdAt) }
-                    state.seedLength = obj["seedLength"] as? Int
-                    return
-                }
-                if let seed = state.seedLength, seq < seed { return }
-                if state.seenSeq.contains(seq) { return }
-                state.seenSeq.insert(seq)
-                let time = UsageCore.timestampMs(obj["time"])
-                if time > state.lastTime { state.lastTime = time }
-                let data = obj["data"] as? JSON ?? JSON()
-                if type == "request/header" || type == "request/context" {
-                    let header = data["header"] as? JSON ?? data
-                    let config = header["config"] as? JSON ?? header
-                    if let model = config["model"] as? String { state.fallbackModel = model }
-                    return
-                }
-                if type == "assistant/chunk" {
-                    let chunk = data["chunk"] as? JSON ?? JSON()
-                    let chunkType = chunk["type"] as? String ?? ""
-                    let turn = data["turn"] as? Int ?? 0
-                    let step = data["step"] as? Int ?? 0
-                    if chunkType == "usage", let usage = chunk["usage"] as? JSON {
-                        state.pendingEvents.append(PendingDshEvent(turn: turn, step: step, time: time, usage: usage))
-                        state.totalEvents += 1
-                    } else if chunkType == "finish" {
-                        let model = dshFinishModel(from: chunk) ?? state.fallbackModel
-                        resolvePendingDshEvents(&state, turn: turn, step: step, model: model)
-                    }
+                switch state.format {
+                case .v2: parseV2DeltaLine(obj, state: &state)
+                case .v3: parseV3DeltaLine(obj, state: &state)
                 }
             }
+        }
+    }
+
+    private static func parseV2DeltaLine(_ obj: JSON, state: inout DshIncrementalState) {
+        let seq = obj["seq"] as? Int ?? 0
+        let type = obj["type"] as? String ?? ""
+        // The session record carries `seedLength`: a fork's log is seeded
+        // with a byte-for-byte copy of its parent's events, and that
+        // shared prefix is credited to the parent only. seq is 0-indexed,
+        // so the event AT seq == seedLength is the fork's own first new
+        // event — skip strictly `seq < seedLength`. A session record
+        // without the field clears it again, and a torn/absent header
+        // leaves it nil so no event is ever skipped on a guess.
+        if type == "session" {
+            if let createdAt = obj["createdAt"] { state.headerCreatedAt = UsageCore.timestampMs(createdAt) }
+            state.skipBeforeSeq = obj["seedLength"] as? Int
+            return
+        }
+        if let skip = state.skipBeforeSeq, seq < skip { return }
+        if state.seenSeq.contains(seq) { return }
+        state.seenSeq.insert(seq)
+        let time = UsageCore.timestampMs(obj["time"])
+        if time > state.lastTime { state.lastTime = time }
+        let data = obj["data"] as? JSON ?? JSON()
+        if type == "request/header" || type == "request/context" {
+            let header = data["header"] as? JSON ?? data
+            let config = header["config"] as? JSON ?? header
+            if let model = config["model"] as? String { state.fallbackModel = model }
+            return
+        }
+        if type == "assistant/chunk" {
+            let chunk = data["chunk"] as? JSON ?? JSON()
+            let chunkType = chunk["type"] as? String ?? ""
+            let turn = data["turn"] as? Int ?? 0
+            let step = data["step"] as? Int ?? 0
+            if chunkType == "usage", let usage = chunk["usage"] as? JSON {
+                state.pendingEvents.append(PendingDshEvent(turn: turn, step: step, time: time, usage: usage))
+                state.totalEvents += 1
+            } else if chunkType == "finish" {
+                let model = dshFinishModel(from: chunk) ?? state.fallbackModel
+                resolvePendingDshEvents(&state, turn: turn, step: step, model: model)
+            }
+        }
+    }
+
+    private static func parseV3DeltaLine(_ obj: JSON, state: inout DshIncrementalState) {
+        let seq = obj["seq"] as? Int ?? 0
+        let type = obj["type"] as? String ?? ""
+        if type == "session" {
+            if let createdAt = obj["createdAt"] { state.headerCreatedAt = UsageCore.timestampMs(createdAt) }
+            let seeded = obj["isSeeded"] as? Bool ?? false
+            state.isSeeded = seeded
+            if !seeded { state.skipBeforeSeq = nil }
+            return
+        }
+        if type == "session/end-seed" {
+            // Migrated logs carry MULTIPLE markers (one after the bootstrap
+            // records, one after the converted history); the last marker is
+            // the seed boundary. A marker arriving in a delta can move that
+            // boundary forward past usage rows already emitted on the
+            // torn-header rule, so escalate to a full re-parse.
+            if state.isSeeded && seq + 1 > (state.skipBeforeSeq ?? 0) {
+                state.needsFullReparse = true
+            }
+            return
+        }
+        if let skip = state.skipBeforeSeq, seq < skip { return }
+        if state.seenSeq.contains(seq) { return }
+        state.seenSeq.insert(seq)
+        let time = UsageCore.timestampMs(obj["time"])
+        if time > state.lastTime { state.lastTime = time }
+        let data = obj["data"] as? JSON ?? JSON()
+        if type == "request/header" || type == "request/context" {
+            let header = data["header"] as? JSON ?? data
+            let config = header["config"] as? JSON ?? header
+            if let model = config["model"] as? String { state.fallbackModel = model }
+            return
+        }
+        // Usage and model ride on the same assistant/message record, so a
+        // row can be emitted immediately — no finish-chunk pending.
+        if type == "assistant/message", let usage = data["usage"] as? JSON {
+            let model = dshV3MessageModel(from: data) ?? state.fallbackModel
+            state.rows.append(makeDshRow(
+                sessionId: state.sessionId, model: model, eventTime: time,
+                headerCreatedAt: state.headerCreatedAt, lastTime: state.lastTime, usage: usage
+            ))
+            state.totalEvents += 1
         }
     }
 
@@ -1573,21 +1658,31 @@ enum Adapters {
         var usage: JSON
     }
 
-    /// Streaming state for one session.jsonl.zstd that is actively
+    /// Streaming state for one session[.v3].jsonl.zstd that is actively
     /// appending: a retained ZSTD decoder positioned at compressedOffset,
     /// the accumulated parse context and the accumulated rows. Only files
     /// that changed recently hold a state; stable files are memoized and
-    /// their streams freed. `seedLength` lives here (like seenSeq) because
-    /// the session record that carries it appears once at the head of the
-    /// file — later delta feeds never see it again.
+    /// their streams freed. `skipBeforeSeq`/`isSeeded` live here (like
+    /// seenSeq) because the records that carry them appear once at the
+    /// head of the file — later delta feeds never see them again.
     struct DshIncrementalState {
         var sessionId: String
+        var format: DshFormat
         var stamp: (mtime: Date, size: Int)
         var compressedOffset: Int
         var headFingerprint: [UInt8]
         var stream: OpaquePointer?
         var seenSeq: Set<Int>
-        var seedLength: Int?
+        /// Seed-prefix boundary: events with seq < skipBeforeSeq belong to
+        /// a fork's parent and are skipped. v2 sets it from the session
+        /// record's seedLength; v3 derives it from isSeeded plus the
+        /// session/end-seed marker's seq + 1.
+        var skipBeforeSeq: Int?
+        var isSeeded: Bool
+        /// Set when a v3 end-seed boundary arrives in a delta after seed
+        /// rows were already emitted; feedDshDelta answers with a full
+        /// re-parse.
+        var needsFullReparse: Bool
         var fallbackModel: String
         var headerCreatedAt: Double
         var lastTime: Double
@@ -1609,13 +1704,13 @@ enum Adapters {
             if diag { NSLog("[dsh] decompress failed: %@", file.path) }
             return DshFileResult()
         }
-        let parsed = parseSessionData(data, sessionId: file.deletingLastPathComponent().lastPathComponent)
+        let parsed = parseSessionData(data, sessionId: file.deletingLastPathComponent().lastPathComponent, format: dshFormat(of: file))
         return DshFileResult(rows: parsed.rows, events: parsed.events)
     }
 
     /// Parsed content of one dsh session plus the context an incremental
     /// delta parse needs to continue (model fallback, timestamps, dedupe,
-    /// fork seed length).
+    /// seed-prefix boundary).
     private struct ParsedDshSession {
         var rows: [UsageCore.UsageRow] = []
         var events = 0
@@ -1623,13 +1718,24 @@ enum Adapters {
         var headerCreatedAt = 0.0
         var lastTime = 0.0
         var seenSeq: Set<Int> = []
-        var seedLength: Int? = nil
+        /// Events with seq < skipBeforeSeq belong to a seeded prefix (a
+        /// fork's copy of its parent) and are credited to the parent only.
+        /// nil when the session is unseeded or the boundary is unknown.
+        var skipBeforeSeq: Int? = nil
+        var isSeeded = false
     }
 
-    /// Two-pass parse of a fully decompressed session: pass 1 attributes
+    private static func parseSessionData(_ data: Data, sessionId: String, format: DshFormat) -> ParsedDshSession {
+        switch format {
+        case .v2: return parseSessionDataV2(data, sessionId: sessionId)
+        case .v3: return parseSessionDataV3(data, sessionId: sessionId)
+        }
+    }
+
+    /// Two-pass parse of a fully decompressed v2 session: pass 1 attributes
     /// models per (turn, step) from finish chunks plus the session-level
     /// fallback model from request/header; pass 2 builds usage rows.
-    private static func parseSessionData(_ data: Data, sessionId: String) -> ParsedDshSession {
+    private static func parseSessionDataV2(_ data: Data, sessionId: String) -> ParsedDshSession {
         guard let text = String(data: data, encoding: .utf8) else { return ParsedDshSession() }
 
         // Pass 1: attribute models per (turn, step) from finish chunks,
@@ -1706,8 +1812,100 @@ enum Adapters {
         return ParsedDshSession(
             rows: rows, events: usageEvents.count,
             fallbackModel: fallbackModel, headerCreatedAt: headerCreatedAt,
-            lastTime: lastTime, seenSeq: seenSeq, seedLength: seedLength
+            lastTime: lastTime, seenSeq: seenSeq, skipBeforeSeq: seedLength
         )
+    }
+
+    /// Parse of a fully decompressed v3 session. Usage rides on
+    /// assistant/message records (`data.usage`) with the model inline at
+    /// `data.message.source.model`, so no finish-chunk correlation is
+    /// needed; the request/header fallback still covers messages whose
+    /// source carries no model.
+    ///
+    /// Seed handling differs from v2: the session record only says
+    /// `isSeeded`, and `session/end-seed` events (each itself a seeded
+    /// line) mark the boundary, so the skip is applied after the loop.
+    /// Migrated logs carry several markers (one after the bootstrap
+    /// records, one after the converted history) — the LAST marker's seq
+    /// is the boundary. A migrated session (isSeeded = false) keeps its
+    /// converted history — the seed is its own past, not a parent's. A
+    /// torn log with no end-seed marker counts everything, mirroring v2's
+    /// torn-header rule.
+    private static func parseSessionDataV3(_ data: Data, sessionId: String) -> ParsedDshSession {
+        guard let text = String(data: data, encoding: .utf8) else { return ParsedDshSession() }
+        var fallbackModel = "unknown"
+        var headerCreatedAt = 0.0
+        var lastTime = 0.0
+        var usageEvents: [JSON] = []
+        var seenSeq = Set<Int>()
+        var isSeeded = false
+        var endSeedSeq: Int?
+
+        for line in text.split(whereSeparator: \.isNewline) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty, let lineData = trimmed.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: lineData) as? JSON else { continue }
+            let seq = obj["seq"] as? Int ?? 0
+            let type = obj["type"] as? String ?? ""
+
+            if type == "session" {
+                if let createdAt = obj["createdAt"] { headerCreatedAt = UsageCore.timestampMs(createdAt) }
+                isSeeded = obj["isSeeded"] as? Bool ?? false
+                continue
+            }
+            if type == "session/end-seed" {
+                endSeedSeq = seq
+                continue
+            }
+            if seenSeq.contains(seq) { continue }
+            seenSeq.insert(seq)
+            let time = UsageCore.timestampMs(obj["time"])
+            if time > lastTime { lastTime = time }
+            let data = obj["data"] as? JSON ?? JSON()
+
+            if type == "request/header" || type == "request/context" {
+                let header = data["header"] as? JSON ?? data
+                let config = header["config"] as? JSON ?? header
+                if let model = config["model"] as? String { fallbackModel = model }
+                continue
+            }
+            if type == "assistant/message", let usage = data["usage"] as? JSON {
+                let event: JSON = [
+                    "usage": usage, "time": time, "seq": seq,
+                    "model": dshV3MessageModel(from: data) ?? ""
+                ]
+                usageEvents.append(event)
+            }
+        }
+
+        let skipBefore = (isSeeded && endSeedSeq != nil) ? endSeedSeq! + 1 : nil
+        var rows: [UsageCore.UsageRow] = []
+        var counted = 0
+        for event in usageEvents {
+            if let skip = skipBefore, (event["seq"] as? Int ?? 0) < skip { continue }
+            guard let usage = event["usage"] as? JSON else { continue }
+            let model = (event["model"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? fallbackModel
+            counted += 1
+            rows.append(makeDshRow(
+                sessionId: sessionId, model: model, eventTime: UsageCore.doubleValue(event["time"]),
+                headerCreatedAt: headerCreatedAt, lastTime: lastTime, usage: usage
+            ))
+        }
+        return ParsedDshSession(
+            rows: rows, events: counted,
+            fallbackModel: fallbackModel, headerCreatedAt: headerCreatedAt,
+            lastTime: lastTime, seenSeq: seenSeq,
+            skipBeforeSeq: skipBefore, isSeeded: isSeeded
+        )
+    }
+
+    /// v3 model attribution: `data.message.source.model` on the message
+    /// itself (e.g. "deepseek-v4-pro"). Empty/missing means the caller
+    /// falls back to the request-header model.
+    private static func dshV3MessageModel(from data: JSON) -> String? {
+        let source = (data["message"] as? JSON)?["source"] as? JSON
+        let model = (source?["model"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return model.isEmpty ? nil : model
     }
 
     /// One usage row from a usage event. Attribute each event to its own

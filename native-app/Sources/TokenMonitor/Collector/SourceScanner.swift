@@ -105,10 +105,10 @@ enum SourceScanner {
     }
 
     /// Whether a file participates in a client's fingerprint. Adapter
-    /// clients mirror their readers exactly (jsonl / session.jsonl.zstd);
-    /// tokscale clients include every regular file under their (small)
-    /// data roots, which is a conservative superset of what the scanner
-    /// consumes.
+    /// clients mirror their readers exactly (jsonl /
+    /// session[.v3].jsonl.zstd); tokscale clients include every regular
+    /// file under their (small) data roots, which is a conservative
+    /// superset of what the scanner consumes.
     static func included(_ client: String, path: String) -> Bool {
         switch client {
         case "proma", "hanako":
@@ -117,7 +117,7 @@ enum SourceScanner {
             // synthetic benchmark artifacts, not real sessions).
             return path.hasSuffix(".jsonl") && !Adapters.isDiagArtifact(path)
         case "dsh":
-            return path.hasSuffix("session.jsonl.zstd")
+            return path.hasSuffix("session.jsonl.zstd") || path.hasSuffix("session.v3.jsonl.zstd")
         case "kimi":
             let lower = path.lowercased()
             return lower.hasSuffix(".jsonl") || lower.hasSuffix(".json")

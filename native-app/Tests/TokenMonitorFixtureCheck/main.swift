@@ -1955,6 +1955,124 @@ func runDshForkSeedTests() {
     Adapters.dropClientCaches(["dsh"])
 }
 
+// MARK: - DSH v3 format tests
+
+/// v3 sessions log to session.v3.jsonl.zstd: usage rides on consolidated
+/// assistant/message records (`data.usage`) with the model inline at
+/// `data.message.source.model`; the fork seed prefix ends at a
+/// session/end-seed marker line rather than a header seedLength field.
+func runDshV3FormatTests() {
+    let fm = FileManager.default
+    let dir = fm.temporaryDirectory.appendingPathComponent("tm-dsh-v3-\(UUID().uuidString)")
+    let s1 = dir.appendingPathComponent("session-v3-1")
+    let s2 = dir.appendingPathComponent("session-v3-2")
+    let s3 = dir.appendingPathComponent("session-v3-3")
+    try! fm.createDirectory(at: s1, withIntermediateDirectories: true)
+    try! fm.createDirectory(at: s2, withIntermediateDirectories: true)
+    try! fm.createDirectory(at: s3, withIntermediateDirectories: true)
+    defer {
+        Adapters.dropClientCaches(["dsh"])
+        try? fm.removeItem(at: dir)
+    }
+    let f1 = s1.appendingPathComponent("session.v3.jsonl.zstd")
+
+    let v3Head = "{\"type\":\"session\",\"version\":3,\"seq\":0,\"createdAt\":\"2026-08-15T10:00:00+08:00\",\"isSeeded\":false}\n"
+        + "{\"type\":\"request/header\",\"seq\":1,\"time\":\"2026-08-15T10:00:05+08:00\",\"data\":{\"header\":{\"config\":{\"model\":\"deepseek-v4-pro\"}}}}\n"
+
+    // V1: full parse — usage and model come from the assistant/message
+    // record itself; no finish chunk is involved.
+    let v3Message = "{\"type\":\"assistant/message\",\"seq\":2,\"time\":\"2026-08-15T10:00:10+08:00\",\"data\":{\"turn\":1,\"step\":1,\"message\":{\"role\":\"assistant\",\"source\":{\"kind\":\"model\",\"provider\":\"deepseek-official\",\"model\":\"deepseek-v4-flash\"}},\"usage\":{\"inputTokens\":100,\"outputTokens\":50,\"cacheReadTokens\":7,\"reasoningTokens\":9}}}\n"
+    try! compressZstd(v3Head + v3Message).write(to: f1)
+    let v1 = Adapters.cachedSessionFileRows(f1)
+    checkEqual(v1.rows.count, 1, "V1 one usage row parsed")
+    checkEqual(v1.events, 1, "V1 one usage event counted")
+    checkEqual(v1.rows.first?.input ?? 0, 100, "V1 input tokens parsed")
+    checkEqual(v1.rows.first?.output ?? 0, 50, "V1 output tokens parsed")
+    checkEqual(v1.rows.first?.cacheRead ?? 0, 7, "V1 cache-read tokens parsed")
+    checkEqual(v1.rows.first?.reasoning ?? 0, 9, "V1 reasoning tokens parsed")
+    checkEqual(v1.rows.first?.cacheWrite ?? -1, 0, "V1 cache-write absent means zero")
+    checkEqual(v1.rows.first?.model ?? "", "deepseek-v4-flash", "V1 model from message source")
+
+    // V2: an appended assistant/message resolves immediately (no pending),
+    // and a message without a source model falls back to request/header.
+    let v3Append = "{\"type\":\"assistant/message\",\"seq\":3,\"time\":\"2026-08-15T10:01:00+08:00\",\"data\":{\"turn\":2,\"step\":1,\"message\":{\"role\":\"assistant\"},\"usage\":{\"inputTokens\":200,\"outputTokens\":60,\"cacheReadTokens\":0,\"reasoningTokens\":0}}}\n"
+    let vh = try! FileHandle(forWritingTo: f1)
+    try! vh.seekToEnd()
+    vh.write(compressZstd(v3Append))
+    try! vh.close()
+    let v2r = Adapters.cachedSessionFileRows(f1)
+    checkEqual(v2r.rows.count, 2, "V2 appended message resolved incrementally")
+    checkEqual(v2r.rows.last?.input ?? 0, 200, "V2 appended tokens parsed")
+    checkEqual(v2r.rows.last?.model ?? "", "deepseek-v4-pro", "V2 source-less message uses header fallback")
+
+    // V3: a migrated session (isSeeded=false) carries its converted history
+    // before the end-seed marker — the prefix is its own past and counts.
+    let migrated = "{\"type\":\"session\",\"version\":3,\"seq\":0,\"createdAt\":\"2026-08-15T10:00:00+08:00\",\"isSeeded\":false}\n"
+        + "{\"type\":\"assistant/message\",\"seq\":1,\"time\":\"2026-08-15T10:00:10+08:00\",\"data\":{\"turn\":1,\"step\":1,\"message\":{\"role\":\"assistant\",\"source\":{\"model\":\"deepseek-v4-pro\"}},\"usage\":{\"inputTokens\":10,\"outputTokens\":5,\"cacheReadTokens\":0,\"reasoningTokens\":0}}}\n"
+        + "{\"type\":\"session/end-seed\",\"seq\":2,\"time\":\"2026-08-15T10:00:11+08:00\",\"data\":{}}\n"
+    let f2 = s2.appendingPathComponent("session.v3.jsonl.zstd")
+    try! compressZstd(migrated).write(to: f2)
+    let v3r = Adapters.cachedSessionFileRows(f2)
+    checkEqual(v3r.rows.count, 1, "V3 migrated prefix counted")
+    checkEqual(v3r.rows.first?.input ?? 0, 10, "V3 migrated prefix tokens counted")
+
+    // V4: a forked session (isSeeded=true) credits events up to and
+    // including the end-seed marker's seq to the parent; its own later
+    // events count.
+    let fork = "{\"type\":\"session\",\"version\":3,\"seq\":0,\"createdAt\":\"2026-08-15T10:00:00+08:00\",\"isSeeded\":true}\n"
+        + "{\"type\":\"assistant/message\",\"seq\":1,\"time\":\"2026-08-15T10:00:10+08:00\",\"data\":{\"turn\":1,\"step\":1,\"message\":{\"role\":\"assistant\",\"source\":{\"model\":\"deepseek-v4-pro\"}},\"usage\":{\"inputTokens\":10,\"outputTokens\":5,\"cacheReadTokens\":0,\"reasoningTokens\":0}}}\n"
+        + "{\"type\":\"session/end-seed\",\"seq\":2,\"time\":\"2026-08-15T10:00:11+08:00\",\"data\":{}}\n"
+        + "{\"type\":\"assistant/message\",\"seq\":3,\"time\":\"2026-08-15T10:02:00+08:00\",\"data\":{\"turn\":2,\"step\":1,\"message\":{\"role\":\"assistant\",\"source\":{\"model\":\"deepseek-v4-pro\"}},\"usage\":{\"inputTokens\":30,\"outputTokens\":8,\"cacheReadTokens\":0,\"reasoningTokens\":0}}}\n"
+    let f3 = s3.appendingPathComponent("session.v3.jsonl.zstd")
+    try! compressZstd(fork).write(to: f3)
+    let v4r = Adapters.cachedSessionFileRows(f3)
+    checkEqual(v4r.rows.count, 1, "V4 fork parent prefix skipped")
+    checkEqual(v4r.rows.first?.input ?? 0, 30, "V4 only the fork's own tokens counted")
+    checkEqual(v4r.events, 1, "V4 only the fork's own usage event counted")
+
+    // V5: a fork whose end-seed marker only arrives in a later append has
+    // already emitted the seed usage on the torn-header rule — the delta
+    // must escalate to a full re-parse that drops those rows.
+    let f4 = dir.appendingPathComponent("session-v3-4")
+    try! fm.createDirectory(at: f4, withIntermediateDirectories: true)
+    let f4f = f4.appendingPathComponent("session.v3.jsonl.zstd")
+    let forkTorn = "{\"type\":\"session\",\"version\":3,\"seq\":0,\"createdAt\":\"2026-08-15T10:00:00+08:00\",\"isSeeded\":true}\n"
+        + "{\"type\":\"assistant/message\",\"seq\":1,\"time\":\"2026-08-15T10:00:10+08:00\",\"data\":{\"turn\":1,\"step\":1,\"message\":{\"role\":\"assistant\",\"source\":{\"model\":\"deepseek-v4-pro\"}},\"usage\":{\"inputTokens\":10,\"outputTokens\":5,\"cacheReadTokens\":0,\"reasoningTokens\":0}}}\n"
+    try! compressZstd(forkTorn).write(to: f4f)
+    let v5a = Adapters.cachedSessionFileRows(f4f)
+    checkEqual(v5a.rows.count, 1, "V5 torn fork counts events until the boundary is known")
+    let lateSeed = "{\"type\":\"session/end-seed\",\"seq\":2,\"time\":\"2026-08-15T10:00:11+08:00\",\"data\":{}}\n"
+        + "{\"type\":\"assistant/message\",\"seq\":3,\"time\":\"2026-08-15T10:02:00+08:00\",\"data\":{\"turn\":2,\"step\":1,\"message\":{\"role\":\"assistant\",\"source\":{\"model\":\"deepseek-v4-pro\"}},\"usage\":{\"inputTokens\":30,\"outputTokens\":8,\"cacheReadTokens\":0,\"reasoningTokens\":0}}}\n"
+    let lh = try! FileHandle(forWritingTo: f4f)
+    try! lh.seekToEnd()
+    lh.write(compressZstd(lateSeed))
+    try! lh.close()
+    let v5b = Adapters.cachedSessionFileRows(f4f)
+    checkEqual(v5b.rows.count, 1, "V5 late end-seed re-parses and drops seed rows")
+    checkEqual(v5b.rows.first?.input ?? 0, 30, "V5 only the fork's own tokens survive")
+
+    // V6: migrated-style logs carry several end-seed markers and the last
+    // one is the boundary. A further marker arriving via append must move
+    // the boundary forward and drop rows emitted under the earlier one.
+    let f5 = dir.appendingPathComponent("session-v3-5")
+    try! fm.createDirectory(at: f5, withIntermediateDirectories: true)
+    let f5f = f5.appendingPathComponent("session.v3.jsonl.zstd")
+    let multiSeed = "{\"type\":\"session\",\"version\":3,\"seq\":0,\"createdAt\":\"2026-08-15T10:00:00+08:00\",\"isSeeded\":true}\n"
+        + "{\"type\":\"session/end-seed\",\"seq\":1,\"time\":\"2026-08-15T10:00:05+08:00\",\"data\":{}}\n"
+        + "{\"type\":\"assistant/message\",\"seq\":2,\"time\":\"2026-08-15T10:00:10+08:00\",\"data\":{\"turn\":1,\"step\":1,\"message\":{\"role\":\"assistant\",\"source\":{\"model\":\"deepseek-v4-pro\"}},\"usage\":{\"inputTokens\":10,\"outputTokens\":5,\"cacheReadTokens\":0,\"reasoningTokens\":0}}}\n"
+    try! compressZstd(multiSeed).write(to: f5f)
+    let v6a = Adapters.cachedSessionFileRows(f5f)
+    checkEqual(v6a.rows.count, 1, "V6 first marker bounds only the bootstrap records")
+    let laterMarker = "{\"type\":\"assistant/message\",\"seq\":3,\"time\":\"2026-08-15T10:01:00+08:00\",\"data\":{\"turn\":1,\"step\":2,\"message\":{\"role\":\"assistant\",\"source\":{\"model\":\"deepseek-v4-pro\"}},\"usage\":{\"inputTokens\":20,\"outputTokens\":6,\"cacheReadTokens\":0,\"reasoningTokens\":0}}}\n"
+        + "{\"type\":\"session/end-seed\",\"seq\":4,\"time\":\"2026-08-15T10:01:05+08:00\",\"data\":{}}\n"
+    let mh = try! FileHandle(forWritingTo: f5f)
+    try! mh.seekToEnd()
+    mh.write(compressZstd(laterMarker))
+    try! mh.close()
+    let v6b = Adapters.cachedSessionFileRows(f5f)
+    checkEqual(v6b.rows.count, 0, "V6 later marker moves the boundary forward")
+}
+
 // MARK: - DSH corrupt-frame tests
 
 /// Compress with a content checksum so flipping the trailing checksum byte
@@ -3906,6 +4024,40 @@ func runSessionDetailCoreTests() {
         checkEqual(todayTotals["exchangeCount"] as? Int ?? -1, 1, "D2 today exchangeCount")
     }
 
+    // D1v3: v3 logs carry usage on assistant/message records and user
+    // messages without a role field; prompts and turns interleave the same.
+    do {
+        let v3Log = """
+        {"type":"session","version":3,"seq":0,"createdAt":\(t9),"isSeeded":false}
+        {"type":"user/message","seq":1,"time":\(t9),"data":{"content":[{"type":"text","text":"v3 prompt"}]}}
+        {"type":"tool/call","seq":2,"time":\(t9 + 1000),"data":{"turn":0,"step":0,"name":"Bash"}}
+        {"type":"assistant/message","seq":3,"time":\(t9 + 2000),"data":{"turn":0,"step":0,"message":{"role":"assistant","source":{"kind":"model","provider":"deepseek-official","model":"deepseek-v4-pro"}},"usage":{"inputTokens":100,"outputTokens":20,"cacheReadTokens":5,"reasoningTokens":3}}}
+        """
+        let (v3Events, v3Cost) = SessionDetailCore.parseDshLog(v3Log, format: .v3)
+        checkEqual(v3Events.map { $0.kind }, [.prompt, .turn], "D1v3 events interleave prompts and turns")
+        check(!v3Cost, "D1v3 dsh log carries no real cost")
+        checkEqual(v3Events[0].text, "v3 prompt", "D1v3 prompt text without role field")
+        checkEqual(v3Events[1].tokens.input, 100, "D1v3 turn input tokens")
+        checkEqual(v3Events[1].tokens.reasoning, 3, "D1v3 turn reasoning tokens")
+        checkEqual(v3Events[1].tools, ["Bash"], "D1v3 turn carries its tool")
+        checkEqual(Int(v3Events[1].timestampMs), t9 + 2000, "D1v3 turn uses the message timestamp")
+
+        // A forked v3 session drops the seeded parent prompts and usage
+        // (seq up to the end-seed marker) from the detail view too.
+        let v3Fork = """
+        {"type":"session","version":3,"seq":0,"createdAt":\(t9),"isSeeded":true}
+        {"type":"user/message","seq":1,"time":\(t9),"data":{"content":[{"type":"text","text":"parent prompt"}]}}
+        {"type":"assistant/message","seq":2,"time":\(t9 + 1000),"data":{"turn":0,"step":0,"message":{"role":"assistant"},"usage":{"inputTokens":10,"outputTokens":5,"cacheReadTokens":0,"reasoningTokens":0}}}
+        {"type":"session/end-seed","seq":3,"time":\(t9 + 1500),"data":{}}
+        {"type":"user/message","seq":4,"time":\(t9 + 3000),"data":{"content":[{"type":"text","text":"own prompt"}]}}
+        {"type":"assistant/message","seq":5,"time":\(t9 + 4000),"data":{"turn":1,"step":0,"message":{"role":"assistant"},"usage":{"inputTokens":30,"outputTokens":8,"cacheReadTokens":0,"reasoningTokens":0}}}
+        """
+        let (forkEvents, _) = SessionDetailCore.parseDshLog(v3Fork, format: .v3)
+        checkEqual(forkEvents.map { $0.kind }, [.prompt, .turn], "D1v3 fork keeps only its own events")
+        checkEqual(forkEvents[0].text, "own prompt", "D1v3 fork drops the parent prompt")
+        checkEqual(forkEvents[1].tokens.input, 30, "D1v3 fork drops the parent usage")
+    }
+
     // D3: the antigravity file fallback filters usage records by their
     // timestamps per period. Undated records join "total" only (the
     // withinPeriod date arms reject ts <= 0, same as the exchanges path).
@@ -4141,6 +4293,7 @@ runDshCacheTests()
 runDshIdleSweepTests()
 runParseCacheEvictionTests()
 runDshForkSeedTests()
+runDshV3FormatTests()
 runDshCorruptFrameTests()
 runVisibilityTests()
 runIdleTeardownTests()
