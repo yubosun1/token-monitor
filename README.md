@@ -20,6 +20,10 @@
 - **8 大 AI 客户端用量追踪**：
   - **Tokscale 驱动**：Claude Code、Codex、WorkBuddy
   - **Swift 原生解析**：Kimi、Proma、Hanako、Antigravity、DeepSeek Harness（v2/v3 会话日志，zstd 流式解压）
+- **双向交叉与下钻统计**：
+  - 按工具下钻查看调用的各模型分布及用量占比；
+  - 按模型下钻查看各工具的调用分布及用量占比；
+  - 智能归一化别名（如 `kimi-k3` → `k3`、`deepseek-flash` → `deepseek-v4.1-flash`），保留独立短上下文版本（`k3-256k`）。
 - **AI 限额与订阅**：支持 DeepSeek 账户余额与 Kimi 会员额度实时监控，支持多厂商订阅计划登记。
 - **macOS 原生体验**：
   - 纯菜单栏常驻（LSUIElement，不占 Dock）
@@ -59,7 +63,7 @@
 
 ```bash
 ./native-app/scripts/build-app.sh        # 构建并打包应用
-./native-app/scripts/check-fixtures.sh   # 运行数据采集与聚合逻辑校验测试 (680+ checks)
+./native-app/scripts/check-fixtures.sh   # 运行数据采集与聚合逻辑校验测试 (710 checks)
 ```
 
 ---

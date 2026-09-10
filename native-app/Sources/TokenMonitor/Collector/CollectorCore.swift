@@ -1210,7 +1210,7 @@ final class Collector {
     // MARK: - Components
 
     private func enabledClients(_ settings: [String: Any]) -> [String] {
-        let csv = settings["clients"] as? String ?? "claude,codex,kimi,antigravity,workbuddy,proma,hanako,dsh"
+        let csv = settings["clients"] as? String ?? "codex,kimi,antigravity,workbuddy,proma,hanako,dsh"
         return csv.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces).lowercased() }.filter { !$0.isEmpty }
     }
 
@@ -1449,7 +1449,6 @@ final class Collector {
         let home = NSHomeDirectory()
         let candidates: [String]
         switch client {
-        case "claude": candidates = ["\(home)/.claude/projects", "\(home)/.claude"]
         case "codex": candidates = ["\(home)/.codex/sessions", "\(home)/.codex"]
         case "kimi": candidates = [
             "\(home)/.kimi/sessions",

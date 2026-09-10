@@ -4907,6 +4907,66 @@ html.is-windows .limit-live-badge {
   opacity: 0.85;
   text-align: right;
 }
+.accordion-sub-section {
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px solid rgba(var(--overlay-rgb), 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.accordion-sub-header {
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0.3px;
+  margin-bottom: 2px;
+  font-weight: 500;
+}
+.accordion-sub-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  font-size: 11px;
+}
+.accordion-sub-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.accordion-sub-mark {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.accordion-sub-mark.row-icon {
+  width: 10px;
+  height: 10px;
+  border-radius: 0;
+}
+.accordion-sub-name {
+  color: var(--text);
+  opacity: 0.88;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.accordion-sub-pct {
+  font-size: 10px;
+  opacity: 0.6;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+.accordion-sub-value {
+  flex: 0 0 auto;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
+  text-align: right;
+}
 @media (prefers-reduced-motion: reduce) {
   .row-accordion,
   .row-accordion-inner { transition: none; }

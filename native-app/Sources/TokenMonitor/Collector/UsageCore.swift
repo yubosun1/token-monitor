@@ -100,6 +100,10 @@ enum UsageCore {
             return "gemini-3.8-flash"
         case "glm-5.2-x":
             return "glm-5.2"
+        case "kimi-k3":
+            return "k3"
+        case "deepseek-flash":
+            return "deepseek-v4.1-flash"
         default:
             return s
         }

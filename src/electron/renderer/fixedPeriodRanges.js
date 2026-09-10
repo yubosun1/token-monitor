@@ -121,6 +121,8 @@
       cacheReadTokens: 0,
       cacheWriteTokens: 0,
       outputTokens: 0,
+      clientModels: {},
+      clientModelCosts: {},
       sessions: {},
       derivedFixedRange: true
     };
@@ -136,6 +138,14 @@
         addMap(period.models, model, value?.tokens ?? value);
         addMap(period.modelCosts, model, value?.cost);
       }
+      for (const [client, models] of Object.entries(row?.perClientModel || {})) {
+        if (!period.clientModels[client]) period.clientModels[client] = {};
+        if (!period.clientModelCosts[client]) period.clientModelCosts[client] = {};
+        for (const [model, stats] of Object.entries(models || {})) {
+          addMap(period.clientModels[client], model, stats?.tokens ?? stats);
+          addMap(period.clientModelCosts[client], model, stats?.cost);
+        }
+      }
     }
     period.totalTokens = Math.max(0, Math.round(period.totalTokens));
     period.costUsd = Number(period.costUsd.toFixed(6));
@@ -144,6 +154,12 @@
     }
     for (const map of [period.clientCosts, period.modelCosts]) {
       for (const key of Object.keys(map)) map[key] = Number(map[key].toFixed(6));
+    }
+    for (const byModel of Object.values(period.clientModels)) {
+      for (const key of Object.keys(byModel)) byModel[key] = Math.max(0, Math.round(byModel[key]));
+    }
+    for (const byModel of Object.values(period.clientModelCosts)) {
+      for (const key of Object.keys(byModel)) byModel[key] = Number(byModel[key].toFixed(6));
     }
     return period;
   }

@@ -721,9 +721,6 @@ enum SessionDetailCore {
         let id = String(sessionId)
         guard !id.isEmpty else { return nil }
         switch client {
-        case "claude":
-            if let path = findSessionFile(root: "\(home)/.claude/projects", sessionId: id) { return path }
-            return findSessionFile(root: "\(home)/.claude/transcripts", sessionId: id)
         case "codex":
             if let path = codexSessionFile(home, id) { return path }
             return findSessionFile(root: "\(home)/.codex/sessions", sessionId: id)
@@ -1094,7 +1091,7 @@ enum SessionDetailCore {
         let now = Date()
 
         switch normalizedClient {
-        case "claude", "codex", "proma", "hanako":
+        case "codex", "proma", "hanako":
             guard let path = resolveSessionFile(client: normalizedClient, sessionId: sessionId, home: home) else {
                 return notFound(client: normalizedClient, sessionId: sessionId, period: normalizedPeriod, sessionCost: sessionCost)
             }
@@ -1103,8 +1100,6 @@ enum SessionDetailCore {
             }
             let result: (events: [Event], hasRealCost: Bool)
             switch normalizedClient {
-            case "claude":
-                result = (parseClaudeTranscript(text, timestampKey: "timestamp", timestampIsMs: false), false)
             case "proma":
                 result = (parseClaudeTranscript(text, timestampKey: "_createdAt", timestampIsMs: true), false)
             case "hanako":

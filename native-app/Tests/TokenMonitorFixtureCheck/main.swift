@@ -373,6 +373,13 @@ func runChecks() {
         checkEqual(UsageCore.canonicalModelName("google/gemini-3.8-flash-high"), "gemini-3.8-flash", "canonical strips prefix and maps gemini-3.8-flash-high")
         checkEqual(UsageCore.canonicalModelName("glm-5.2-x"), "glm-5.2", "canonical maps glm-5.2-x")
         checkEqual(UsageCore.canonicalModelName("zai/glm-5.2-x"), "glm-5.2", "canonical strips prefix and maps glm-5.2-x")
+        checkEqual(UsageCore.canonicalModelName("kimi-k3"), "k3", "canonical maps kimi-k3 to k3")
+        checkEqual(UsageCore.canonicalModelName("kimi-code/kimi-k3"), "k3", "canonical strips prefix and maps kimi-k3 to k3")
+        checkEqual(UsageCore.canonicalModelName("k3"), "k3", "canonical leaves k3 untouched")
+        checkEqual(UsageCore.canonicalModelName("k3-256k"), "k3-256k", "canonical leaves k3-256k untouched")
+        checkEqual(UsageCore.canonicalModelName("deepseek-flash"), "deepseek-v4.1-flash", "canonical maps deepseek-flash to deepseek-v4.1-flash")
+        checkEqual(UsageCore.canonicalModelName("opencode-go/deepseek-flash"), "deepseek-v4.1-flash", "canonical strips prefix and maps deepseek-flash")
+        checkEqual(UsageCore.canonicalModelName("deepseek-v4.1-flash"), "deepseek-v4.1-flash", "canonical leaves deepseek-v4.1-flash untouched")
         checkEqual(UsageCore.normalizeModelName("opencode-go/deepseek-v4-flash"), "deepseek-v4-flash", "normalizeModelName canonicalizes")
         checkEqual(UsageCore.normalizeModelName(nil), nil, "normalizeModelName nil stays nil")
 
@@ -2972,7 +2979,7 @@ func runHistoryLedgerTests() {
         migrated.recordTokscaleDays([cleanDay])
         let rebuilt = migrated.fetchHistoryDays(clients: nil)
         checkEqual(rebuilt.first?.tokens ?? 0, 10, "L9.2: rebuilt history accumulates after migration")
-        checkEqual(migrated.currentUserVersion(), 5, "L9.3: user_version advanced to the current schema")
+        checkEqual(migrated.currentUserVersion(), 6, "L9.3: user_version advanced to the current schema")
     }
 
     // L10: v2 → v3 migration purges the v1-era tokscale session rows that a
@@ -3035,7 +3042,7 @@ func runHistoryLedgerTests() {
         let adapterRows = migrated.querySessionRows(clients: ["proma"])
         checkEqual(adapterRows.count, 1, "L10.2: adapter rows survive the v3 migration")
         checkEqual(adapterRows.first?.input ?? 0, 500, "L10.3: adapter row values intact")
-        checkEqual(migrated.currentUserVersion(), 5, "L10.4: user_version advanced to 5")
+        checkEqual(migrated.currentUserVersion(), 6, "L10.4: user_version advanced to 6")
         // Periods no longer include the frozen tokscale snapshot.
         let periods = migrated.fetchPeriods(clients: ["codex", "proma"], now: Date(timeIntervalSince1970: 1787700000), allTimeSince: 0)
         checkEqual(UsageCore.intValue(periods.allTime["totalTokens"]), 700, "L10.5: allTime reflects only adapter rows after purge")
@@ -3103,7 +3110,7 @@ func runHistoryLedgerTests() {
         sqlite3_close(raw)
 
         let migrated = HistoryLedger(dbURL: dbPath)
-        checkEqual(migrated.currentUserVersion(), 5, "L11.1: user_version advanced to 5")
+        checkEqual(migrated.currentUserVersion(), 6, "L11.1: user_version advanced to 6")
 
         let geminiRows = migrated.querySessionRows(clients: ["antigravity"])
         checkEqual(geminiRows.count, 1, "L11.2: gemini alias session rows merged into one")
@@ -3348,7 +3355,7 @@ func runHistoryLedgerTests() {
         sqlite3_close(raw)
 
         let migrated = HistoryLedger(dbURL: dbPath)
-        checkEqual(migrated.currentUserVersion(), 5, "L16.1: user_version advanced to 5")
+        checkEqual(migrated.currentUserVersion(), 6, "L16.1: user_version advanced to 6")
 
         let geminiRows = migrated.querySessionRows(clients: ["antigravity"])
         checkEqual(geminiRows.count, 1, "L16.2: gemini-3.8-flash-high session rows merged into gemini-3.8-flash")
@@ -3361,6 +3368,104 @@ func runHistoryLedgerTests() {
         let day = days.first!
         checkEqual(day.perModel["gemini-3.8-flash"]?.tokens ?? 0, 510, "L16.7: daily history gemini-3.8 variants merged (180 + 330)")
         check(day.perModel["gemini-3.8-flash-high"] == nil, "L16.8: old gemini-3.8-flash-high key absent")
+    }
+
+    // L17: v5 → v6 migration merges kimi-k3 into k3, and deepseek-flash into deepseek-v4.1-flash.
+    do {
+        let legacy = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("tm-ledger-v5-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: legacy) }
+        let dbPath = legacy.appendingPathComponent("ledger.db")
+        var raw: OpaquePointer?
+        let openRC = sqlite3_open_v2(dbPath.path, &raw, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nil)
+        let v5SQL = """
+        CREATE TABLE IF NOT EXISTS session_ledger (
+            session_id TEXT NOT NULL,
+            client TEXT NOT NULL,
+            date TEXT NOT NULL,
+            model_id TEXT NOT NULL,
+            provider TEXT NOT NULL DEFAULT '',
+            input_tokens REAL NOT NULL DEFAULT 0,
+            output_tokens REAL NOT NULL DEFAULT 0,
+            cache_read_tokens REAL NOT NULL DEFAULT 0,
+            cache_write_tokens REAL NOT NULL DEFAULT 0,
+            reasoning_tokens REAL NOT NULL DEFAULT 0,
+            message_count REAL NOT NULL DEFAULT 0,
+            cost_usd REAL NOT NULL DEFAULT 0.0,
+            started_at_ms REAL NOT NULL DEFAULT 0.0,
+            last_used_at_ms REAL NOT NULL DEFAULT 0.0,
+            project_id TEXT NOT NULL DEFAULT '',
+            project_label TEXT NOT NULL DEFAULT '',
+            timed_tokens REAL NOT NULL DEFAULT 0,
+            timed_duration_ms REAL NOT NULL DEFAULT 0,
+            updated_at_ms REAL NOT NULL DEFAULT 0,
+            PRIMARY KEY (session_id, client, date, model_id)
+        );
+        CREATE TABLE IF NOT EXISTS daily_history_ledger (
+            date TEXT NOT NULL,
+            client TEXT NOT NULL,
+            model_id TEXT NOT NULL,
+            tokens REAL NOT NULL DEFAULT 0,
+            cost_usd REAL NOT NULL DEFAULT 0.0,
+            messages REAL NOT NULL DEFAULT 0.0,
+            active_time_ms REAL NOT NULL DEFAULT 0.0,
+            updated_at_ms REAL NOT NULL DEFAULT 0,
+            PRIMARY KEY (date, client, model_id)
+        );
+        INSERT INTO session_ledger (session_id, client, date, model_id, input_tokens, output_tokens, updated_at_ms)
+        VALUES ('s-kimi-1','kimi','2026-09-02','kimi-k3',100,50,1787600000000);
+        INSERT INTO session_ledger (session_id, client, date, model_id, input_tokens, output_tokens, updated_at_ms)
+        VALUES ('s-kimi-1','kimi','2026-09-02','k3',200,80,1787700000000);
+        INSERT INTO session_ledger (session_id, client, date, model_id, input_tokens, output_tokens, updated_at_ms)
+        VALUES ('s-kimi-1','kimi','2026-09-02','k3-256k',300,90,1787700000000);
+        INSERT INTO session_ledger (session_id, client, date, model_id, input_tokens, output_tokens, updated_at_ms)
+        VALUES ('s-ds-1','dsh','2026-09-02','deepseek-flash',400,100,1787600000000);
+        INSERT INTO session_ledger (session_id, client, date, model_id, input_tokens, output_tokens, updated_at_ms)
+        VALUES ('s-ds-1','dsh','2026-09-02','deepseek-v4.1-flash',500,150,1787700000000);
+
+        INSERT INTO daily_history_ledger (date, client, model_id, tokens, cost_usd, messages, updated_at_ms)
+        VALUES ('2026-09-02','kimi','kimi-k3',150,0.01,1,1787600000000);
+        INSERT INTO daily_history_ledger (date, client, model_id, tokens, cost_usd, messages, updated_at_ms)
+        VALUES ('2026-09-02','kimi','k3',280,0.02,2,1787700000000);
+        INSERT INTO daily_history_ledger (date, client, model_id, tokens, cost_usd, messages, updated_at_ms)
+        VALUES ('2026-09-02','kimi','k3-256k',390,0.015,3,1787700000000);
+        INSERT INTO daily_history_ledger (date, client, model_id, tokens, cost_usd, messages, updated_at_ms)
+        VALUES ('2026-09-02','dsh','deepseek-flash',500,0.005,1,1787600000000);
+        INSERT INTO daily_history_ledger (date, client, model_id, tokens, cost_usd, messages, updated_at_ms)
+        VALUES ('2026-09-02','dsh','deepseek-v4.1-flash',650,0.007,2,1787700000000);
+        """
+        let execRC = raw.map { sqlite3_exec($0, v5SQL, nil, nil, nil) } ?? -1
+        XCTAssertSQLITE(openRC == SQLITE_OK && execRC == SQLITE_OK)
+        XCTAssertSQLITE(sqlite3_exec(raw, "PRAGMA user_version = 5;", nil, nil, nil) == SQLITE_OK)
+        sqlite3_close(raw)
+
+        let migrated = HistoryLedger(dbURL: dbPath)
+        checkEqual(migrated.currentUserVersion(), 6, "L17.1: user_version advanced to 6")
+
+        let kimiRows = migrated.querySessionRows(clients: ["kimi"])
+        checkEqual(kimiRows.count, 2, "L17.2: kimi session rows has k3 and k3-256k (merged from 3 rows)")
+        let k3Row = kimiRows.first { $0.model == "k3" }
+        check(k3Row != nil, "L17.3: k3 row exists")
+        checkEqual(k3Row?.input ?? 0, 300, "L17.4: input merged (100 + 200)")
+        checkEqual(k3Row?.output ?? 0, 130, "L17.5: output merged (50 + 80)")
+        let k3ShortRow = kimiRows.first { $0.model == "k3-256k" }
+        check(k3ShortRow != nil, "L17.6: k3-256k row preserved")
+        checkEqual(k3ShortRow?.input ?? 0, 300, "L17.7: k3-256k input untouched")
+
+        let dshRows = migrated.querySessionRows(clients: ["dsh"])
+        checkEqual(dshRows.count, 1, "L17.8: deepseek-flash session rows merged into deepseek-v4.1-flash")
+        checkEqual(dshRows.first?.model ?? "", "deepseek-v4.1-flash", "L17.9: model is deepseek-v4.1-flash")
+        checkEqual(dshRows.first?.input ?? 0, 900, "L17.10: input merged (400 + 500)")
+        checkEqual(dshRows.first?.output ?? 0, 250, "L17.11: output merged (100 + 150)")
+
+        let days = migrated.fetchHistoryDays(clients: nil)
+        checkEqual(days.count, 1, "L17.12: one history day")
+        let day = days.first!
+        checkEqual(day.perModel["k3"]?.tokens ?? 0, 430, "L17.13: daily history k3 merged (150 + 280)")
+        checkEqual(day.perModel["k3-256k"]?.tokens ?? 0, 390, "L17.14: daily history k3-256k untouched")
+        checkEqual(day.perModel["deepseek-v4.1-flash"]?.tokens ?? 0, 1150, "L17.15: daily history deepseek-v4.1-flash merged (500 + 650)")
+        check(day.perModel["kimi-k3"] == nil, "L17.16: old kimi-k3 key absent")
+        check(day.perModel["deepseek-flash"] == nil, "L17.17: old deepseek-flash key absent")
     }
 }
 

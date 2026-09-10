@@ -197,7 +197,7 @@ function normalizeInitialViewValue(value, allowed, fallback) {
   return allowed.has(raw) ? raw : fallback;
 }
 
-const state = { period: normalizeInitialViewValue(initialViewState.period, viewPeriodValues, 'today'), breakdown: normalizeInitialViewValue(initialViewState.breakdown, viewBreakdownValues, 'home'), periodMenuOpen: false, viewSwitcherOpen: false, viewSwitcherHasOpened: false, limitDetailTooltipHasOpened: false, limitDetailTooltipActive: false, limitDetailTooltipRenderPending: false, settings: null, stats: null, homeHistory: null, homeHistoryBusy: false, homeHistoryRequested: false, homeHistorySignature: '', homeHistoryRetries: 0, homeHistoryRetryTimer: null, homeActivityScrollLeft: null, homeActivityFollowEnd: true, homeActivityResizeObserver: null, trendSettingsExpanded: false, trendsActivating: false, homeSettingsExpanded: false, homeLimitSettingsExpanded: false, limitProviderSettingsExpanded: '', clientHealthExpanded: '', clientSources: clientSourceCacheApi.createClientSourceCache(), clientSourcesKey: '', clientSourcesRequest: 0, subscriptionEditingId: '', subscriptionTopUps: [], subscriptionFormBase: null, subscriptionEditorTransitionId: 0, refreshTimer: null, refreshBusy: false, refreshFeedbackTimer: null, currentTotal: 0, rowSignature: '', streamConnected: false, streamFailure: null, mode: 'idle', appInfo: null, hubInfo: null, cursorAccount: { status: null, error: '' }, cursorAccountExpanded: false, codexAccountExpanded: false, codexAccountError: '', codexSignInBusy: false, codexSignInFlowId: '', codexLoginUrl: '', codexLoginStatus: '', codexLoginOutput: '', codexWorkspaceChoices: [], codexWorkspaceId: '', codexActiveAccount: null, codexPendingActiveAccount: null, codexPendingActiveAccountUntil: 0, codexPendingActiveAccountTimer: null, codexSystemSwitchingAccountId: '', codexSystemSwitchErrorAccountId: '', codexSystemSwitchError: '', codexSwitchPopoverHasOpened: false, codexSwitchPopoverActive: false, codexSwitchPopoverRenderPending: false, customPricingExpanded: false, claudeAccountExpanded: false, claudePendingCheckSince: 0, openrouterProfileCount: 0, openrouterAccountExpanded: false, thirdPartyProfileCount: 0, thirdPartyAccountExpanded: false, deepseekAccountExpanded: false, deepseekPendingCheckSince: 0, minimaxAccountExpanded: false, minimaxPendingCheckSince: 0, zaiAccountExpanded: false, zaiPendingCheckSince: 0, zaiteamAccountExpanded: false, zaiteamPendingCheckSince: 0, volcengineAccountExpanded: false, volcenginePendingCheckSince: 0, qoderAccountExpanded: false, qoderPendingCheckSince: 0, kimiAccountExpanded: false, kimiPendingCheckSince: 0, ollamaAccountExpanded: false, ollamaPendingCheckSince: 0, mimoAccountExpanded: false, mimoAccountError: '', copilotAccountExpanded: false, copilotManualExpanded: false, copilotPendingCheckSince: 0, copilotSignInBusy: false, copilotSignInCancelable: false, copilotSignInFlowId: '', copilotAuthorizeMessage: '', copilotLoginStatus: '', copilotErrorMessage: '', suppressInitialNumberAnimation: window.__TOKEN_MONITOR_SUPPRESS_INITIAL_NUMBER_ANIMATION__ === true, openSession: null, detailSort: 'time', recordingWindowShortcut: false, windowShortcutInvalid: false };
+const state = { period: normalizeInitialViewValue(initialViewState.period, viewPeriodValues, 'today'), breakdown: normalizeInitialViewValue(initialViewState.breakdown, viewBreakdownValues, 'home'), periodMenuOpen: false, viewSwitcherOpen: false, viewSwitcherHasOpened: false, limitDetailTooltipHasOpened: false, limitDetailTooltipActive: false, limitDetailTooltipRenderPending: false, settings: null, stats: null, homeHistory: null, homeHistoryBusy: false, homeHistoryRequested: false, homeHistorySignature: '', homeHistoryRetries: 0, homeHistoryRetryTimer: null, homeActivityScrollLeft: null, homeActivityFollowEnd: true, homeActivityResizeObserver: null, trendSettingsExpanded: false, trendsActivating: false, homeSettingsExpanded: false, homeLimitSettingsExpanded: false, limitProviderSettingsExpanded: '', clientHealthExpanded: '', clientSources: clientSourceCacheApi.createClientSourceCache(), clientSourcesKey: '', clientSourcesRequest: 0, subscriptionEditingId: '', subscriptionTopUps: [], subscriptionFormBase: null, subscriptionEditorTransitionId: 0, refreshTimer: null, refreshBusy: false, refreshFeedbackTimer: null, currentTotal: 0, rowSignature: '', streamConnected: false, streamFailure: null, mode: 'idle', appInfo: null, hubInfo: null, cursorAccount: { status: null, error: '' }, cursorAccountExpanded: false, codexAccountExpanded: false, codexAccountError: '', codexSignInBusy: false, codexSignInFlowId: '', codexLoginUrl: '', codexLoginStatus: '', codexLoginOutput: '', codexWorkspaceChoices: [], codexWorkspaceId: '', codexActiveAccount: null, codexPendingActiveAccount: null, codexPendingActiveAccountUntil: 0, codexPendingActiveAccountTimer: null, codexSystemSwitchingAccountId: '', codexSystemSwitchErrorAccountId: '', codexSystemSwitchError: '', codexSwitchPopoverHasOpened: false, codexSwitchPopoverActive: false, codexSwitchPopoverRenderPending: false, customPricingExpanded: false, openrouterProfileCount: 0, openrouterAccountExpanded: false, thirdPartyProfileCount: 0, thirdPartyAccountExpanded: false, deepseekAccountExpanded: false, deepseekPendingCheckSince: 0, minimaxAccountExpanded: false, minimaxPendingCheckSince: 0, zaiAccountExpanded: false, zaiPendingCheckSince: 0, zaiteamAccountExpanded: false, zaiteamPendingCheckSince: 0, volcengineAccountExpanded: false, volcenginePendingCheckSince: 0, qoderAccountExpanded: false, qoderPendingCheckSince: 0, kimiAccountExpanded: false, kimiPendingCheckSince: 0, ollamaAccountExpanded: false, ollamaPendingCheckSince: 0, mimoAccountExpanded: false, mimoAccountError: '', copilotAccountExpanded: false, copilotManualExpanded: false, copilotPendingCheckSince: 0, copilotSignInBusy: false, copilotSignInCancelable: false, copilotSignInFlowId: '', copilotAuthorizeMessage: '', copilotLoginStatus: '', copilotErrorMessage: '', suppressInitialNumberAnimation: window.__TOKEN_MONITOR_SUPPRESS_INITIAL_NUMBER_ANIMATION__ === true, openSession: null, detailSort: 'time', recordingWindowShortcut: false, windowShortcutInvalid: false };
 state.clientRescans = clientRescanStateApi.createClientRescanState({
   onChange: (clientId) => {
     if (state.clientHealthExpanded === clientId) refillOpenClientHealthPanel();
@@ -209,6 +209,8 @@ state.toolPreferenceSourceSignature = '';
 state.limitProviderRenderSignature = '';
 state.limitPanelRenderSignature = '';
 state.settingsPushRevision = 0;
+state.limitProviderSelectionRevision = 0;
+state.pendingLimitProviderSelection = null;
 state.homeHistoryLoadedSignature = '';
 state.homeHistoryRetrySignature = '';
 state.homeReturnVisible = false;
@@ -617,12 +619,17 @@ function toggleTokenRateMode() {
   // which is orders of magnitude heavier than this label and would make the switch lag.
   if (state.settings) state.settings.tokenRateMode = next;
   renderTokenRate();
+  renderLiveTokenRate();
   // Repaint again if the write failed: saveSettings re-reads settings from the main process on
   // rejection, so state has already reverted to the persisted framing while the label is still
   // showing the one the click asked for. Without this the label stays wrong until some later
   // tick silently flips it back.
-  saveSettings({ tokenRateMode: next }).catch(() => renderTokenRate());
+  saveSettings({ tokenRateMode: next }).catch(() => {
+    renderTokenRate();
+    renderLiveTokenRate();
+  });
 }
+
 // Scale the exact total to fit the width it is actually given instead of clipping
 // it to an ellipsis. The compact chip (when shown) is flex:0 0 auto and claims its
 // width first, so the number's clientWidth is its allotted box while scrollWidth is
@@ -1105,7 +1112,7 @@ function rowTemplate(rowData) {
   return row;
 }
 
-function updateRow(row, { name, subtitle, detail, value, cost, max, color, barBackground, stale, platform, local, client, kind, cacheReadTokens, outputTokens, tokenDataUnavailable, sessionDetailAvailable }) {
+function updateRow(row, { name, subtitle, detail, value, cost, max, color, barBackground, stale, platform, local, client, kind, cacheReadTokens, outputTokens, tokenDataUnavailable, sessionDetailAvailable, models, clients }) {
   const width = rowWidth(value, max);
   const isExpanded = row.classList.contains('expanded');
   row.className = `row${kind ? ` ${kind}-row` : ''}${stale ? ' stale' : ''}${local ? ' local' : ''}`;
@@ -1168,6 +1175,75 @@ function updateRow(row, { name, subtitle, detail, value, cost, max, color, barBa
     const inputTokens = cacheRead + cacheMiss;
     const hitPct = inputTokens > 0 ? Math.round((cacheRead / inputTokens) * 100) : 0;
     const missPct = inputTokens > 0 ? 100 - hitPct : 0;
+
+    let subBreakdownHTML = '';
+    if (state.breakdown === 'tool' && models && typeof models === 'object') {
+      const entries = Object.entries(models)
+        .map(([mId, tk]) => ({ key: mId, tokens: Number(tk) || 0 }))
+        .filter(item => item.tokens > 0)
+        .sort((a, b) => b.tokens - a.tokens);
+      if (entries.length > 0) {
+        const rowTotal = value || entries.reduce((s, x) => s + x.tokens, 0);
+        const rowsHTML = entries.map(item => {
+          const pct = rowTotal > 0 ? ((item.tokens / rowTotal) * 100).toFixed(1) : '0.0';
+          const mColor = modelColor(item.key);
+          const vendor = modelVendorFor(item.key);
+          const hasIcon = toolIconsEnabled(state.settings?.showToolIcons) && vendor && modelVendorsWithIcon.has(vendor);
+          const markHTML = hasIcon
+            ? `<span class="accordion-sub-mark row-icon row-icon-${vendor}"></span>`
+            : `<span class="accordion-sub-mark" style="background:${mColor}"></span>`;
+          return `
+            <div class="accordion-sub-row">
+              <div class="accordion-sub-label">
+                ${markHTML}
+                <span class="accordion-sub-name" title="${item.key}">${item.key}</span>
+                <span class="accordion-sub-pct">${pct}%</span>
+              </div>
+              <div class="accordion-sub-value" title="${formatNumber(item.tokens)} tokens">${formatTokenDisplay(item.tokens)}</div>
+            </div>
+          `;
+        }).join('');
+        subBreakdownHTML = `
+          <div class="accordion-sub-section">
+            <div class="accordion-sub-header">${t('accordion.models')}</div>
+            ${rowsHTML}
+          </div>
+        `;
+      }
+    } else if (state.breakdown === 'model' && clients && typeof clients === 'object') {
+      const entries = Object.entries(clients)
+        .map(([cId, tk]) => ({ key: cId, tokens: Number(tk) || 0 }))
+        .filter(item => item.tokens > 0)
+        .sort((a, b) => b.tokens - a.tokens);
+      if (entries.length > 0) {
+        const rowTotal = value || entries.reduce((s, x) => s + x.tokens, 0);
+        const rowsHTML = entries.map(item => {
+          const pct = rowTotal > 0 ? ((item.tokens / rowTotal) * 100).toFixed(1) : '0.0';
+          const cColor = clientColors[item.key] || clientColors.default;
+          const hasIcon = toolIconsEnabled(state.settings?.showToolIcons) && clientsWithIcon.has(item.key);
+          const markHTML = hasIcon
+            ? `<span class="accordion-sub-mark row-icon row-icon-${item.key}"></span>`
+            : `<span class="accordion-sub-mark" style="background:${cColor}"></span>`;
+          const displayName = clientLabels[item.key] || item.key;
+          return `
+            <div class="accordion-sub-row">
+              <div class="accordion-sub-label">
+                ${markHTML}
+                <span class="accordion-sub-name" title="${displayName}">${displayName}</span>
+                <span class="accordion-sub-pct">${pct}%</span>
+              </div>
+              <div class="accordion-sub-value" title="${formatNumber(item.tokens)} tokens">${formatTokenDisplay(item.tokens)}</div>
+            </div>
+          `;
+        }).join('');
+        subBreakdownHTML = `
+          <div class="accordion-sub-section">
+            <div class="accordion-sub-header">${t('accordion.tools')}</div>
+            ${rowsHTML}
+          </div>
+        `;
+      }
+    }
     
     delete accordionInner.dataset.signature;
     accordionInner.innerHTML = `
@@ -1184,6 +1260,7 @@ function updateRow(row, { name, subtitle, detail, value, cost, max, color, barBa
           <div class="accordion-label">${t('dashboard.tooltip.output')}</div>
           <div class="accordion-value" title="${formatNumber(output)} tokens">${formatTokenDisplay(output)}</div>
         </div>
+        ${subBreakdownHTML}
       </div>
     `;
     row.classList.add('has-accordion');
@@ -1293,8 +1370,32 @@ function stableColor(value, colors) {
   return colors[Math.abs(hash) % colors.length];
 }
 
+function modelClientsForPeriod(period) {
+  const result = {};
+  for (const [client, models] of Object.entries(period?.clientModels || {})) {
+    for (const [model, tokens] of Object.entries(models || {})) {
+      const count = Number(tokens) || 0;
+      if (count <= 0) continue;
+      if (!result[model]) result[model] = {};
+      result[model][client] = (result[model][client] || 0) + count;
+    }
+  }
+  return result;
+}
+
 function toolRowsForPeriod(period) {
-  const clientRows = Object.entries(period?.clients || {}).filter(([, value]) => Number(value) > 0).map(([client, value]) => ({ key: client, name: clientLabels[client] || client, value: Number(value), cost: Number(period?.clientCosts?.[client] || 0), color: clientColors[client] || clientColors.default, stale: false, cacheReadTokens: Number(period?.clientCacheReads?.[client] || 0), cacheWriteTokens: Number(period?.clientCacheWrites?.[client] || 0), outputTokens: Number(period?.clientOutputs?.[client] || 0) }));
+  const clientRows = Object.entries(period?.clients || {}).filter(([, value]) => Number(value) > 0).map(([client, value]) => ({
+    key: client,
+    name: clientLabels[client] || client,
+    value: Number(value),
+    cost: Number(period?.clientCosts?.[client] || 0),
+    color: clientColors[client] || clientColors.default,
+    stale: false,
+    cacheReadTokens: Number(period?.clientCacheReads?.[client] || 0),
+    cacheWriteTokens: Number(period?.clientCacheWrites?.[client] || 0),
+    outputTokens: Number(period?.clientOutputs?.[client] || 0),
+    models: period?.clientModels?.[client] || null
+  }));
   if (clientRows.length > 0) {
     const usageSortedRows = clientRows.sort((a, b) => b.value - a.value);
     return clientDisplayPreferencesApi.applyClientDisplayPreferences(usageSortedRows, state.settings?.clientDisplayOrder, state.settings?.hiddenClients, KNOWN_CLIENTS, state.settings?.pinnedClients);
@@ -1305,6 +1406,7 @@ function toolRowsForPeriod(period) {
 }
 
 function modelRowsForPeriod(period) {
+  const modelClients = modelClientsForPeriod(period);
   const modelRows = Object.entries(period?.models || {}).filter(([, value]) => Number(value) > 0).map(([model, value]) => ({
     key: model,
     name: model,
@@ -1314,7 +1416,8 @@ function modelRowsForPeriod(period) {
     stale: false,
     cacheReadTokens: Number(period?.modelCacheReads?.[model] || 0),
     cacheWriteTokens: Number(period?.modelCacheWrites?.[model] || 0),
-    outputTokens: Number(period?.modelOutputs?.[model] || 0)
+    outputTokens: Number(period?.modelOutputs?.[model] || 0),
+    clients: modelClients[model] || null
   }));
   if (modelRows.length > 0) return modelRows.sort((a, b) => b.value - a.value);
   if (Number(period?.totalTokens || 0) === 0) return [];
@@ -2886,13 +2989,14 @@ function configuredLimitProviderOrder() {
 }
 
 function configuredLimitProviderSelection() {
-  const raw = state.settings?.limitProviders;
+  const raw = state.pendingLimitProviderSelection?.limitProviders ?? state.settings?.limitProviders;
   const source = raw === undefined || raw === null ? DEFAULT_LIMIT_PROVIDER_ORDER : raw;
   return limitProviderOrderApi.normalizeLimitProviderSelection(source, LIMIT_PROVIDERS);
 }
 
 function enabledLimitProviderSet() {
-  if (state.settings?.limitsEnabled === false) return new Set();
+  const limitsEnabled = state.pendingLimitProviderSelection?.limitsEnabled ?? state.settings?.limitsEnabled;
+  if (limitsEnabled === false) return new Set();
   return new Set(configuredLimitProviderSelection());
 }
 
@@ -3216,48 +3320,6 @@ function thirdPartySpendNode(provider, quotaWindow) {
   });
 }
 
-// One tooltip row per prepaid grant: amount, expiry date, time left, the same
-// shape Codex's reset credits use. `aria` spells the expiry out, since the
-// terse columns no longer say what the date and duration mean.
-function claudePrepaidGrantRows(tranches, currency) {
-  return tranches
-    .filter((tranche) => optionalFiniteNumber(tranche?.amount) !== null)
-    .map((tranche) => {
-      const money = formatMoney(tranche.amount, tranche.currency || currency);
-      const expiresAt = tranche.expiresAt ? new Date(tranche.expiresAt) : null;
-      if (!expiresAt || Number.isNaN(expiresAt.getTime())) {
-        return { cells: [money, '', 'No expiry'], aria: `${money} no expiry` };
-      }
-      const diffMs = expiresAt.getTime() - Date.now();
-      const remaining = diffMs <= 0 ? 'Expired' : formatDuration(diffMs);
-      return {
-        cells: [money, expiryDateLabel(expiresAt), remaining],
-        aria: diffMs <= 0 ? `${money} expired` : `${money} expires in ${remaining}`
-      };
-    });
-}
-
-// Claude's prepaid credits. Deliberately meter-less: the headline is a sum of
-// grants whose expiries belong to its parts, so a bar would need a denominator
-// this pool doesn't report. Expiries live in the tooltip instead.
-function claudeBalanceNode(provider) {
-  // Also checked here, not just in the collector: a record collected before the
-  // setting was switched off is still in state, and the row should disappear on
-  // the toggle rather than on the next refresh.
-  if (state.settings?.claudePrepaidBalanceEnabled === false) return null;
-  const balance = provider?.balance || null;
-  const amount = optionalFiniteNumber(balance?.amount);
-  if (amount === null) return null;
-  const currency = balance?.currency || 'USD';
-  const tranches = Array.isArray(balance.tranches) ? balance.tranches : [];
-  const grants = claudePrepaidGrantRows(tranches, currency);
-  return limitNoteRowNode({
-    label: 'Balance',
-    summary: formatMoney(amount, currency),
-    detailEntries: grants.map((grant) => grant.cells),
-    ariaParts: [formatMoney(amount, currency), ...grants.map((grant) => grant.aria)]
-  });
-}
 
 const {
   creditsAmount,
@@ -4042,34 +4104,7 @@ function renderProviderWindows(provider, color) {
       windows.append(node);
     }
     if (weekly) windows.append(limitWindowNode('Weekly', weekly, color, 0.68));
-  } else if (provider.provider === 'claude') {
-    // Claude usually shows session + one all-models weekly, but can carry a second
-    // model-scoped weekly (the temporary "Fable only" promo cap). Render every
-    // weekly the response actually has, and nothing when a bucket is absent — no
-    // empty placeholder — so the scoped bar appears only while the promo is live.
-    const session = windowForKind(provider, 'session');
-    if (session) windows.append(limitWindowNode(session.label || 'Session', session, color, 0.95));
-    for (const weekly of windowsForKind(provider, 'weekly')) {
-      const node = limitWindowNode(weekly.label || 'Weekly', weekly, color, 0.68);
-      // The all-models weekly pairs with Session in the two-column grid; a
-      // model-scoped weekly (the "Fable only" promo cap) has no partner, so span
-      // the full row instead of leaving a half-empty cell.
-      if (weekly.label) node.classList.add('limit-window-wide');
-      windows.append(node);
-    }
-    // Usage credits: "$2.35 / $20.00" with a meter when a monthly spend limit is
-    // set, "$2.35 spent" without one. Absent entirely when credits are off.
-    const usageCredits = spendWindow(provider);
-    if (usageCredits) {
-      const value = usageCredits.limit === null
-        ? `${formatMoney(usageCredits.used, usageCredits.currency)} spent`
-        : `${formatMoney(usageCredits.used, usageCredits.currency)} / ${formatMoney(usageCredits.limit, usageCredits.currency)}`;
-      const node = limitWindowNode('Usage credits', usageCredits, color, 0.5, value);
-      node.classList.add('limit-window-wide', 'limit-window-no-reset');
-      windows.append(node);
-    }
-    const balanceNode = claudeBalanceNode(provider);
-    if (balanceNode) windows.append(balanceNode);
+
   } else {
     // Default: render only the windows the provider actually has. Providers
     // that only expose a single window shouldn't leave a half-empty bar next to
@@ -4196,27 +4231,6 @@ function renderCodexAccountGroup(label, providers, color) {
   return row;
 }
 
-function renderClaudeAccountGroup(label, providers, color) {
-  const row = document.createElement('div');
-  row.className = `limit-row limit-row-group${providers.some((provider) => provider.stale) ? ' stale' : ''}`;
-  const groupProvider = { provider: 'claude', status: 'ok', windows: [], accountGroup: true };
-  const head = renderLimitProviderHead('claude', label, groupProvider, color, {
-    planText: t('settings.claude.nAccounts', { count: providers.length }),
-    hideMeta: true
-  });
-  const accountList = document.createElement('div');
-  accountList.className = 'limit-account-list';
-  providers.forEach((provider, index) => {
-    accountList.append(renderLimitProviderRow('claude', limitAccountTitle('claude', provider, index, providers), provider, color, {
-      accountRow: true,
-      accountTitle: true,
-      showIcon: false
-    }));
-  });
-  row.append(head, accountList);
-  return row;
-}
-
 function mimoSettingsAccountTitle(account, index) {
   return String(account?.accountEmail || '').trim() || `Account ${index + 1}`;
 }
@@ -4333,7 +4347,6 @@ function renderLimits() {
       state.settings?.maskLimitAccountEmails === true,
       state.settings?.showLimitUsed === true,
       state.settings?.showToolIcons !== false,
-      state.settings?.claudePrepaidBalanceEnabled !== false,
       state.settings?.currency || '',
       effectiveCurrencyRates(),
       state.settings?.subscriptions || [],
@@ -4362,10 +4375,6 @@ function renderLimits() {
   for (const { id, label } of rows) {
     const visibleProviders = visibleProviderEntries.get(id) || [{ provider: id, status: 'disabled', windows: [] }];
     const color = id === 'mimo' ? clientColors.xiaomi : (clientColors[id] || clientColors.default);
-    if (id === 'claude' && Array.isArray(visibleProviders) && visibleProviders.length > 1) {
-      nodes.push(renderClaudeAccountGroup(label, visibleProviders, color));
-      continue;
-    }
     if (id === 'codex' && Array.isArray(visibleProviders) && visibleProviders.length > 1) {
       nodes.push(renderCodexAccountGroup(label, visibleProviders, color));
       continue;
@@ -6305,7 +6314,6 @@ function syncSettingsForm() {
   }
   renderDeepseekStatus();
   renderMinimaxStatus();
-  renderExternalProviderStatus('claude');
   renderExternalProviderStatus('zai');
   renderExternalProviderStatus('zaiteam');
   renderExternalProviderStatus('volcengine');
@@ -7857,16 +7865,7 @@ function setLimitProviderSettingsExpanded(providerId) {
 }
 
 // Provider-scoped options, rendered under their own row rather than in the
-// section footer, which is reserved for settings that apply to every provider.
-const LIMIT_PROVIDER_SETTINGS = {
-  claude: [{
-    key: 'claudePrepaidBalanceEnabled',
-    titleKey: 'settings.limits.prepaidBalance',
-    descKey: 'settings.limits.prepaidBalanceDesc',
-    requiresConfiguredKey: 'claudeWebCookieConfigured',
-    defaultValue: true
-  }]
-};
+const LIMIT_PROVIDER_SETTINGS = {};
 
 function limitProviderSettingsRenderSignature() {
   const settings = state.settings || {};
@@ -7995,13 +7994,18 @@ async function onLimitProviderToggle() {
   if (checked.length === 0 && state.breakdown === 'limits') {
     setBreakdown('tool');
   }
-  await saveSettings({ limitProviders: checked.join(','), limitsEnabled: checked.length > 0 });
-  clearDisabledLimitProviderPendingChecks(new Set(checked));
-  // settings:update reconfigures LimitsRuntime immediately. Its existing
-  // snapshot and the newly enabled provider's eventual result arrive through
-  // the normal stats push, so a forced usage + all-provider refresh here only
-  // replaces stable account summaries with an interim snapshot and duplicates
-  // collection work.
+  const patch = { limitProviders: checked.join(','), limitsEnabled: checked.length > 0 };
+  const revision = ++state.limitProviderSelectionRevision;
+  state.pendingLimitProviderSelection = { revision, ...patch };
+  try {
+    await saveSettings(patch);
+    clearDisabledLimitProviderPendingChecks(new Set(checked));
+  } finally {
+    if (state.pendingLimitProviderSelection?.revision === revision) {
+      state.pendingLimitProviderSelection = null;
+      renderLimitProviderCheckboxes();
+    }
+  }
 }
 
 async function onLimitProviderMove(providerId, direction) {
@@ -8660,7 +8664,6 @@ function renderStatsUpdate() {
   updateThirdPartyProfilesStatus();
   renderDeepseekStatus();
   renderMinimaxStatus();
-  renderExternalProviderStatus('claude');
   renderExternalProviderStatus('zai');
   renderExternalProviderStatus('zaiteam');
   renderExternalProviderStatus('volcengine');
@@ -9142,11 +9145,6 @@ function clearCopilotProviderStatus() {
 }
 
 const externalLimitAccountConfig = {
-  claude: {
-    configuredKey: 'claudeWebCookieConfigured',
-    sourceKey: 'claudeWebCookieSource',
-    pendingKey: 'claudePendingCheckSince'
-  },
   zai: {
     configuredKey: 'zaiApiKeyConfigured',
     sourceKey: 'zaiApiKeySource',
@@ -9287,10 +9285,6 @@ function volcenginePlatformUrl() {
   return 'https://console.volcengine.com/ark/region:ark+cn-beijing/openManagement?LLM=%7B%7D&advancedActiveKey=subscribe';
 }
 
-function claudePlatformUrl() {
-  return 'https://claude.ai/settings/usage';
-}
-
 function selectedQoderSite() {
   const selectedSite = document.getElementById('qoderSiteInput')?.value;
   return selectedSite || (state.settings?.qoderSite === 'cn' ? 'cn' : 'global');
@@ -9371,8 +9365,7 @@ function renderExternalProviderStatus(providerName) {
       : '';
     credentialHintEl.classList.toggle('hidden', !needsFreshKimiWebSession);
   }
-  const canClearConfiguredClaude = providerName === 'claude' && configured;
-  logoutBtn.classList.toggle('hidden', source !== 'settings' || (!linked && !canClearConfiguredClaude));
+  logoutBtn.classList.toggle('hidden', source !== 'settings' || !linked);
   refreshBtn.classList.toggle('hidden', !configured);
   renderSettingsSummaries();
 }

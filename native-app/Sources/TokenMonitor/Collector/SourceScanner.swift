@@ -67,8 +67,6 @@ enum SourceScanner {
         let home = NSHomeDirectory()
         var roots: [String]
         switch client {
-        case "claude":
-            roots = [home + "/.claude/projects", home + "/.claude/transcripts"]
         case "codex":
             roots = [home + "/.codex/sessions"]
         case "workbuddy":

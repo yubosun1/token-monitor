@@ -86,7 +86,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, BridgeDelegate {
         if diag, ProcessInfo.processInfo.environment["TOKEN_MONITOR_DIAG_CLIENTS_PROBE"] != nil {
             DispatchQueue.main.asyncAfter(deadline: .now() + 20) {
                 let previous = BridgeCore.shared.settings.snapshot()["clients"] as? String
-                    ?? "claude,codex,kimi,antigravity,workbuddy,proma,hanako,dsh"
+                    ?? "codex,kimi,antigravity,workbuddy,proma,hanako,dsh"
                 BridgeCore.shared.settings.update(["clients": ""])
                 NSLog("[diag] clients probe: disabled all clients (expect empty stats push)")
                 DispatchQueue.main.asyncAfter(deadline: .now() + 30) {

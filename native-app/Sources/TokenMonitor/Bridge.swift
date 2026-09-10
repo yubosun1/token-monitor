@@ -362,8 +362,6 @@ final class BridgeCore {
     private func clientSourceRoots(for client: String) -> [(id: String, dir: String)] {
         let home = NSHomeDirectory()
         switch client {
-        case "claude":
-            return [("claude-projects", "\(home)/.claude/projects"), ("claude-transcripts", "\(home)/.claude/transcripts")]
         case "codex":
             return [("codex-sessions", "\(home)/.codex/sessions")]
         case "kimi":

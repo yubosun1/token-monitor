@@ -18,7 +18,6 @@
   };
 
   const PROVIDER_SOURCE_LABELS = {
-    claude: { oauth: 'OAuth', cli: 'CLI', web: 'Web' },
     codex: { rpc: 'RPC' },
     cursor: { web: 'Web' },
     antigravity: { rpc: 'RPC' },
@@ -46,7 +45,6 @@
   };
 
   const CAPABILITY_TAGS = {
-    claude: ['Auto', 'OAuth/CLI', 'Web'],
     codex: ['Auto', 'App/CLI RPC'],
     cursor: ['Manual login', 'Web'],
     antigravity: ['App/CLI must be open', 'RPC'],
@@ -235,8 +233,7 @@
   function isLinkedStatus(provider) {
     const providerName = providerId(provider);
     const source = sourceId(provider);
-    return (providerName === 'claude' && source === 'web')
-      || providerName === 'cursor'
+    return providerName === 'cursor'
       || (providerName === 'mimo' && source === 'web');
   }
 
