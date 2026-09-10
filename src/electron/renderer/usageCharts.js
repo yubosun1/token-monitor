@@ -245,7 +245,7 @@
     { key: 'totalCost', kind: 'cost' },
     { key: 'activeDays', kind: 'days' },
     { key: 'currentStreak', kind: 'days' },
-    { key: 'activeTimeMs', kind: 'duration' },
+    { key: 'avgDailyTokens', kind: 'tokens' },
     { key: 'peakDayTokens', kind: 'tokens' },
     { key: 'favoriteModel', kind: 'model' },
     { key: 'messages', kind: 'count' }
@@ -253,11 +253,22 @@
 
   function statsCards(summary) {
     const s = summary && typeof summary === 'object' ? summary : {};
-    return STAT_CARDS.map((c) => ({
-      key: c.key,
-      kind: c.kind,
-      value: c.kind === 'model' ? String(s[c.key] || '') : n(s[c.key])
-    }));
+    return STAT_CARDS.map((c) => {
+      let value;
+      if (c.key === 'avgDailyTokens') {
+        const activeDays = n(s.activeDays);
+        value = s.avgDailyTokens != null ? n(s.avgDailyTokens) : (activeDays > 0 ? Math.round(n(s.totalTokens) / activeDays) : 0);
+      } else if (c.kind === 'model') {
+        value = String(s[c.key] || '');
+      } else {
+        value = n(s[c.key]);
+      }
+      return {
+        key: c.key,
+        kind: c.kind,
+        value
+      };
+    });
   }
 
   function sparklinePreview(points, options) {

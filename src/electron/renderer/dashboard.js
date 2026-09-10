@@ -538,7 +538,7 @@ function renderActivity() {
   const LABELS = {
     totalTokens: 'dashboard.stat.totalTokens', totalCost: 'dashboard.stat.totalCost',
     activeDays: 'trends.activeDays', currentStreak: 'trends.currentStreak',
-    activeTimeMs: 'trends.activeTime', peakDayTokens: 'trends.peakDay',
+    avgDailyTokens: 'dashboard.stat.avgDailyTokens', peakDayTokens: 'trends.peakDay',
     favoriteModel: 'dashboard.stat.favoriteModel', messages: 'dashboard.stat.messages'
   };
   els.cards.innerHTML = charts.statsCardsHtml(cards, {

@@ -4733,6 +4733,11 @@ function renderTrends() {
   const svg = charts.sparklineSvg(model, { titles, showZeroMarkers: state.period === 'today' });
 
   const summary = preview.summary || {};
+  const activeDays = Number(summary.activeDays) || 0;
+  const totalTokens = Number(summary.totalTokens) || 0;
+  const avgDailyTokens = summary.avgDailyTokens != null
+    ? Number(summary.avgDailyTokens)
+    : (activeDays > 0 ? Math.round(totalTokens / activeDays) : 0);
   const rangeLabel = state.period === 'allTime' ? t('trends.range.year')
     : state.period === 'month' ? t('trends.range.month') : t('trends.range.week');
   const first = trendShortLabel(finalPoints[0][labelKey], labelKey);
@@ -4740,7 +4745,7 @@ function renderTrends() {
   const stats = [
     [t('trends.activeDays'), formatNumber(summary.activeDays)],
     [t('trends.currentStreak'), formatNumber(summary.currentStreak)],
-    [t('trends.activeTime'), formatActiveDuration(summary.activeTimeMs)],
+    [t('trends.avgDailyTokens'), formatCompact(avgDailyTokens)],
     [t('trends.peakDay'), formatCompact(summary.peakDayTokens)]
   ];
   const statsHtml = stats
