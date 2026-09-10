@@ -17,8 +17,8 @@
 ## 核心特性
 
 - **极致低占用**：告别 Electron 的资源开销，后台常驻内存约 40–60MB；窗口隐藏 30 秒后自动回收 WebContent 进程，再次唤出毫秒级呈现。
-- **8 大 AI 客户端用量追踪**：
-  - **Tokscale 驱动**：Claude Code、Codex、WorkBuddy
+- **7 大 AI 客户端用量追踪**：
+  - **Tokscale 驱动**：Codex、WorkBuddy
   - **Swift 原生解析**：Kimi、Proma、Hanako、Antigravity、DeepSeek Harness（v2/v3 会话日志，zstd 流式解压）
 - **双向交叉与下钻统计**：
   - 按工具下钻查看调用的各模型分布及用量占比；

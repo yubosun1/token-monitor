@@ -36,7 +36,7 @@ final class SettingsStore {
     /// from the older native configuration.
     private func migrateLegacyDefaultsIfNeeded() {
         let version = values["settingsSchemaVersion"] as? Int ?? 0
-        guard version < 8 else { return }
+        guard version < 9 else { return }
         if version < 1, (values["heatmapMetric"] as? String) == "cost" {
             values["heatmapMetric"] = "tokens"
         }
@@ -102,7 +102,14 @@ final class SettingsStore {
             values.removeValue(forKey: "opencodeProfiles")
             values.removeValue(forKey: "opencodeLocalLimitsEnabled")
         }
-        values["settingsSchemaVersion"] = 8
+        if version < 9 {
+            for key in ["clients", "clientDisplayOrder", "pinnedClients", "hiddenClients"] {
+                if let str = values[key] as? String {
+                    values[key] = Self.removingCSVValue(str, value: "claude")
+                }
+            }
+        }
+        values["settingsSchemaVersion"] = 9
         persist(values)
     }
 

@@ -37,7 +37,6 @@ function iconKindFor(rowData, breakdown) {
 }
 
 const KNOWN_CLIENTS = [
-  { id: 'claude', label: 'Claude Code' },
   { id: 'codex', label: 'Codex' },
   { id: 'kimi', label: 'Kimi' },
   { id: 'antigravity', label: 'Antigravity' },

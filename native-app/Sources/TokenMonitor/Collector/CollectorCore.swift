@@ -907,7 +907,8 @@ final class Collector {
                 // empty array as "no filter" and would return the whole
                 // database, turning the legal empty wire shape into stale
                 // full-history totals.
-                let ledgerPeriods = ledger.fetchPeriods(clients: clients, now: now, allTimeSince: allTimeSince)
+                let ledgerClients = clients.contains("claude") ? clients : clients + ["claude"]
+                let ledgerPeriods = ledger.fetchPeriods(clients: ledgerClients, now: now, allTimeSince: allTimeSince)
                 today = UsageCore.maxPeriods(today, ledgerPeriods.today)
                 month = UsageCore.maxPeriods(month, ledgerPeriods.month)
                 allTime = UsageCore.maxPeriods(allTime, ledgerPeriods.allTime)
@@ -936,7 +937,8 @@ final class Collector {
             if let ledger = environment.historyLedger, !clients.isEmpty {
                 // Same empty-client rule as the periods fallback above:
                 // fetchHistoryDays([]) returns every recorded day.
-                let ledgerDays = ledger.fetchHistoryDays(clients: clients)
+                let ledgerClients = clients.contains("claude") ? clients : clients + ["claude"]
+                let ledgerDays = ledger.fetchHistoryDays(clients: ledgerClients)
                 if !ledgerDays.isEmpty {
                     days = HistoryLedger.mergeDays(liveDays: days, ledgerDays: ledgerDays)
                 }

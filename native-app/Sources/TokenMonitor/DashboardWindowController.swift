@@ -669,7 +669,7 @@ class GlassWindowController: NSWindowController, WindowDragController, WKNavigat
                   out.viewAfterClick = document.querySelector('.view-switcher-menu-item.is-current')?.dataset.view || null;
                   await new Promise(r => setTimeout(r, 700));
                   out.viewAfterWait = document.querySelector('.view-switcher-menu-item.is-current')?.dataset.view || null;
-                  const detailClients = ['claude', 'codex', 'proma', 'hanako', 'dsh'];
+                  const detailClients = ['codex', 'proma', 'hanako', 'dsh'];
                   const sessionRow = [...document.querySelectorAll('.row[data-client]')]
                     .find(r => detailClients.includes(r.dataset.client));
                   if (!sessionRow) {
